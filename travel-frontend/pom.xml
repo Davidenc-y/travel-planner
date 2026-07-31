@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>com.travel.planner</groupId>
+        <artifactId>travel-planner</artifactId>
+        <version>1.0-SNAPSHOT</version>
+    </parent>
+
+    <groupId>com.travel.frontend</groupId>
+    <artifactId>travel-frontend</artifactId>
+    <packaging>jar</packaging>
+
+    <name>travel-frontend</name>
+    <description>前端模块（预留 Maven 占位，实际使用 Next.js + npm 管理）</description>
+
+    <!--
+        说明：本模块为 Maven 占位模块，实际前端代码使用 Next.js + npm 管理。
+        目录结构：
+          travel-frontend/
+            pom.xml                ← 本文件
+            next-app/              ← Next.js 项目（后续创建）
+              package.json
+              app/
+              components/
+              lib/
+            ...
+        Maven 不参与前端构建，仅保留模块结构一致性。
+    -->
+
+    <dependencies>
+        <!-- 内部依赖：travel-common（前端可能需要复用 DTO 定义） -->
+        <dependency>
+            <groupId>com.travel.common</groupId>
+            <artifactId>travel-common</artifactId>
+        </dependency>
+    </dependencies>
+</project>

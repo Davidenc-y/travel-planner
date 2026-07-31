@@ -1,0 +1,99 @@
+# ============================================================
+# travel-planning 服务配置（端口 8081）
+# ============================================================
+server:
+  port: 8081
+  servlet:
+    context-path: /
+
+spring:
+  application:
+    name: travel-planning
+
+  # ============ 数据源 ============
+  datasource:
+    url: jdbc:mysql://${MYSQL_HOST:localhost}:${MYSQL_PORT:3306}/travel_planner?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true
+    username: ${MYSQL_USER:root}
+    password: ${MYSQL_PASSWORD:root123}
+    driver-class-name: com.mysql.cj.jdbc.Driver
+
+  # ============ Redis ============
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:}
+      database: 0
+      timeout: 5000ms
+
+  # ============ AI DashScope ============
+  ai:
+    dashscope:
+      api-key: ${DASHSCOPE_API_KEY:}
+      chat:
+        options:
+          model: qwen-max
+          temperature: 0.7
+      embedding:
+        api-key: ${DASHSCOPE_API_KEY:}
+        model: text-embedding-v2
+
+  # ============ Elasticsearch（planning 只读访问） ============
+  elasticsearch:
+    uris: http://${ES_HOST:localhost}:${ES_PORT:9200}
+
+# ============ MyBatis Plus ============
+mybatis-plus:
+  mapper-locations: classpath:mapper/*.xml
+  configuration:
+    log-impl: org.apache.ibatis.logging.stdout.StdOutImpl
+    map-underscore-to-camel-case: true
+  global-config:
+    db-config:
+      logic-delete-field: deleted
+      logic-delete-value: 1
+      logic-not-delete-value: 0
+
+# ============ 应用专属配置 ============
+travel:
+  # 多模型路由
+  ai:
+    models:
+      main: qwen-max          # 主推理：行程编排
+      light: qwen-turbo       # 轻量：偏好分析、意图识别
+      coder: qwen-plus        # 内容生成：景点描述
+  # 地图 API
+  map:
+    tencent:
+      key: ${TENCENT_MAP_KEY:}
+  # 限流
+  rate-limit:
+    per-minute: 100
+  # knowledge 服务地址（Feign 调用）
+  knowledge:
+    base-url: ${KNOWLEDGE_BASE_URL:http://localhost:8082}
+
+# ============ JWT ============
+jwt:
+  secret: ${JWT_SECRET:travel-planner-secret-key-2026-must-be-long-enough-32chars}
+  expiration: 86400000       # 24h
+  refresh-expiration: 604800000  # 7d
+
+# ============ Actuator ============
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+  endpoint:
+    health:
+      show-details: when-authorized
+
+# ============ 日志 ============
+logging:
+  level:
+    com.travel: DEBUG
+    org.springframework.ai: INFO
+    com.alibaba.cloud.ai: INFO
+  pattern:
+    console: "%d{HH:mm:ss.SSS} %-5level [%thread] %logger{36} - %msg%n"

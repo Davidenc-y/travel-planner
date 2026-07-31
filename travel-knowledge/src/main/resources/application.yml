@@ -1,0 +1,85 @@
+# ============================================================
+# travel-knowledge 服务配置（端口 8082）
+# ============================================================
+server:
+  port: 8082
+  servlet:
+    context-path: /
+
+spring:
+  application:
+    name: travel-knowledge
+
+  # ============ 数据源 ============
+  datasource:
+    url: jdbc:mysql://${MYSQL_HOST:localhost}:${MYSQL_PORT:3306}/travel_planner?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true
+    username: ${MYSQL_USER:root}
+    password: ${MYSQL_PASSWORD:root123}
+    driver-class-name: com.mysql.cj.jdbc.Driver
+
+  # ============ Redis ============
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:}
+      database: 0
+      timeout: 5000ms
+
+  # ============ AI DashScope（Embedding 必需） ============
+  ai:
+    dashscope:
+      api-key: ${DASHSCOPE_API_KEY:}
+      embedding:
+        api-key: ${DASHSCOPE_API_KEY:}
+        model: text-embedding-v2
+
+  # ============ Elasticsearch ============
+  elasticsearch:
+    uris: http://${ES_HOST:localhost}:${ES_PORT:9200}
+
+# ============ MyBatis Plus ============
+mybatis-plus:
+  mapper-locations: classpath:mapper/*.xml
+  configuration:
+    log-impl: org.apache.ibatis.logging.stdout.StdOutImpl
+    map-underscore-to-camel-case: true
+  global-config:
+    db-config:
+      logic-delete-field: deleted
+      logic-delete-value: 1
+      logic-not-delete-value: 0
+
+# ============ Milvus ============
+milvus:
+  host: ${MILVUS_HOST:localhost}
+  port: ${MILVUS_PORT:19530}
+  collection-name: attraction_vectors
+
+# ============ 应用专属配置 ============
+travel:
+  # RAG 默认策略
+  rag:
+    default-type: hybrid
+  # ETL 配置
+  etl:
+    batch-size: 100
+    schedule-cron: "0 0 3 * * ?"   # 每天 3 点增量 ETL
+
+# ============ Actuator ============
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+  endpoint:
+    health:
+      show-details: when-authorized
+
+# ============ 日志 ============
+logging:
+  level:
+    com.travel: DEBUG
+    org.springframework.ai: INFO
+  pattern:
+    console: "%d{HH:mm:ss.SSS} %-5level [%thread] %logger{36} - %msg%n"

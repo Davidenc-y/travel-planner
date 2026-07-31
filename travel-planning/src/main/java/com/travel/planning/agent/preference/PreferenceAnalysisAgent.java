@@ -1,0 +1,73 @@
+package com.travel.planning.agent.preference;
+
+import com.alibaba.cloud.ai.graph.agent.ReactAgent;
+import jakarta.annotation.PostConstruct;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.ai.chat.model.ChatModel;
+import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.stereotype.Component;
+
+/**
+ * 偏好分析 Agent
+ *
+ * <p>从用户自然语言输入中提取结构化偏好数据：</p>
+ * <ul>
+ *   <li>destination: 目的地</li>
+ *   <li>days: 出行天数</li>
+ *   <li>budget: 预算范围</li>
+ *   <li>interests: 兴趣标签</li>
+ *   <li>party: 出行人员</li>
+ *   <li>travelStyle: 出行风格</li>
+ * </ul>
+ *
+ * <p>使用 qwen-turbo 轻量模型，快速完成分类提取任务。</p>
+ *
+ * @author david_ency
+ * @since 1.0-SNAPSHOT
+ */
+@Slf4j
+@Component
+public class PreferenceAnalysisAgent {
+
+    private final ChatModel lightModel;
+    private ReactAgent agent;
+
+    public PreferenceAnalysisAgent(@Qualifier("lightModel") ChatModel lightModel) {
+        this.lightModel = lightModel;
+    }
+
+    @PostConstruct
+    public void init() throws Exception {
+        try {
+            this.agent = ReactAgent.builder()
+                    .name("preference_analysis")
+                    .model(lightModel)
+                    .instruction("""
+                            你是旅游偏好分析专家。从用户输入中提取以下信息：
+
+                            1. destination: 目的地（城市/地区名称）
+                            2. days: 出行天数（整数）
+                            3. budget: 预算范围（数字，单位：元，如不确定填 null）
+                            4. interests: 兴趣标签数组（从以下选择：文化/自然/美食/购物/亲子/休闲）
+                            5. party: 出行人员（独行/情侣/家庭/朋友，如不确定填 null）
+                            6. travelStyle: 出行风格（ECONOMY/COMFORT/LUXURY，如不确定填 COMFORT）
+                            7. specialNeeds: 特殊需求数组（如免门票/无障碍/宠物友好，无则空数组）
+
+                            必须输出 JSON 格式，不要输出其他内容：
+                            {"destination":"北京","days":3,"budget":5000,"interests":["文化","美食"],"party":"家庭","travelStyle":"COMFORT","specialNeeds":[]}
+                            """)
+                    .build();
+            log.info("PreferenceAnalysisAgent 初始化完成");
+        } catch (Exception e) {
+            log.error("PreferenceAnalysisAgent 初始化失败", e);
+            throw new RuntimeException("Failed to build PreferenceAnalysisAgent: " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * 获取 ReactAgent 实例（供 StateGraph 节点调用）
+     */
+    public ReactAgent getAgent() {
+        return agent;
+    }
+}
