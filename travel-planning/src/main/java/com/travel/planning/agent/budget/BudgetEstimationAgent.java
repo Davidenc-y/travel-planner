@@ -42,8 +42,9 @@ public class BudgetEstimationAgent {
                     .name("budget_estimation")
                     .description("估算旅游行程总费用")
                     .model(lightModel)
+                    .systemPrompt("你是旅游预算估算专家，擅长根据行程路线估算总费用。")
                     .instruction("""
-                            你是旅游预算估算专家。根据行程路线估算总费用。
+                            根据行程路线估算总费用。
 
                             费用构成：
                             1. ticketCost: 门票费用（各景点门票之和）
@@ -61,6 +62,7 @@ public class BudgetEstimationAgent {
                             JSON 字段说明：ticketCost, mealCost, transportCost, hotelCost, otherCost, totalCost, perPersonCost, currency, notes
                             示例：ticketCost=200, mealCost=600, transportCost=150, hotelCost=1200, otherCost=215, totalCost=2365, perPersonCost=2365, currency=CNY, notes=住宿按舒适型400元/晚计算
                             """)
+                    .outputKey("budgetEstimate")
                     .build();
             log.info("BudgetEstimationAgent 初始化完成");
         } catch (Exception e) {

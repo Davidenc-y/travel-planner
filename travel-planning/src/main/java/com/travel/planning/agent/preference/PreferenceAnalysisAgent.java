@@ -43,8 +43,9 @@ public class PreferenceAnalysisAgent {
                     .name("preference_analysis")
                     .model(lightModel)
                     .description("从用户输入中提取目的地、天数、预算、兴趣等结构化偏好数据")
+                    .systemPrompt("你是旅游偏好分析专家，擅长从用户自然语言输入中提取结构化的旅游偏好数据。")
                     .instruction("""
-                            你是旅游偏好分析专家。从用户输入中提取以下信息：
+                            从用户输入中提取以下信息：
 
                             1. destination: 目的地（城市/地区名称）
                             2. days: 出行天数（整数）
@@ -58,6 +59,7 @@ public class PreferenceAnalysisAgent {
                             输出示例（请替换为实际值）：
                             destination=北京, days=3, budget=5000, interests=文化+美食, party=家庭, travelStyle=COMFORT, specialNeeds=空
                             """)
+                    .outputKey("preference")
                     .build();
             log.info("PreferenceAnalysisAgent 初始化完成");
         } catch (Exception e) {

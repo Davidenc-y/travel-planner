@@ -39,7 +39,7 @@ spring:
       api-key: ${DASHSCOPE_API_KEY:}
       chat:
         options:
-          model: qwen-max
+          model: qwen3.7-max
           temperature: 0.7
       embedding:
         api-key: ${DASHSCOPE_API_KEY:}
@@ -66,9 +66,11 @@ travel:
   # 多模型路由
   ai:
     models:
-      main: qwen-max          # 主推理：行程编排
-      light: qwen-turbo       # 轻量：偏好分析、意图识别
-      coder: qwen-plus        # 内容生成：景点描述
+      main: qwen3.7-max       # 主推理：行程编排（qwen-max 免费额度已耗尽 → 403）
+      light: qwen-turbo       # 轻量：偏好分析、意图识别（实测可用）
+      coder: qwen3.7-max      # 内容生成：景点描述（qwen3.7-plus 仅兼容模式可用，改 qwen3.7-max）
+    timeout:
+      seconds: 120            # 单次 LLM 调用超时（秒），作为每节点调用硬性退出边界（F24）
   # 地图 API
   map:
     tencent:

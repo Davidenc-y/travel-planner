@@ -31,6 +31,9 @@ spring:
   ai:
     dashscope:
       api-key: ${DASHSCOPE_API_KEY:}
+      chat:
+        options:
+          model: qwen3.7-max # SelfRAG/CorrectiveRAG 使用；qwen-plus 免费额度耗尽 -> 403
       embedding:
         api-key: ${DASHSCOPE_API_KEY:}
         model: text-embedding-v2

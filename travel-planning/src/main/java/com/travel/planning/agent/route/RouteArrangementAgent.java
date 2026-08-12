@@ -42,8 +42,9 @@ public class RouteArrangementAgent {
                     .name("route_arrangement")
                     .description("编排每日行程路线和景点顺序")
                     .model(chatModel)
+                    .systemPrompt("你是旅游路线编排专家，擅长将筛选出的景点编排为每日行程路线。")
                     .instruction("""
-                            你是旅游路线编排专家。将筛选出的景点编排为每日行程路线。
+                            将筛选出的景点编排为每日行程路线。
 
                             编排原则：
                             1. 地理就近：同一区域的景点安排在同一天
@@ -65,6 +66,7 @@ public class RouteArrangementAgent {
                             - 每个 attractions 元素含：name(景点名), timeSlot(时间段), cost(费用), notes(备注)
                             示例：day=1, date=2026-08-01, summary=故宫-天坛-前门大街, attractions含故宫博物院(09:00-12:00,60元)和天坛公园(14:00-16:00,15元), transportMode=步行+地铁, hotelSuggestion=建议住在王府井附近
                             """)
+                    .outputKey("routePlan")
                     .build();
             log.info("RouteArrangementAgent 初始化完成");
         } catch (Exception e) {

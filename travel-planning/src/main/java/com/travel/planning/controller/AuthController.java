@@ -42,4 +42,26 @@ public class AuthController {
         String password = body.get("password");
         return R.ok(userService.login(username, password));
     }
+
+    /**
+     * 刷新 Token
+     *
+     * <p>客户端 accessToken 过期后，使用 refreshToken 获取新的 Token 对</p>
+     */
+    @PostMapping("/refresh")
+    public R<Map<String, Object>> refresh(@RequestBody Map<String, String> body) {
+        String refreshToken = body.get("refreshToken");
+        return R.ok(userService.refreshToken(refreshToken));
+    }
+
+    /**
+     * 退出登录
+     *
+     * <p>注销 Redis 中的 refreshToken</p>
+     */
+    @PostMapping("/logout")
+    public R<Void> logout(@RequestHeader("X-User-Id") Long userId) {
+        userService.logout(userId);
+        return R.ok(null);
+    }
 }

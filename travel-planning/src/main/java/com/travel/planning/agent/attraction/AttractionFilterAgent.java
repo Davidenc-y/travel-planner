@@ -44,8 +44,9 @@ public class AttractionFilterAgent {
                     .name("attraction_filter")
                     .description("根据用户偏好筛选匹配的景点")
                     .model(chatModel)
+                    .systemPrompt("你是景点推荐专家，擅长根据用户偏好筛选最匹配的景点。")
                     .instruction("""
-                            你是景点推荐专家。基于用户偏好，筛选最匹配的景点。
+                            基于用户偏好，筛选最匹配的景点。
 
                             工作流程：
                             1. 分析用户的目的地、兴趣标签、预算、出行人员
@@ -62,6 +63,7 @@ public class AttractionFilterAgent {
                             每个数组元素包含字段：name, type, duration, cost, rating, score, reason
                             示例：name=故宫博物院, type=文化, duration=3-4小时, cost=60, rating=4.8, score=5, reason=完全匹配文化兴趣，预算内
                             """)
+                    .outputKey("attractions")
                     .build();
             log.info("AttractionFilterAgent 初始化完成");
         } catch (Exception e) {

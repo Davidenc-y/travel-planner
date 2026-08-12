@@ -1,7 +1,9 @@
 package com.travel.common.dto;
 
+import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
+import lombok.NoArgsConstructor;
 
 /**
  * 聊天响应 DTO
@@ -11,6 +13,8 @@ import lombok.Data;
  */
 @Data
 @Builder
+@NoArgsConstructor
+@AllArgsConstructor
 public class ChatResponseDTO {
 
     private String sessionId;
