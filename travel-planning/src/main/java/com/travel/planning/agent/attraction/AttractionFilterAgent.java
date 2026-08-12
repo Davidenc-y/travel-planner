@@ -42,6 +42,7 @@ public class AttractionFilterAgent {
         try {
             this.agent = ReactAgent.builder()
                     .name("attraction_filter")
+                    .description("根据用户偏好筛选匹配的景点")
                     .model(chatModel)
                     .instruction("""
                             你是景点推荐专家。基于用户偏好，筛选最匹配的景点。
@@ -57,11 +58,9 @@ public class AttractionFilterAgent {
                             - 4分：高度匹配，略微超预算或兴趣部分匹配
                             - 3分：一般匹配
 
-                            必须输出 JSON 数组格式，不要输出其他内容：
-                            [
-                              {"name":"故宫博物院","type":"文化","duration":"3-4小时","cost":60,"rating":4.8,"score":5,"reason":"完全匹配文化兴趣，预算内"},
-                              ...
-                            ]
+                            必须输出 JSON 数组格式，不要输出其他内容。
+                            每个数组元素包含字段：name, type, duration, cost, rating, score, reason
+                            示例：name=故宫博物院, type=文化, duration=3-4小时, cost=60, rating=4.8, score=5, reason=完全匹配文化兴趣，预算内
                             """)
                     .build();
             log.info("AttractionFilterAgent 初始化完成");

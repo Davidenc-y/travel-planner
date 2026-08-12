@@ -24,6 +24,7 @@ import java.util.List;
  */
 @Slf4j
 @Component("naiveRag")
+@SuppressWarnings("deprecation")
 public class NaiveRagStrategy implements RagStrategy {
 
     private static final String INDEX_NAME = "attraction_index";

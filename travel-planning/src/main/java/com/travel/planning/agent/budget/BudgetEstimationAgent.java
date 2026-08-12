@@ -40,6 +40,7 @@ public class BudgetEstimationAgent {
         try {
             this.agent = ReactAgent.builder()
                     .name("budget_estimation")
+                    .description("估算旅游行程总费用")
                     .model(lightModel)
                     .instruction("""
                             你是旅游预算估算专家。根据行程路线估算总费用。
@@ -56,18 +57,9 @@ public class BudgetEstimationAgent {
                             - 根据出行人数调整总费用
                             - 输出各项明细和总计
 
-                            必须输出 JSON 格式，不要输出其他内容：
-                            {
-                              "ticketCost": 200,
-                              "mealCost": 600,
-                              "transportCost": 150,
-                              "hotelCost": 1200,
-                              "otherCost": 215,
-                              "totalCost": 2365,
-                              "perPersonCost": 2365,
-                              "currency": "CNY",
-                              "notes": "住宿按舒适型400元/晚计算"
-                            }
+                            必须输出 JSON 格式，不要输出其他内容。
+                            JSON 字段说明：ticketCost, mealCost, transportCost, hotelCost, otherCost, totalCost, perPersonCost, currency, notes
+                            示例：ticketCost=200, mealCost=600, transportCost=150, hotelCost=1200, otherCost=215, totalCost=2365, perPersonCost=2365, currency=CNY, notes=住宿按舒适型400元/晚计算
                             """)
                     .build();
             log.info("BudgetEstimationAgent 初始化完成");

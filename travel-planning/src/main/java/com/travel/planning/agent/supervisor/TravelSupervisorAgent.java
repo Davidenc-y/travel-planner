@@ -62,38 +62,43 @@ public class TravelSupervisorAgent {
     @PostConstruct
     public void init() throws Exception {
         try {
+            // 创建 mainAgent（路由决策者）— Spring AI Alibaba 1.1.2.0 必须设置
+            ReactAgent mainAgent = ReactAgent.builder()
+                    .name("travel_supervisor_main")
+                    .model(chatModel)
+                    .description("旅游行程规划总协调器,负责路由决策")
+                    .systemPrompt("""
+                            你是一个智能的旅游行程规划监督者。
+                            可用的子Agent:
+                            - preference_analysis(偏好分析): 从用户输入中提取目的地、天数、预算、兴趣等结构化数据
+                            - attraction_filter(景点筛选): 根据偏好筛选匹配的景点
+                            - route_arrangement(路线编排): 编排每日行程路线
+                            - budget_estimation(预算估算): 估算总费用
+
+                            ## 路由决策输出格式
+                            当需要做出路由决策时,请以 JSON 数组格式输出:
+                            - 选择单个子Agent 时输出: ["preference_analysis"]
+                            - 选择多个子Agent 并行时输出: ["preference_analysis", "attraction_filter"]
+                            - 任务全部完成时输出: [] 或 ["FINISH"]
+
+                            正常流程为顺序执行 preference_analysis → attraction_filter → route_arrangement → budget_estimation。
+                            若预算估算超出用户预算 1.2 倍,回到 attraction_filter 重新筛选(最多重试 2 次)。
+                            合法元素仅限: preference_analysis、attraction_filter、route_arrangement、budget_estimation、FINISH。
+                            """)
+                    .instruction("用户的请求是: {input}")
+                    .outputKey("final_output")
+                    .build();
+
             this.supervisor = SupervisorAgent.builder()
                     .name("travel_planning_supervisor")
                     .model(chatModel)
+                    .mainAgent(mainAgent)
                     .subAgents(List.of(
                             prefAgent.getAgent(),
                             attrAgent.getAgent(),
                             routeAgent.getAgent(),
                             budgetAgent.getAgent()
                     ))
-                    .instruction("""
-                            你是旅游行程规划总协调器。收到用户偏好后，按以下顺序调用子 Agent：
-
-                            1. 先调用 preference_analysis 提取偏好结构化数据
-                            2. 再调用 attraction_filter 筛选匹配景点
-                            3. 然后调用 route_arrangement 编排每日路线
-                            4. 最后调用 budget_estimation 估算总费用
-
-                            注意事项：
-                            - 若预算估算超出用户预算 1.2 倍，回到 attraction_filter 重新筛选（最多重试 2 次）
-                            - 每个子 Agent 输出 JSON 格式，你需要整合所有结果
-                            - 全部完成后返回 FINISH
-
-                            最终输出格式（JSON）：
-                            {
-                              "title": "行程标题",
-                              "destination": "目的地",
-                              "days": 天数,
-                              "dayPlans": [...],
-                              "estimatedCost": 总费用,
-                              "mindmap": {...}
-                            }
-                            """)
                     .build();
 
             log.info("TravelSupervisorAgent 初始化完成, 子Agent: preference_analysis, attraction_filter, route_arrangement, budget_estimation");

@@ -22,7 +22,8 @@ spring:
     redis:
       host: ${REDIS_HOST:localhost}
       port: ${REDIS_PORT:6379}
-      password: ${REDIS_PASSWORD:}
+      # password: 不设置 — Redis 无密码，避免 Redisson 发送 AUTH 空密码
+      # 如需密码，设置环境变量 SPRING_DATA_REDIS_PASSWORD=yourpassword
       database: 0
       timeout: 5000ms
 

@@ -37,6 +37,7 @@ import java.util.*;
  */
 @Slf4j
 @Service
+@SuppressWarnings("deprecation")
 @RequiredArgsConstructor
 public class AttractionEtlService {
 

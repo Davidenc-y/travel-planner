@@ -42,6 +42,7 @@ public class PreferenceAnalysisAgent {
             this.agent = ReactAgent.builder()
                     .name("preference_analysis")
                     .model(lightModel)
+                    .description("从用户输入中提取目的地、天数、预算、兴趣等结构化偏好数据")
                     .instruction("""
                             你是旅游偏好分析专家。从用户输入中提取以下信息：
 
@@ -53,8 +54,9 @@ public class PreferenceAnalysisAgent {
                             6. travelStyle: 出行风格（ECONOMY/COMFORT/LUXURY，如不确定填 COMFORT）
                             7. specialNeeds: 特殊需求数组（如免门票/无障碍/宠物友好，无则空数组）
 
-                            必须输出 JSON 格式，不要输出其他内容：
-                            {"destination":"北京","days":3,"budget":5000,"interests":["文化","美食"],"party":"家庭","travelStyle":"COMFORT","specialNeeds":[]}
+                            必须输出 JSON 格式，不要输出其他内容。
+                            输出示例（请替换为实际值）：
+                            destination=北京, days=3, budget=5000, interests=文化+美食, party=家庭, travelStyle=COMFORT, specialNeeds=空
                             """)
                     .build();
             log.info("PreferenceAnalysisAgent 初始化完成");

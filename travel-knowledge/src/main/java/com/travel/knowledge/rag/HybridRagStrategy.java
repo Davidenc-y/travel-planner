@@ -1,6 +1,11 @@
 package com.travel.knowledge.rag;
 
 import com.travel.knowledge.memory.RRFusion;
+import io.milvus.param.MetricType;
+import io.milvus.param.R;
+import io.milvus.param.dml.SearchParam;
+import io.milvus.grpc.SearchResults;
+import io.milvus.response.SearchResultsWrapper;
 import lombok.extern.slf4j.Slf4j;
 import org.elasticsearch.client.RestHighLevelClient;
 import org.elasticsearch.index.query.QueryBuilders;
@@ -20,19 +25,12 @@ import java.util.stream.Collectors;
  *
  * <p>BM25（ES）+ KNN（Milvus）+ RRF 融合，是默认的 RAG 策略。</p>
  *
- * <p>工作流程：</p>
- * <ol>
- *   <li>BM25 文本检索（ES）→ 得分 A</li>
- *   <li>KNN 向量检索（Milvus）→ 得分 B</li>
- *   <li>RRF 融合：score = 1/(k+rank₁) + 1/(k+rank₂)</li>
- *   <li>返回 Top-K 融合结果</li>
- * </ol>
- *
  * @author david_ency
  * @since 1.0-SNAPSHOT
  */
 @Slf4j
 @Component("hybridRag")
+@SuppressWarnings("deprecation")
 public class HybridRagStrategy implements RagStrategy {
 
     private static final String ES_INDEX = "attraction_index";
@@ -56,13 +54,8 @@ public class HybridRagStrategy implements RagStrategy {
         log.info("[HybridRAG] query={}, topK={}", query, topK);
         long start = System.currentTimeMillis();
 
-        // 1. BM25 检索 (ES)
         List<RRFusion.ScoredItem> bm25Results = bm25Search(query, topK);
-
-        // 2. KNN 向量检索 (Milvus)
         List<RRFusion.ScoredItem> knnResults = knnSearch(query, topK);
-
-        // 3. RRF 融合
         List<RRFusion.FusionResult> fused = RRFusion.fuse(bm25Results, knnResults, topK);
 
         long cost = System.currentTimeMillis() - start;
@@ -115,7 +108,7 @@ public class HybridRagStrategy implements RagStrategy {
     }
 
     /**
-     * KNN 向量检索（Milvus）
+     * KNN 向量检索（Milvus）— 适配 Milvus Java SDK 2.3.4 API
      */
     private List<RRFusion.ScoredItem> knnSearch(String query, int topK) {
         try {
@@ -123,39 +116,47 @@ public class HybridRagStrategy implements RagStrategy {
             var embeddingResponse = embeddingModel.embedForResponse(List.of(query));
             float[] queryVector = embeddingResponse.getResults().get(0).getOutput();
 
-            // 2. Milvus 向量检索
-            var searchParam = io.milvus.param.dml.SearchParam.newBuilder()
+            // 2. 构建 SearchParam（Milvus SDK 2.3.4 API）
+            SearchParam searchParam = SearchParam.newBuilder()
                     .withCollectionName(MILVUS_COLLECTION)
-                    .withVectorFields("vector")
-                    .withVectors(List.of(queryVector))
                     .withVectorFieldName("vector")
+                    .withVectors(List.of(queryVector))
                     .withTopK(topK)
-                    .withMetricType(io.milvus.param.MetricType.L2)
+                    .withMetricType(MetricType.L2)
                     .withOutFields(List.of("name", "city", "type", "tags", "rating", "ticketPrice", "createdAt"))
                     .build();
 
-            var searchResults = milvusClient.search(searchParam);
+            // 3. 执行搜索
+            R<SearchResults> response = milvusClient.search(searchParam);
+
+            if (response.getStatus() != R.Status.Success.getCode()) {
+                log.error("[HybridRAG] KNN 检索失败: {}", response.getMessage());
+                return Collections.emptyList();
+            }
+
+            // 4. 解析结果（Milvus SDK 2.3.4 API：IDScore 不是 IDQuery）
+            SearchResultsWrapper wrapper = new SearchResultsWrapper(response.getData().getResults());
+            List<SearchResultsWrapper.IDScore> scoreList = wrapper.getIDScore(0);
+
             List<RRFusion.ScoredItem> results = new ArrayList<>();
+            for (SearchResultsWrapper.IDScore score : scoreList) {
+                long id = score.getLongID();
+                float distance = score.getScore();
+                // Milvus L2 距离越小越相似，转换为相似度
+                double similarity = 1.0 / (1.0 + distance);
 
-            if (searchResults.getData() != null) {
-                for (var result : searchResults.getData()) {
-                    var entity = result.getEntity("name");
-                    String name = entity != null ? entity.toString() : "";
-                    float score = result.getScore();
-                    // Milvus L2 距离越小越相似，转换为相似度（1/(1+distance)）
-                    double similarity = 1.0 / (1.0 + score);
-
-                    results.add(new RRFusion.ScoredItem(
-                            String.valueOf(result.getID()),
-                            name,
-                            "",  // snippet 从 ES 补充
-                            similarity,
-                            Collections.emptyList(),
-                            ""
-                    ));
-                }
+                // name 留空 — RRF 融合时 BM25 结果的 name 会通过 putIfAbsent 填充
+                results.add(new RRFusion.ScoredItem(
+                        String.valueOf(id),
+                        "",
+                        "",
+                        similarity,
+                        Collections.emptyList(),
+                        ""
+                ));
             }
             return results;
+
         } catch (Exception e) {
             log.error("[HybridRAG] KNN 检索失败", e);
             return Collections.emptyList();
@@ -170,7 +171,6 @@ public class HybridRagStrategy implements RagStrategy {
         if (tagsObj == null) return Collections.emptyList();
         if (tagsObj instanceof List) return (List<String>) tagsObj;
         if (tagsObj instanceof String s) {
-            // JSON 数组字符串，简化处理
             return List.of(s.replaceAll("[\\[\\]\"]", "").split(","));
         }
         return Collections.emptyList();

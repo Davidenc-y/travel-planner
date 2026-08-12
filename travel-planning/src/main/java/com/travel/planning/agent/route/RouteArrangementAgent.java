@@ -40,6 +40,7 @@ public class RouteArrangementAgent {
         try {
             this.agent = ReactAgent.builder()
                     .name("route_arrangement")
+                    .description("编排每日行程路线和景点顺序")
                     .model(chatModel)
                     .instruction("""
                             你是旅游路线编排专家。将筛选出的景点编排为每日行程路线。
@@ -57,22 +58,12 @@ public class RouteArrangementAgent {
                             - 下午：1-2 个景点
                             - 晚上：自由活动或夜景推荐
 
-                            必须输出 JSON 格式，不要输出其他内容：
-                            {
-                              "days": [
-                                {
-                                  "day": 1,
-                                  "date": "2026-08-01",
-                                  "summary": "故宫-天坛-前门大街",
-                                  "attractions": [
-                                    {"name":"故宫博物院","timeSlot":"09:00-12:00","cost":60,"notes":"建议提前预约"},
-                                    {"name":"天坛公园","timeSlot":"14:00-16:00","cost":15,"notes":"从故宫步行可达"}
-                                  ],
-                                  "transportMode": "步行+地铁",
-                                  "hotelSuggestion": "建议住在王府井附近"
-                                }
-                              ]
-                            }
+                            必须输出 JSON 格式，不要输出其他内容。
+                            JSON 结构说明：
+                            - 顶层对象含 days 数组
+                            - 每个 day 对象含：day(天数), date(日期), summary(摘要), attractions(景点数组), transportMode(交通), hotelSuggestion(住宿建议)
+                            - 每个 attractions 元素含：name(景点名), timeSlot(时间段), cost(费用), notes(备注)
+                            示例：day=1, date=2026-08-01, summary=故宫-天坛-前门大街, attractions含故宫博物院(09:00-12:00,60元)和天坛公园(14:00-16:00,15元), transportMode=步行+地铁, hotelSuggestion=建议住在王府井附近
                             """)
                     .build();
             log.info("RouteArrangementAgent 初始化完成");
