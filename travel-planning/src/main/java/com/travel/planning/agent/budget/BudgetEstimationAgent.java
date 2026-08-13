@@ -1,6 +1,7 @@
 package com.travel.planning.agent.budget;
 
 import com.alibaba.cloud.ai.graph.agent.ReactAgent;
+import com.travel.planning.agent.supervisor.TokenUsageInterceptor;
 import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.model.ChatModel;
@@ -29,10 +30,13 @@ import org.springframework.stereotype.Component;
 public class BudgetEstimationAgent {
 
     private final ChatModel lightModel;
+    private final TokenUsageInterceptor tokenUsageInterceptor;
     private ReactAgent agent;
 
-    public BudgetEstimationAgent(@Qualifier("lightModel") ChatModel lightModel) {
+    public BudgetEstimationAgent(@Qualifier("lightModel") ChatModel lightModel,
+                                 TokenUsageInterceptor tokenUsageInterceptor) {
         this.lightModel = lightModel;
+        this.tokenUsageInterceptor = tokenUsageInterceptor;
     }
 
     @PostConstruct
@@ -61,8 +65,10 @@ public class BudgetEstimationAgent {
                             必须输出 JSON 格式，不要输出其他内容。
                             JSON 字段说明：ticketCost, mealCost, transportCost, hotelCost, otherCost, totalCost, perPersonCost, currency, notes
                             示例：ticketCost=200, mealCost=600, transportCost=150, hotelCost=1200, otherCost=215, totalCost=2365, perPersonCost=2365, currency=CNY, notes=住宿按舒适型400元/晚计算
-                            """)
+                    """)
                     .outputKey("budgetEstimate")
+                    // F27：注册 token 用量采集拦截器
+                    .interceptors(tokenUsageInterceptor)
                     .build();
             log.info("BudgetEstimationAgent 初始化完成");
         } catch (Exception e) {

@@ -1,6 +1,7 @@
 package com.travel.planning.agent.preference;
 
 import com.alibaba.cloud.ai.graph.agent.ReactAgent;
+import com.travel.planning.agent.supervisor.TokenUsageInterceptor;
 import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.model.ChatModel;
@@ -30,10 +31,13 @@ import org.springframework.stereotype.Component;
 public class PreferenceAnalysisAgent {
 
     private final ChatModel lightModel;
+    private final TokenUsageInterceptor tokenUsageInterceptor;
     private ReactAgent agent;
 
-    public PreferenceAnalysisAgent(@Qualifier("lightModel") ChatModel lightModel) {
+    public PreferenceAnalysisAgent(@Qualifier("lightModel") ChatModel lightModel,
+                                   TokenUsageInterceptor tokenUsageInterceptor) {
         this.lightModel = lightModel;
+        this.tokenUsageInterceptor = tokenUsageInterceptor;
     }
 
     @PostConstruct
@@ -58,8 +62,10 @@ public class PreferenceAnalysisAgent {
                             必须输出 JSON 格式，不要输出其他内容。
                             输出示例（请替换为实际值）：
                             destination=北京, days=3, budget=5000, interests=文化+美食, party=家庭, travelStyle=COMFORT, specialNeeds=空
-                            """)
+                    """)
                     .outputKey("preference")
+                    // F27：注册 token 用量采集拦截器
+                    .interceptors(tokenUsageInterceptor)
                     .build();
             log.info("PreferenceAnalysisAgent 初始化完成");
         } catch (Exception e) {

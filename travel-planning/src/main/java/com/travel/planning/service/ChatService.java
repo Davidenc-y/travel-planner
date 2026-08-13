@@ -67,12 +67,18 @@ public class ChatService {
         userMsg.setSessionId(sessionId);
         userMsg.setRole(ChatRole.USER.name().toLowerCase());
         userMsg.setContent(message);
+        // F27：user 消息 tokens = 输入估算值（服务端无 tokenizer，启发式估算，见方法注释）
+        userMsg.setTokens(estimateInputTokens(message));
         messageMapper.insert(userMsg);
 
         // 3. 调用 SupervisorAgent
         String response;
+        long aiTokens = 0;
         try {
-            response = supervisorAgent.executePlanning(message);
+            TravelSupervisorAgent.PlanningResult result = supervisorAgent.executePlanningWithUsage(message);
+            response = result.answer();
+            // F27：assistant 消息 tokens = 本次全部 LLM 调用的真实 totalTokens 之和
+            aiTokens = result.totalTokens();
         } catch (Exception e) {
             log.error("Agent 调用失败", e);
             response = "抱歉，处理您的请求时出现错误，请稍后重试。";
@@ -83,12 +89,36 @@ public class ChatService {
         aiMsg.setSessionId(sessionId);
         aiMsg.setRole(ChatRole.ASSISTANT.name().toLowerCase());
         aiMsg.setContent(response);
+        aiMsg.setTokens((int) aiTokens);
         messageMapper.insert(aiMsg);
 
         return ChatResponseDTO.builder()
                 .sessionId(sessionId)
                 .response(response)
+                .tokens((int) aiTokens)
                 .build();
+    }
+
+    /**
+     * F27：估算用户消息的输入 token 数。
+     *
+     * <p>服务端无 tokenizer，采用文档化启发式：中文（CJK）约 1 字符 ≈ 1 token，
+     * 英文/数字约 4 字符 ≈ 1 token；最小返回 1。assistant 侧为真实用量。</p>
+     */
+    private static int estimateInputTokens(String text) {
+        if (text == null || text.isBlank()) {
+            return 0;
+        }
+        int han = 0;
+        int other = 0;
+        for (char c : text.toCharArray()) {
+            if (Character.UnicodeScript.of(c) == Character.UnicodeScript.HAN) {
+                han++;
+            } else {
+                other++;
+            }
+        }
+        return Math.max(1, (int) Math.ceil(han + other / 4.0));
     }
 
     /**

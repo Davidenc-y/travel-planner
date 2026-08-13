@@ -1,6 +1,7 @@
 package com.travel.planning.agent.route;
 
 import com.alibaba.cloud.ai.graph.agent.ReactAgent;
+import com.travel.planning.agent.supervisor.TokenUsageInterceptor;
 import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.model.ChatModel;
@@ -29,10 +30,13 @@ import org.springframework.stereotype.Component;
 public class RouteArrangementAgent {
 
     private final ChatModel chatModel;
+    private final TokenUsageInterceptor tokenUsageInterceptor;
     private ReactAgent agent;
 
-    public RouteArrangementAgent(@Qualifier("chatModel") ChatModel chatModel) {
+    public RouteArrangementAgent(@Qualifier("chatModel") ChatModel chatModel,
+                                 TokenUsageInterceptor tokenUsageInterceptor) {
         this.chatModel = chatModel;
+        this.tokenUsageInterceptor = tokenUsageInterceptor;
     }
 
     @PostConstruct
@@ -65,8 +69,10 @@ public class RouteArrangementAgent {
                             - 每个 day 对象含：day(天数), date(日期), summary(摘要), attractions(景点数组), transportMode(交通), hotelSuggestion(住宿建议)
                             - 每个 attractions 元素含：name(景点名), timeSlot(时间段), cost(费用), notes(备注)
                             示例：day=1, date=2026-08-01, summary=故宫-天坛-前门大街, attractions含故宫博物院(09:00-12:00,60元)和天坛公园(14:00-16:00,15元), transportMode=步行+地铁, hotelSuggestion=建议住在王府井附近
-                            """)
+                    """)
                     .outputKey("routePlan")
+                    // F27：注册 token 用量采集拦截器
+                    .interceptors(tokenUsageInterceptor)
                     .build();
             log.info("RouteArrangementAgent 初始化完成");
         } catch (Exception e) {

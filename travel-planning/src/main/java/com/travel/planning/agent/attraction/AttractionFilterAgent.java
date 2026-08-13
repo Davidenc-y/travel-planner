@@ -1,6 +1,7 @@
 package com.travel.planning.agent.attraction;
 
 import com.alibaba.cloud.ai.graph.agent.ReactAgent;
+import com.travel.planning.agent.supervisor.TokenUsageInterceptor;
 import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.model.ChatModel;
@@ -31,10 +32,13 @@ import org.springframework.stereotype.Component;
 public class AttractionFilterAgent {
 
     private final ChatModel chatModel;
+    private final TokenUsageInterceptor tokenUsageInterceptor;
     private ReactAgent agent;
 
-    public AttractionFilterAgent(@Qualifier("chatModel") ChatModel chatModel) {
+    public AttractionFilterAgent(@Qualifier("chatModel") ChatModel chatModel,
+                                 TokenUsageInterceptor tokenUsageInterceptor) {
         this.chatModel = chatModel;
+        this.tokenUsageInterceptor = tokenUsageInterceptor;
     }
 
     @PostConstruct
@@ -62,8 +66,10 @@ public class AttractionFilterAgent {
                             必须输出 JSON 数组格式，不要输出其他内容。
                             每个数组元素包含字段：name, type, duration, cost, rating, score, reason
                             示例：name=故宫博物院, type=文化, duration=3-4小时, cost=60, rating=4.8, score=5, reason=完全匹配文化兴趣，预算内
-                            """)
+                    """)
                     .outputKey("attractions")
+                    // F27：注册 token 用量采集拦截器
+                    .interceptors(tokenUsageInterceptor)
                     .build();
             log.info("AttractionFilterAgent 初始化完成");
         } catch (Exception e) {
