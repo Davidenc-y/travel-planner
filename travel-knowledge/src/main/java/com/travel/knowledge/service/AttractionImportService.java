@@ -36,10 +36,13 @@ public class AttractionImportService {
      */
     @Transactional
     public int importFromJsonFile(String filePath) throws Exception {
-        log.info("开始导入景点数据: {}", filePath);
-        File file = new File(filePath);
+        // F30：统一路径分隔符（Windows 反斜杠 → 正斜杠），
+        // 避免 Postman 传入原始反斜杠或 URL 编码差异导致 File 定位失败；跨平台均安全。
+        String normalizedPath = filePath == null ? null : filePath.replace('\\', '/');
+        log.info("开始导入景点数据: {}", normalizedPath);
+        File file = new File(normalizedPath);
         if (!file.exists()) {
-            throw new IllegalArgumentException("文件不存在: " + filePath);
+            throw new IllegalArgumentException("文件不存在: " + normalizedPath);
         }
 
         List<Attraction> attractions = JsonUtils.getMapper().readValue(file,

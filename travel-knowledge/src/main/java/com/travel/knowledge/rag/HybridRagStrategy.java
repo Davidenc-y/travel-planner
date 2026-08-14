@@ -16,6 +16,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.stream.Collectors;
@@ -82,7 +83,15 @@ public class HybridRagStrategy implements RagStrategy {
         try {
             var searchRequest = new org.elasticsearch.action.search.SearchRequest(ES_INDEX);
             var sourceBuilder = new SearchSourceBuilder();
-            sourceBuilder.query(QueryBuilders.multiMatchQuery(query, "name", "description"));
+            // F39：查询含城市时严格限定 city（term filter），
+            // 避免"北京文化景点"混入深圳等异地景点（TC-20 实测）。
+            var boolQuery = QueryBuilders.boolQuery();
+            boolQuery.must(QueryBuilders.multiMatchQuery(query, "name", "description"));
+            String city = RagCityFilter.detect(query);
+            if (city != null) {
+                boolQuery.filter(QueryBuilders.termQuery("city", city));
+            }
+            sourceBuilder.query(boolQuery);
             sourceBuilder.size(topK);
             searchRequest.source(sourceBuilder);
 
@@ -112,19 +121,34 @@ public class HybridRagStrategy implements RagStrategy {
      */
     private List<RRFusion.ScoredItem> knnSearch(String query, int topK) {
         try {
+            // F39：查询含城市时对 Milvus 侧同样限定 city（expr 过滤），双路一致。
+            String city = RagCityFilter.detect(query);
+
             // 1. 生成查询向量
             var embeddingResponse = embeddingModel.embedForResponse(List.of(query));
             float[] queryVector = embeddingResponse.getResults().get(0).getOutput();
 
+            // F35：Milvus SDK 要求 SearchParam 的 float 向量为 List<Float>（同 F31 插入侧装箱）。
+            // 直接传 float[] 会在 build() 阶段抛
+            // ParamException "Target vector type must be List<Float> or ByteBuffer"，
+            // 导致 KNN 路失败、Hybrid 退化为 BM25-only（TC-19 实测根因）。
+            List<Float> queryVectorList = new ArrayList<>(queryVector.length);
+            for (float v : queryVector) {
+                queryVectorList.add(v);
+            }
+
             // 2. 构建 SearchParam（Milvus SDK 2.3.4 API）
-            SearchParam searchParam = SearchParam.newBuilder()
+            var searchBuilder = SearchParam.newBuilder()
                     .withCollectionName(MILVUS_COLLECTION)
                     .withVectorFieldName("vector")
-                    .withVectors(List.of(queryVector))
+                    .withVectors(List.of(queryVectorList))
                     .withTopK(topK)
                     .withMetricType(MetricType.L2)
-                    .withOutFields(List.of("name", "city", "type", "tags", "rating", "ticketPrice", "createdAt"))
-                    .build();
+                    .withOutFields(List.of("name", "description", "city", "type", "tags", "rating", "ticketPrice", "createdAt"));
+            if (city != null) {
+                searchBuilder.withExpr("city == \"" + city + "\"");
+            }
+            SearchParam searchParam = searchBuilder.build();
 
             // 3. 执行搜索
             R<SearchResults> response = milvusClient.search(searchParam);
@@ -140,19 +164,23 @@ public class HybridRagStrategy implements RagStrategy {
 
             List<RRFusion.ScoredItem> results = new ArrayList<>();
             for (SearchResultsWrapper.IDScore score : scoreList) {
-                long id = score.getLongID();
+                // F35：attraction_vectors 主键为 VARCHAR(64)（init_milvus.py），必须用 getStrID()。
+                // getLongID() 仅适用于 Int64 主键，VARCHAR 下恒为 0，会导致全部 docId 变成 "0"，
+                // RRF 融合无法与 BM25（ES _id）匹配（K7）。
+                String docId = score.getStrID();
                 float distance = score.getScore();
                 // Milvus L2 距离越小越相似，转换为相似度
                 double similarity = 1.0 / (1.0 + distance);
 
-                // name 留空 — RRF 融合时 BM25 结果的 name 会通过 putIfAbsent 填充
+                // F35：KNN 独有命中直接从 Milvus out fields 回填元数据（K2），
+                // 避免仅出现在 KNN 路的文档 title/snippet 为空。
                 results.add(new RRFusion.ScoredItem(
-                        String.valueOf(id),
-                        "",
-                        "",
+                        docId,
+                        fieldValue(score, "name"),
+                        fieldValue(score, "description"),
                         similarity,
-                        Collections.emptyList(),
-                        ""
+                        parseTags(safeGet(score, "tags")),
+                        fieldValue(score, "createdAt")
                 ));
             }
             return results;
@@ -164,14 +192,41 @@ public class HybridRagStrategy implements RagStrategy {
     }
 
     /**
+     * 安全读取 Milvus 输出字段（缺失/异常时返回空串）
+     */
+    private String fieldValue(SearchResultsWrapper.IDScore score, String field) {
+        Object v = safeGet(score, field);
+        return v == null ? "" : v.toString();
+    }
+
+    private Object safeGet(SearchResultsWrapper.IDScore score, String field) {
+        try {
+            return score.get(field);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /**
      * 安全解析 tags 字段
      */
     @SuppressWarnings("unchecked")
     private List<String> parseTags(Object tagsObj) {
         if (tagsObj == null) return Collections.emptyList();
-        if (tagsObj instanceof List) return (List<String>) tagsObj;
+        // F39：trim 掉 Milvus 侧 JSON 字符串（["文化", "历史"]）按逗号切分产生的
+        // 前导空格（如 " 历史"、" 自然"），避免关键词脏数据影响展示。
+        if (tagsObj instanceof List<?> list) {
+            return list.stream()
+                    .map(String::valueOf)
+                    .map(String::trim)
+                    .filter(s -> !s.isEmpty())
+                    .toList();
+        }
         if (tagsObj instanceof String s) {
-            return List.of(s.replaceAll("[\\[\\]\"]", "").split(","));
+            return Arrays.stream(s.replaceAll("[\\[\\]\"]", "").split(","))
+                    .map(String::trim)
+                    .filter(t -> !t.isEmpty())
+                    .toList();
         }
         return Collections.emptyList();
     }

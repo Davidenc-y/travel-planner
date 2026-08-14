@@ -38,7 +38,8 @@ public class RagDispatcher {
     /**
      * Spring 自动注入所有 RagStrategy 实现，key 为 Bean 名。
      *
-     * <p>Bean 名映射：naiveRag → naive, hybridRag → hybrid, selfRag → self_rag, correctiveRag → corrective_rag</p>
+     * <p>Bean 名：naiveRag / hybridRag / selfRag / correctiveRag；
+     * dispatch 按显式类型→Bean 名映射路由（F36/K1）。</p>
      */
     public RagDispatcher(Map<String, RagStrategy> strategies) {
         this.strategies = strategies;
@@ -56,8 +57,8 @@ public class RagDispatcher {
     public List<SearchResult> dispatch(String ragType, String query, int topK) {
         String type = (ragType == null || ragType.isBlank()) ? defaultType : ragType.toLowerCase();
 
-        // Bean 名映射：type → beanName（首字母大写 + "Rag"）
-        String beanName = type + "Rag";
+        // F36/K1：显式类型 → Bean 名映射，避免 self_rag → self_ragRag 拼错导致静默回退 hybrid。
+        String beanName = toBeanName(type);
         RagStrategy strategy = strategies.get(beanName);
 
         if (strategy == null) {
@@ -71,6 +72,21 @@ public class RagDispatcher {
 
         log.info("[RagDispatcher] type={}, strategy={}", type, strategy.getClass().getSimpleName());
         return strategy.retrieve(query, topK);
+    }
+
+    /**
+     * ragType → Spring Bean 名显式映射。
+     * naive→naiveRag、hybrid→hybridRag、self_rag→selfRag、corrective_rag→correctiveRag；
+     * 其余未知类型保持 type+"Rag"（查不到时走回退默认逻辑）。
+     */
+    private String toBeanName(String type) {
+        if ("self_rag".equals(type)) {
+            return "selfRag";
+        }
+        if ("corrective_rag".equals(type)) {
+            return "correctiveRag";
+        }
+        return type + "Rag";
     }
 
     /**

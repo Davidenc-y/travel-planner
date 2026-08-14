@@ -28,8 +28,13 @@ import java.util.List;
 @Component("selfRag")
 public class SelfRagStrategy implements RagStrategy {
 
-    /** RRF 得分阈值，低于此值视为低质量 */
-    private static final double SCORE_THRESHOLD = 0.001;
+    /**
+     * RRF 得分阈值，低于此值视为低质量（F39/K3 修正）。
+     * 原 0.001 低于任何 RRF 分（单路命中约 0.015~0.016、双路命中约 0.031~0.033），
+     * 导致过滤永不生效、self_rag 与 hybrid 结果完全相同；
+     * 0.02 可过滤掉仅单路命中的低置信结果，体现 Self-RAG 的"评估相关性过滤"。
+     */
+    private static final double SCORE_THRESHOLD = 0.02;
 
     private final HybridRagStrategy hybridStrategy;
     private final ChatModel chatModel;
@@ -57,6 +62,8 @@ public class SelfRagStrategy implements RagStrategy {
         List<SearchResult> filtered = results.stream()
                 .filter(r -> r.getScore() > SCORE_THRESHOLD)
                 .toList();
+        // F39：标注真实策略来源，便于观测（此前与 hybrid 同源且 source 均为 hybrid）。
+        filtered.forEach(r -> r.setSource("self_rag"));
 
         log.info("[SelfRAG] 检索 {} 条, 过滤后 {} 条", results.size(), filtered.size());
         return filtered;

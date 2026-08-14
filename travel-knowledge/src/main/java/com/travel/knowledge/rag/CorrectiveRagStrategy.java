@@ -32,8 +32,12 @@ public class CorrectiveRagStrategy implements RagStrategy {
     /** 结果质量阈值：最少结果数 */
     private static final int MIN_RESULTS = 3;
 
-    /** 结果质量阈值：最小平均长度 */
-    private static final int MIN_AVG_LENGTH = 50;
+    /**
+     * 结果质量阈值：最小平均长度（F39 修正）。
+     * 原 50 对景点 description（通常 10~40 字）过高，导致几乎每次查询都触发重写、
+     * 且重写后结果与初始几乎相同；15 与短文本描述匹配，仅在真正质量差时重写。
+     */
+    private static final int MIN_AVG_LENGTH = 15;
 
     private final HybridRagStrategy hybridStrategy;
     private final ChatModel chatModel;
@@ -55,6 +59,7 @@ public class CorrectiveRagStrategy implements RagStrategy {
         // Step 2: 检查质量
         if (checkQuality(initialResults)) {
             log.info("[CorrectiveRAG] 质量达标，直接返回");
+            initialResults.forEach(r -> r.setSource("corrective_rag"));
             return initialResults;
         }
 
@@ -134,7 +139,9 @@ public class CorrectiveRagStrategy implements RagStrategy {
             }
         }
 
-        return merged.stream().limit(topK).toList();
+        List<SearchResult> limited = merged.stream().limit(topK).toList();
+        limited.forEach(r -> r.setSource("corrective_rag"));
+        return limited;
     }
 
     @Override

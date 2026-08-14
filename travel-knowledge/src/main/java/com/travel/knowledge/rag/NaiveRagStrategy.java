@@ -44,7 +44,14 @@ public class NaiveRagStrategy implements RagStrategy {
         try {
             var searchRequest = new org.elasticsearch.action.search.SearchRequest(INDEX_NAME);
             var sourceBuilder = new SearchSourceBuilder();
-            sourceBuilder.query(QueryBuilders.multiMatchQuery(query, "name", "description"));
+            // F39：与 Hybrid 保持一致——查询含城市时按 city 限定，避免异地景点混入。
+            var boolQuery = QueryBuilders.boolQuery();
+            boolQuery.must(QueryBuilders.multiMatchQuery(query, "name", "description"));
+            String city = RagCityFilter.detect(query);
+            if (city != null) {
+                boolQuery.filter(QueryBuilders.termQuery("city", city));
+            }
+            sourceBuilder.query(boolQuery);
             sourceBuilder.size(topK);
             searchRequest.source(sourceBuilder);
 

@@ -168,17 +168,29 @@ public class AttractionEtlService {
     private void insertToMilvus(String docId, float[] vector, Attraction a) {
         List<String> tags = JsonUtils.parseList(a.getTags(), String.class);
 
+        // F31：Milvus SDK 要求 FLOAT_VECTOR 字段值为 List<Float>（单行即
+        // Collections.singletonList(List<Float>)），直接传 float[] 会在客户端校验阶段抛
+        // ParamException "Float vector field's value type must be List<Float>"，
+        // 被 SDK 重试掩盖但每次写入都会刷 ERROR 堆栈（TC-13 控制台大量报错根因）。
+        List<Float> vectorList = new ArrayList<>(vector.length);
+        for (float v : vector) {
+            vectorList.add(v);
+        }
+
         List<InsertParam.Field> fields = new ArrayList<>();
         fields.add(new InsertParam.Field("id", Collections.singletonList(docId)));
-        fields.add(new InsertParam.Field("vector", Collections.singletonList(vector)));
+        fields.add(new InsertParam.Field("vector", Collections.singletonList(vectorList)));
         fields.add(new InsertParam.Field("name", Collections.singletonList(a.getName())));
         fields.add(new InsertParam.Field("city", Collections.singletonList(a.getCity())));
         fields.add(new InsertParam.Field("type", Collections.singletonList(a.getType())));
         fields.add(new InsertParam.Field("tags", Collections.singletonList(a.getTags())));
+        // F32：Milvus attraction_vectors 中 rating/ticketPrice 为 FLOAT，
+        // SDK 客户端校验要求 java.lang.Float；传 Double 会抛
+        // ParamException "Float field value type must be Float"（被重试掩盖，但刷 ERROR 堆栈）。
         fields.add(new InsertParam.Field("rating",
-                Collections.singletonList(a.getRating() != null ? a.getRating().doubleValue() : 0.0)));
+                Collections.singletonList(a.getRating() != null ? a.getRating().floatValue() : 0.0f)));
         fields.add(new InsertParam.Field("ticketPrice",
-                Collections.singletonList(a.getTicketPrice() != null ? a.getTicketPrice().doubleValue() : 0.0)));
+                Collections.singletonList(a.getTicketPrice() != null ? a.getTicketPrice().floatValue() : 0.0f)));
         fields.add(new InsertParam.Field("createdAt",
                 Collections.singletonList(a.getCreatedAt() != null ? a.getCreatedAt().toString() : "")));
 

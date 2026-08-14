@@ -5,6 +5,10 @@ server:
   port: 8082
   servlet:
     context-path: /
+  # F30：允许查询参数中出现原始反斜杠（Windows 路径 filePath，如 D:\...）
+  # Tomcat 默认按 RFC 7230/3986 拒绝 '\'，导致 TC-13 直接返回 HTTP 400。
+  tomcat:
+    relaxed-query-chars: '\'
 
 spring:
   application:
@@ -84,6 +88,13 @@ management:
 logging:
   level:
     com.travel: DEBUG
+    # F33：Milvus SDK 内部重试告警收敛。SDK 在 gRPC 瞬时断流/参数校验失败时会打印
+    # ERROR + 全栈（如 DescribeCollectionRequest ... end-of-stream mid-frame），
+    # 随后由 SDK retry 自动恢复并成功写入。数据完整性由业务侧 ETL 成功/失败统计兜底，
+    # 此处 OFF 避免每条重试刷屏；如需深入排查 Milvus 连接可临时改为 INFO/DEBUG。
+    # 注意：必须带引号写 "OFF"——SnakeYAML（YAML 1.1）会把裸 OFF 解析为布尔 false，
+    # Spring Boot 2.2+ 将布尔 false 静默忽略（日志级别不生效）。
+    io.milvus: "OFF"
     org.springframework.ai: INFO
   pattern:
     console: "%d{HH:mm:ss.SSS} %-5level [%thread] %logger{36} - %msg%n"
