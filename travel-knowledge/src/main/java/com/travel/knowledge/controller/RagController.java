@@ -1,10 +1,10 @@
 package com.travel.knowledge.controller;
 
 import com.travel.common.result.R;
-import com.travel.knowledge.rag.RagDispatcher;
-import com.travel.knowledge.rag.QueryIntent;
-import com.travel.knowledge.rag.QueryUnderstandingService;
-import com.travel.knowledge.rag.SearchResult;
+import com.travel.knowledge.rag.service.RagDispatcher;
+import com.travel.knowledge.rag.model.QueryIntent;
+import com.travel.knowledge.rag.service.QueryUnderstandingService;
+import com.travel.knowledge.rag.model.SearchResult;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.*;

@@ -1,4 +1,4 @@
-package com.travel.knowledge.rag;
+package com.travel.knowledge.rag.support;
 
 /**
  * RAG Agent 输出 JSON 提取工具（F42/F43 共用）。

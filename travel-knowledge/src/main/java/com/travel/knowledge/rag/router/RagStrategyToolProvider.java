@@ -1,6 +1,10 @@
-package com.travel.knowledge.rag;
+package com.travel.knowledge.rag.router;
 
 import com.travel.common.util.JsonUtils;
+import com.travel.knowledge.rag.model.QueryIntent;
+import com.travel.knowledge.rag.model.RagToolRequest;
+import com.travel.knowledge.rag.model.SearchResult;
+import com.travel.knowledge.rag.strategy.*;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.model.ToolContext;
 import org.springframework.ai.tool.ToolCallback;

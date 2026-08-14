@@ -1,4 +1,4 @@
-package com.travel.knowledge.rag;
+package com.travel.knowledge.rag.router;
 
 import com.alibaba.cloud.ai.graph.CompileConfig;
 import com.alibaba.cloud.ai.graph.OverAllState;
@@ -8,6 +8,9 @@ import com.alibaba.cloud.ai.graph.agent.flow.agent.SupervisorAgent;
 import com.alibaba.cloud.ai.graph.checkpoint.config.SaverConfig;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.travel.common.util.JsonUtils;
+import com.travel.knowledge.rag.support.RagJsonExtractor;
+import com.travel.knowledge.rag.model.QueryIntent;
+import com.travel.knowledge.rag.model.SearchResult;
 import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.messages.AssistantMessage;

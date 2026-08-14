@@ -1,5 +1,6 @@
-package com.travel.knowledge.rag;
+package com.travel.knowledge.rag.support;
 
+import com.travel.knowledge.rag.model.QueryIntent;
 import org.elasticsearch.index.query.QueryBuilder;
 import org.elasticsearch.index.query.QueryBuilders;
 import org.springframework.util.StringUtils;

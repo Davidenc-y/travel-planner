@@ -1,8 +1,10 @@
-package com.travel.knowledge.rag;
+package com.travel.knowledge.rag.strategy;
 
+import com.travel.knowledge.rag.model.QueryIntent;
+import com.travel.knowledge.rag.support.RagFilterBuilder;
+import com.travel.knowledge.rag.model.SearchResult;
 import lombok.extern.slf4j.Slf4j;
 import org.elasticsearch.client.RestHighLevelClient;
-import org.elasticsearch.index.query.QueryBuilders;
 import org.elasticsearch.search.SearchHit;
 import org.elasticsearch.search.builder.SearchSourceBuilder;
 import org.springframework.beans.factory.annotation.Autowired;

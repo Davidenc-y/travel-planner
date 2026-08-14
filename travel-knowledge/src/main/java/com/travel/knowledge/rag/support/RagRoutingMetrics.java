@@ -1,4 +1,4 @@
-package com.travel.knowledge.rag;
+package com.travel.knowledge.rag.support;
 
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;

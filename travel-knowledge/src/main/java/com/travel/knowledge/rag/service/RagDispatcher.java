@@ -1,7 +1,13 @@
-package com.travel.knowledge.rag;
+package com.travel.knowledge.rag.service;
 
 import com.travel.common.exception.RagRetrievalException;
 import com.travel.common.util.JsonUtils;
+import com.travel.knowledge.rag.model.QueryIntent;
+import com.travel.knowledge.rag.model.SearchResult;
+import com.travel.knowledge.rag.router.AutoRagRouterAgent;
+import com.travel.knowledge.rag.router.RagSupervisorAgent;
+import com.travel.knowledge.rag.strategy.RagStrategy;
+import com.travel.knowledge.rag.support.RagRoutingMetrics;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;

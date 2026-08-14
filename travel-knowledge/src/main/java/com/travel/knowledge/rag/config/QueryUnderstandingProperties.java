@@ -1,4 +1,4 @@
-package com.travel.knowledge.rag;
+package com.travel.knowledge.rag.config;
 
 import lombok.Data;
 import org.springframework.boot.context.properties.ConfigurationProperties;

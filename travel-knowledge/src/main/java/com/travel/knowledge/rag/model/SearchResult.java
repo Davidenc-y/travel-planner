@@ -1,4 +1,4 @@
-package com.travel.knowledge.rag;
+package com.travel.knowledge.rag.model;
 
 import lombok.Builder;
 import lombok.Data;

@@ -1,5 +1,7 @@
-package com.travel.knowledge.rag;
+package com.travel.knowledge.rag.strategy;
 
+import com.travel.knowledge.rag.model.QueryIntent;
+import com.travel.knowledge.rag.model.SearchResult;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.beans.factory.annotation.Autowired;

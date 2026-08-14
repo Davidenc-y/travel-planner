@@ -1,4 +1,7 @@
-package com.travel.knowledge.rag;
+package com.travel.knowledge.rag.strategy;
+
+import com.travel.knowledge.rag.model.QueryIntent;
+import com.travel.knowledge.rag.model.SearchResult;
 
 import java.util.List;
 

@@ -1,4 +1,6 @@
-package com.travel.knowledge.rag;
+package com.travel.knowledge.rag.model;
+
+import com.travel.knowledge.rag.service.QueryUnderstandingService;
 
 import java.util.List;
 

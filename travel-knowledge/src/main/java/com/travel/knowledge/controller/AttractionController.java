@@ -3,7 +3,7 @@ package com.travel.knowledge.controller;
 import com.travel.common.entity.Attraction;
 import com.travel.common.result.PageResult;
 import com.travel.common.result.R;
-import com.travel.knowledge.rag.SearchResult;
+import com.travel.knowledge.rag.model.SearchResult;
 import com.travel.knowledge.service.AttractionService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;

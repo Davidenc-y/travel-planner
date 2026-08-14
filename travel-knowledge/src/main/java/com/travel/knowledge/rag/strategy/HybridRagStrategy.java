@@ -1,6 +1,9 @@
-package com.travel.knowledge.rag;
+package com.travel.knowledge.rag.strategy;
 
 import com.travel.knowledge.memory.RRFusion;
+import com.travel.knowledge.rag.model.QueryIntent;
+import com.travel.knowledge.rag.support.RagFilterBuilder;
+import com.travel.knowledge.rag.model.SearchResult;
 import io.milvus.param.MetricType;
 import io.milvus.param.R;
 import io.milvus.param.dml.SearchParam;
@@ -8,7 +11,6 @@ import io.milvus.grpc.SearchResults;
 import io.milvus.response.SearchResultsWrapper;
 import lombok.extern.slf4j.Slf4j;
 import org.elasticsearch.client.RestHighLevelClient;
-import org.elasticsearch.index.query.QueryBuilders;
 import org.elasticsearch.search.SearchHit;
 import org.elasticsearch.search.builder.SearchSourceBuilder;
 import org.springframework.ai.embedding.EmbeddingModel;

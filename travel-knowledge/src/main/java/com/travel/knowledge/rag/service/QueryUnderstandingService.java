@@ -1,6 +1,8 @@
-package com.travel.knowledge.rag;
+package com.travel.knowledge.rag.service;
 
 import com.travel.common.util.JsonUtils;
+import com.travel.knowledge.rag.model.QueryIntent;
+import com.travel.knowledge.rag.config.QueryUnderstandingProperties;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.stereotype.Service;
