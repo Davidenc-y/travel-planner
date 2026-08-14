@@ -2,6 +2,8 @@ package com.travel.knowledge.controller;
 
 import com.travel.common.result.R;
 import com.travel.knowledge.rag.RagDispatcher;
+import com.travel.knowledge.rag.QueryIntent;
+import com.travel.knowledge.rag.QueryUnderstandingService;
 import com.travel.knowledge.rag.SearchResult;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -24,22 +26,25 @@ import java.util.List;
 public class RagController {
 
     private final RagDispatcher ragDispatcher;
+    private final QueryUnderstandingService queryUnderstandingService;
 
     /**
      * RAG 检索
      *
-     * @param ragType 策略类型（naive/hybrid/self_rag/corrective_rag），默认 hybrid
+     * @param ragType 策略类型（naive/hybrid/self_rag/corrective_rag），缺省走 auto 路由
      * @param query   查询文本
      * @param topK    返回结果数（默认 10）
      * @return 检索结果列表
      */
     @GetMapping("/search")
     public R<List<SearchResult>> search(
-            @RequestParam(required = false, defaultValue = "hybrid") String ragType,
+            @RequestParam(required = false) String ragType,
             @RequestParam String query,
             @RequestParam(required = false, defaultValue = "10") int topK) {
         log.info("[RagController] ragType={}, query={}, topK={}", ragType, query, topK);
-        return R.ok(ragDispatcher.dispatch(ragType, query, topK));
+        // F40/P1：前置查询理解。
+        QueryIntent intent = queryUnderstandingService.understand(query);
+        return R.ok(ragDispatcher.dispatch(ragType, intent, topK));
     }
 
     /**

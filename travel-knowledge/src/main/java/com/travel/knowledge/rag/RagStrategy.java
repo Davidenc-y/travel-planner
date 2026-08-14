@@ -13,13 +13,13 @@ import java.util.List;
 public interface RagStrategy {
 
     /**
-     * 执行检索
+     * 执行检索（F40/P1：策略统一消费结构化查询意图）
      *
-     * @param query 用户查询
-     * @param topK  返回结果数
+     * @param intent 结构化查询意图（rawQuery 为查询文本，city/type 等用于过滤）
+     * @param topK   返回结果数
      * @return 检索结果列表
      */
-    List<SearchResult> retrieve(String query, int topK);
+    List<SearchResult> retrieve(QueryIntent intent, int topK);
 
     /**
      * 策略类型标识

@@ -42,6 +42,12 @@
             <artifactId>spring-ai-alibaba-starter-dashscope</artifactId>
         </dependency>
 
+        <!-- F42/P2：策略 Tool 化 + Agent 自动路由（ReactAgent / FunctionToolCallback） -->
+        <dependency>
+            <groupId>com.alibaba.cloud.ai</groupId>
+            <artifactId>spring-ai-alibaba-agent-framework</artifactId>
+        </dependency>
+
         <!-- Milvus SDK -->
         <dependency>
             <groupId>io.milvus</groupId>

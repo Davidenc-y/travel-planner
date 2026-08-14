@@ -37,21 +37,15 @@ public class NaiveRagStrategy implements RagStrategy {
     }
 
     @Override
-    public List<SearchResult> retrieve(String query, int topK) {
-        log.info("[NaiveRAG] query={}, topK={}", query, topK);
+    public List<SearchResult> retrieve(QueryIntent intent, int topK) {
+        log.info("[NaiveRAG] query={}, intent={}, topK={}", intent.rawQuery(), intent, topK);
         long start = System.currentTimeMillis();
 
         try {
             var searchRequest = new org.elasticsearch.action.search.SearchRequest(INDEX_NAME);
             var sourceBuilder = new SearchSourceBuilder();
-            // F39：与 Hybrid 保持一致——查询含城市时按 city 限定，避免异地景点混入。
-            var boolQuery = QueryBuilders.boolQuery();
-            boolQuery.must(QueryBuilders.multiMatchQuery(query, "name", "description"));
-            String city = RagCityFilter.detect(query);
-            if (city != null) {
-                boolQuery.filter(QueryBuilders.termQuery("city", city));
-            }
-            sourceBuilder.query(boolQuery);
+            // F40/P1：与 Hybrid 共用 RagFilterBuilder（multiMatch + city/type filter）。
+            sourceBuilder.query(RagFilterBuilder.esQuery(intent, intent.rawQuery()));
             sourceBuilder.size(topK);
             searchRequest.source(sourceBuilder);
 

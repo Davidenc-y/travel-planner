@@ -59,7 +59,7 @@ public class AttractionController {
      */
     public record SearchRequest(String query, String ragType, int topK) {
         public SearchRequest {
-            if (ragType == null) ragType = "hybrid";
+            // F40/P1：ragType 缺省（null）走 auto 启发式路由。
             if (topK <= 0) topK = 10;
         }
     }

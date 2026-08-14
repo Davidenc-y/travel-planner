@@ -51,12 +51,12 @@ public class HybridRagStrategy implements RagStrategy {
     }
 
     @Override
-    public List<SearchResult> retrieve(String query, int topK) {
-        log.info("[HybridRAG] query={}, topK={}", query, topK);
+    public List<SearchResult> retrieve(QueryIntent intent, int topK) {
+        log.info("[HybridRAG] query={}, intent={}, topK={}", intent.rawQuery(), intent, topK);
         long start = System.currentTimeMillis();
 
-        List<RRFusion.ScoredItem> bm25Results = bm25Search(query, topK);
-        List<RRFusion.ScoredItem> knnResults = knnSearch(query, topK);
+        List<RRFusion.ScoredItem> bm25Results = bm25Search(intent, topK);
+        List<RRFusion.ScoredItem> knnResults = knnSearch(intent, topK);
         List<RRFusion.FusionResult> fused = RRFusion.fuse(bm25Results, knnResults, topK);
 
         long cost = System.currentTimeMillis() - start;
@@ -79,19 +79,13 @@ public class HybridRagStrategy implements RagStrategy {
     /**
      * BM25 文本检索（Elasticsearch）
      */
-    private List<RRFusion.ScoredItem> bm25Search(String query, int topK) {
+    private List<RRFusion.ScoredItem> bm25Search(QueryIntent intent, int topK) {
         try {
             var searchRequest = new org.elasticsearch.action.search.SearchRequest(ES_INDEX);
             var sourceBuilder = new SearchSourceBuilder();
-            // F39：查询含城市时严格限定 city（term filter），
-            // 避免"北京文化景点"混入深圳等异地景点（TC-20 实测）。
-            var boolQuery = QueryBuilders.boolQuery();
-            boolQuery.must(QueryBuilders.multiMatchQuery(query, "name", "description"));
-            String city = RagCityFilter.detect(query);
-            if (city != null) {
-                boolQuery.filter(QueryBuilders.termQuery("city", city));
-            }
-            sourceBuilder.query(boolQuery);
+            // F40/P1：统一由 RagFilterBuilder 依据 QueryIntent 构建 ES 查询
+            // （multiMatch + city/type filter），替换 F39 的静态城市检测。
+            sourceBuilder.query(RagFilterBuilder.esQuery(intent, intent.rawQuery()));
             sourceBuilder.size(topK);
             searchRequest.source(sourceBuilder);
 
@@ -119,13 +113,13 @@ public class HybridRagStrategy implements RagStrategy {
     /**
      * KNN 向量检索（Milvus）— 适配 Milvus Java SDK 2.3.4 API
      */
-    private List<RRFusion.ScoredItem> knnSearch(String query, int topK) {
+    private List<RRFusion.ScoredItem> knnSearch(QueryIntent intent, int topK) {
         try {
-            // F39：查询含城市时对 Milvus 侧同样限定 city（expr 过滤），双路一致。
-            String city = RagCityFilter.detect(query);
+            // F40/P1：Milvus 侧过滤由 RagFilterBuilder 依据 QueryIntent 生成 expr。
+            String expr = RagFilterBuilder.milvusExpr(intent);
 
             // 1. 生成查询向量
-            var embeddingResponse = embeddingModel.embedForResponse(List.of(query));
+            var embeddingResponse = embeddingModel.embedForResponse(List.of(intent.rawQuery()));
             float[] queryVector = embeddingResponse.getResults().get(0).getOutput();
 
             // F35：Milvus SDK 要求 SearchParam 的 float 向量为 List<Float>（同 F31 插入侧装箱）。
@@ -145,8 +139,8 @@ public class HybridRagStrategy implements RagStrategy {
                     .withTopK(topK)
                     .withMetricType(MetricType.L2)
                     .withOutFields(List.of("name", "description", "city", "type", "tags", "rating", "ticketPrice", "createdAt"));
-            if (city != null) {
-                searchBuilder.withExpr("city == \"" + city + "\"");
+            if (expr != null) {
+                searchBuilder.withExpr(expr);
             }
             SearchParam searchParam = searchBuilder.build();
 

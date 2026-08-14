@@ -46,17 +46,17 @@ public class SelfRagStrategy implements RagStrategy {
     }
 
     @Override
-    public List<SearchResult> retrieve(String query, int topK) {
-        log.info("[SelfRAG] query={}", query);
+    public List<SearchResult> retrieve(QueryIntent intent, int topK) {
+        log.info("[SelfRAG] query={}, intent={}", intent.rawQuery(), intent);
 
         // Step 1: 判断是否需要检索
-        if (!shouldRetrieve(query)) {
+        if (!shouldRetrieve(intent.rawQuery())) {
             log.info("[SelfRAG] 模型判定无需检索，返回空列表");
             return List.of();
         }
 
         // Step 2: 执行混合检索
-        List<SearchResult> results = hybridStrategy.retrieve(query, topK);
+        List<SearchResult> results = hybridStrategy.retrieve(intent, topK);
 
         // Step 3: 过滤低质量结果
         List<SearchResult> filtered = results.stream()

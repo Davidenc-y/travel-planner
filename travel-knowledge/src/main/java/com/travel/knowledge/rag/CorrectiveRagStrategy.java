@@ -49,11 +49,11 @@ public class CorrectiveRagStrategy implements RagStrategy {
     }
 
     @Override
-    public List<SearchResult> retrieve(String query, int topK) {
-        log.info("[CorrectiveRAG] query={}", query);
+    public List<SearchResult> retrieve(QueryIntent intent, int topK) {
+        log.info("[CorrectiveRAG] query={}, intent={}", intent.rawQuery(), intent);
 
         // Step 1: 原始 query 检索
-        List<SearchResult> initialResults = hybridStrategy.retrieve(query, topK);
+        List<SearchResult> initialResults = hybridStrategy.retrieve(intent, topK);
         log.info("[CorrectiveRAG] 初始检索 {} 条", initialResults.size());
 
         // Step 2: 检查质量
@@ -64,11 +64,13 @@ public class CorrectiveRagStrategy implements RagStrategy {
         }
 
         // Step 3: LLM 重写 query
-        String reformulatedQuery = reformulateQuery(query, initialResults);
-        log.info("[CorrectiveRAG] 重写 query: {} → {}", query, reformulatedQuery);
+        String reformulatedQuery = reformulateQuery(intent.rawQuery(), initialResults);
+        log.info("[CorrectiveRAG] 重写 query: {} → {}", intent.rawQuery(), reformulatedQuery);
+        // F40/P1：重写后保留原意图的 city/type 过滤，仅替换查询文本。
+        QueryIntent correctedIntent = intent.withRawQuery(reformulatedQuery);
 
         // Step 4: 重写后检索
-        List<SearchResult> correctedResults = hybridStrategy.retrieve(reformulatedQuery, topK);
+        List<SearchResult> correctedResults = hybridStrategy.retrieve(correctedIntent, topK);
         log.info("[CorrectiveRAG] 重写后检索 {} 条", correctedResults.size());
 
         // Step 5: 合并去重

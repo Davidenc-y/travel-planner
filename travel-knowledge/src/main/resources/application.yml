@@ -69,6 +69,20 @@ travel:
   # RAG 默认策略
   rag:
     default-type: hybrid
+    # P3：auto 复杂查询首选路由（supervisor / agent / heuristic），用于 A/B 对比
+    auto-router: supervisor
+    # P3：查询理解配置（LLM 抽取开关 / 意图缓存 / 城市与类型清单）
+    query-understanding:
+      enabled: true
+      cache-size: 256
+      cities: 北京,上海,广州,深圳,杭州,成都,西安,厦门,南京,天津,重庆,武汉,长沙,苏州,桂林,青岛,大连,三亚
+      type-keywords:
+        CULTURE: [文化, 博物馆, 古迹, 历史]
+        NATURE: [自然, 山水, 公园, 湖泊]
+        FOOD: [美食, 小吃, 餐厅]
+        SHOPPING: [购物, 逛街, 商场]
+        FAMILY: [亲子, 家庭, 乐园, 儿童]
+        LEISURE: [休闲, 度假, 放松]
   # ETL 配置
   etl:
     batch-size: 100

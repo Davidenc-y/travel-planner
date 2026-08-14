@@ -191,6 +191,9 @@ public class AttractionEtlService {
                 Collections.singletonList(a.getRating() != null ? a.getRating().floatValue() : 0.0f)));
         fields.add(new InsertParam.Field("ticketPrice",
                 Collections.singletonList(a.getTicketPrice() != null ? a.getTicketPrice().floatValue() : 0.0f)));
+        // F44/P3：free_entry 入 Milvus（INT64），供检索侧 freeOnly 过滤。
+        fields.add(new InsertParam.Field("free_entry",
+                Collections.singletonList(a.getFreeEntry() != null ? a.getFreeEntry().longValue() : 0L)));
         fields.add(new InsertParam.Field("createdAt",
                 Collections.singletonList(a.getCreatedAt() != null ? a.getCreatedAt().toString() : "")));
 
@@ -216,6 +219,8 @@ public class AttractionEtlService {
         doc.put("tags", JsonUtils.parseList(a.getTags(), String.class));
         doc.put("rating", a.getRating() != null ? a.getRating().doubleValue() : 0.0);
         doc.put("ticketPrice", a.getTicketPrice() != null ? a.getTicketPrice().doubleValue() : 0.0);
+        // F44/P3：free_entry 入 ES（integer），供检索侧 freeOnly 过滤。
+        doc.put("free_entry", a.getFreeEntry() != null ? a.getFreeEntry() : 0);
         doc.put("createdAt", a.getCreatedAt() != null ? a.getCreatedAt().toString() : "");
 
         IndexRequest request = new IndexRequest(ES_INDEX)
