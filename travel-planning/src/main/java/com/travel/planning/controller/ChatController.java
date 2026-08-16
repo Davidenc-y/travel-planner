@@ -5,6 +5,7 @@ import com.travel.common.entity.ChatMessage;
 import com.travel.common.entity.ChatSession;
 import com.travel.common.result.R;
 import com.travel.planning.service.ChatService;
+import com.travel.planning.util.AuthUtils;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.*;
@@ -30,18 +31,20 @@ public class ChatController {
      * 创建会话
      */
     @PostMapping("/sessions")
-    public R<String> createSession(@RequestBody Map<String, Object> body) {
-        Long userId = body.get("userId") != null ? Long.valueOf(body.get("userId").toString()) : 0L;
+    public R<String> createSession(@RequestBody Map<String, Object> body,
+                                   @RequestHeader(value = "X-User-Id", required = false) Long userId) {
+        Long bodyUserId = body.get("userId") != null ? Long.valueOf(body.get("userId").toString()) : null;
         String title = body.get("title") != null ? body.get("title").toString() : null;
-        return R.ok(chatService.createSession(userId, title));
+        // F68/B3-2：身份来源优先 accessToken（UserContextHolder），其次 body/头兜底
+        return R.ok(chatService.createSession(AuthUtils.resolveUserId(bodyUserId != null ? bodyUserId : userId), title));
     }
 
     /**
      * 获取用户会话列表
      */
     @GetMapping("/sessions")
-    public R<List<ChatSession>> listSessions(@RequestParam Long userId) {
-        return R.ok(chatService.listSessions(userId));
+    public R<List<ChatSession>> listSessions(@RequestParam(required = false) Long userId) {
+        return R.ok(chatService.listSessions(AuthUtils.resolveUserId(userId)));
     }
 
     /**
@@ -60,6 +63,6 @@ public class ChatController {
                                            @RequestBody Map<String, String> body,
                                            @RequestHeader(value = "X-User-Id", required = false) Long userId) {
         String message = body.get("message");
-        return R.ok(chatService.sendMessage(sessionId, message, userId != null ? userId : 0L));
+        return R.ok(chatService.sendMessage(sessionId, message, AuthUtils.resolveUserId(userId)));
     }
 }

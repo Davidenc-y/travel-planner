@@ -11,6 +11,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.Date;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.UUID;
 
 /**
  * JWT 工具类
@@ -69,6 +70,9 @@ public class JwtUtil {
         return Jwts.builder()
                 .claims(claims)
                 .subject(username)
+                // F84：增加唯一 jti，保证同一秒内多次签发（登录/刷新）的 token 互不相同，
+                // 满足 TC-02c "刷新返回新 accessToken" 断言，并提升 token 唯一性与可撤销粒度。
+                .id(UUID.randomUUID().toString())
                 .issuedAt(new Date())
                 .expiration(new Date(System.currentTimeMillis() + exp))
                 .signWith(key)

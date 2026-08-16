@@ -43,4 +43,7 @@ public class ItineraryGenerateRequestDTO {
     /** 幂等键 UUID（必填） */
     @NotBlank(message = "clientRequestId 不能为空")
     private String clientRequestId;
+
+    /** Phase C/F78：关联会话 ID（可选；存在时行程知识写入该会话的 session_context） */
+    private String sessionId;
 }

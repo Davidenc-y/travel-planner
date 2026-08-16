@@ -16,6 +16,7 @@ import com.travel.planning.agent.attraction.AttractionFilterAgent;
 import com.travel.planning.agent.budget.BudgetEstimationAgent;
 import com.travel.planning.agent.preference.PreferenceAnalysisAgent;
 import com.travel.planning.agent.route.RouteArrangementAgent;
+import com.travel.planning.memory.knowledge.KnowledgeRetrievalService;
 import com.fasterxml.jackson.databind.JsonNode;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.messages.AssistantMessage;
@@ -61,16 +62,19 @@ public class TravelWorkflowBuilder {
     private final AttractionFilterAgent attrAgent;
     private final RouteArrangementAgent routeAgent;
     private final BudgetEstimationAgent budgetAgent;
+    private final KnowledgeRetrievalService knowledgeRetrievalService;
 
     public TravelWorkflowBuilder(
             PreferenceAnalysisAgent prefAgent,
             AttractionFilterAgent attrAgent,
             RouteArrangementAgent routeAgent,
-            BudgetEstimationAgent budgetAgent) {
+            BudgetEstimationAgent budgetAgent,
+            KnowledgeRetrievalService knowledgeRetrievalService) {
         this.prefAgent = prefAgent;
         this.attrAgent = attrAgent;
         this.routeAgent = routeAgent;
         this.budgetAgent = budgetAgent;
+        this.knowledgeRetrievalService = knowledgeRetrievalService;
     }
 
     public CompiledGraph buildWorkflow() throws Exception {
@@ -87,6 +91,7 @@ public class TravelWorkflowBuilder {
             map.put("mindmap", new ReplaceStrategy());
             map.put("retryCount", new ReplaceStrategy());
             map.put("userId", new ReplaceStrategy());
+            map.put("retrievalQuery", new ReplaceStrategy());
             return map;
         };
 
@@ -96,6 +101,7 @@ public class TravelWorkflowBuilder {
         //   includeContents=true:  传递父图 messages 给子 Agent（对话历史携带上下文）
         //   returnReasoningContents=false: 仅返回最终输出，不返回推理过程
         workflow.addNode("user_input", AsyncNodeAction.node_async(new UserInputNode()));
+        workflow.addNode("rag_retrieval", AsyncNodeAction.node_async(new RagRetrievalNode()));
         workflow.addNode("preference_analysis", prefAgent.getAgent().asNode(true, false));
         workflow.addNode("attraction_filter", attrAgent.getAgent().asNode(true, false));
         workflow.addNode("route_arrangement", routeAgent.getAgent().asNode(true, false));
@@ -106,7 +112,8 @@ public class TravelWorkflowBuilder {
 
         // 边定义
         workflow.addEdge(START, "user_input");
-        workflow.addEdge("user_input", "preference_analysis");
+        workflow.addEdge("user_input", "rag_retrieval");
+        workflow.addEdge("rag_retrieval", "preference_analysis");
         workflow.addEdge("preference_analysis", "attraction_filter");
         workflow.addEdge("attraction_filter", "route_arrangement");
         workflow.addEdge("route_arrangement", "budget_estimation");
@@ -136,7 +143,7 @@ public class TravelWorkflowBuilder {
         workflow.addEdge("itinerary_optimize", "mindmap_output");
         workflow.addEdge("mindmap_output", END);
 
-        log.info("TravelWorkflow 构建完成: 8 节点（agent.asNode 标准用法 + budget_retry 重试计数）");
+        log.info("TravelWorkflow 构建完成: 9 节点（agent.asNode 标准用法 + rag_retrieval 预检索 + budget_retry 重试计数）");
         // recursionLimit=20：正常路径（含 2 次预算重试）约 14 次节点执行，
         // 20 次为硬性循环上限，作为防死循环兜底（默认值 100 在 LLM 调用下耗时过长）
         return workflow.compile(CompileConfig.builder().recursionLimit(20).build());
@@ -267,6 +274,29 @@ public class TravelWorkflowBuilder {
             // messages 放 UserMessage，不放 String
             result.put("messages", new UserMessage(userInput));
             result.put("retryCount", 0);
+            return result;
+        }
+    }
+
+    /**
+     * F63：知识库预检索节点 —— 确定性调用 knowledge RAG，把候选景点注入 messages，
+     * 保证行程链（TC-05）无论 LLM 是否调用工具都消费知识库。
+     */
+    class RagRetrievalNode implements NodeAction {
+        @Override
+        public Map<String, Object> apply(OverAllState state) throws Exception {
+            // B3-6/F73：优先使用结构化 retrievalQuery（不含画像前缀），避免检索意图稀释
+            // 与请求头超限；缺省回退 userInput。
+            String retrievalQuery = state.value("retrievalQuery", "").toString();
+            if (retrievalQuery == null || retrievalQuery.isBlank()) {
+                retrievalQuery = state.value("userInput", "").toString();
+            }
+            String candidates = knowledgeRetrievalService.retrieveCandidates(retrievalQuery, 5);
+            log.info("[Node:rag_retrieval] 预检索完成, 候选长度={}", candidates.length());
+            Map<String, Object> result = new HashMap<>();
+            if (candidates != null && !candidates.isBlank() && !"[]".equals(candidates)) {
+                result.put("messages", new UserMessage("【知识库检索候选景点】\n" + candidates));
+            }
             return result;
         }
     }

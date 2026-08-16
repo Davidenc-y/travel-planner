@@ -2,6 +2,7 @@ package com.travel.planning.agent.preference;
 
 import com.alibaba.cloud.ai.graph.agent.ReactAgent;
 import com.travel.planning.agent.supervisor.TokenUsageInterceptor;
+import com.travel.planning.memory.longterm.ProfileToolProvider;
 import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.model.ChatModel;
@@ -32,12 +33,15 @@ public class PreferenceAnalysisAgent {
 
     private final ChatModel lightModel;
     private final TokenUsageInterceptor tokenUsageInterceptor;
+    private final ProfileToolProvider profileToolProvider;
     private ReactAgent agent;
 
     public PreferenceAnalysisAgent(@Qualifier("lightModel") ChatModel lightModel,
-                                   TokenUsageInterceptor tokenUsageInterceptor) {
+                                   TokenUsageInterceptor tokenUsageInterceptor,
+                                   ProfileToolProvider profileToolProvider) {
         this.lightModel = lightModel;
         this.tokenUsageInterceptor = tokenUsageInterceptor;
+        this.profileToolProvider = profileToolProvider;
     }
 
     @PostConstruct
@@ -58,12 +62,16 @@ public class PreferenceAnalysisAgent {
                             5. party: 出行人员（独行/情侣/家庭/朋友，如不确定填 null）
                             6. travelStyle: 出行风格（ECONOMY/COMFORT/LUXURY，如不确定填 COMFORT）
                             7. specialNeeds: 特殊需求数组（如免门票/无障碍/宠物友好，无则空数组）
+                            8. 可调用 get_user_profile 获取当前用户画像（常去目的地/兴趣/预算/风格/历史行程），作为抽取的辅助依据
+                            9. 当用户明确表达新的偏好（如"记住/我喜欢/设为/改为"）时，必须先调用 save_user_profile 保存后再输出 JSON，未提及字段保持 null
 
                             必须输出 JSON 格式，不要输出其他内容。
                             输出示例（请替换为实际值）：
                             destination=北京, days=3, budget=5000, interests=文化+美食, party=家庭, travelStyle=COMFORT, specialNeeds=空
                     """)
                     .outputKey("preference")
+                    // F64/B2：画像 Tool 化，Agent 可主动读写长期画像
+                    .tools(profileToolProvider.toolCallbacks())
                     // F27：注册 token 用量采集拦截器
                     .interceptors(tokenUsageInterceptor)
                     .build();

@@ -11,10 +11,13 @@ import com.travel.planning.agent.budget.BudgetEstimationAgent;
 import com.travel.planning.agent.preference.PreferenceAnalysisAgent;
 import com.travel.planning.agent.route.RouteArrangementAgent;
 import com.travel.planning.config.AiModelConfig;
+import com.travel.planning.memory.longterm.ProfileToolProvider;
 import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.model.ChatModel;
+import org.springframework.ai.chat.model.ChatResponse;
+import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
@@ -122,6 +125,11 @@ public class TravelSupervisorAgent {
 
                             正常流程为顺序执行 preference_analysis → attraction_filter → route_arrangement → budget_estimation。
                             若预算估算超出用户预算 1.2 倍,回到 attraction_filter 重新筛选(最多重试 2 次)。
+                            ## 硬性路由规则（F82）
+                            行程规划、景点查询、预算/路线/住宿类请求，必须输出子 Agent 的 JSON 数组
+                            （先 preference_analysis，如 ["preference_analysis","attraction_filter",...]）；
+                            严禁直接输出 FINISH 或空数组。仅当请求为闲聊、画像查询、功能咨询等
+                            非规划类问题时才允许输出 FINISH。
                             合法元素仅限: preference_analysis、attraction_filter、route_arrangement、budget_estimation、FINISH。
                             """)
                     .instruction("用户的请求是: {input}")
@@ -170,17 +178,19 @@ public class TravelSupervisorAgent {
      * @return 行程规划结果（JSON 字符串，需由调用方解析）
      */
     public String executePlanning(String userInput) throws Exception {
-        return executePlanningWithUsage(userInput).answer();
+        return executePlanningWithUsage(userInput, null).answer();
     }
 
     /**
      * F27：执行行程规划并返回回答与真实 token 消耗。
      *
      * <p>token 为本次 SupervisorAgent 全部 LLM 调用（路由 + 4 个子 Agent）的
-     * {@code totalTokens} 之和，经 {@link TokenUsageInterceptor} 按请求 ID 采集。</p>
+     * {@code totalTokens} 之和，经 {@link TokenUsageInterceptor} 按请求 ID 采集。
+     * F64/B2：userId 写入 RunnableConfig.metadata，供画像工具（get_user_profile /
+     * save_user_profile）从 ToolContext 读取，不依赖 LLM 传参。</p>
      */
-    public PlanningResult executePlanningWithUsage(String userInput) throws Exception {
-        log.info("开始执行行程规划: input={}", userInput);
+    public PlanningResult executePlanningWithUsage(String userInput, Long userId) throws Exception {
+        log.info("开始执行行程规划: input={}, userId={}", userInput, userId);
         long start = System.currentTimeMillis();
         CompletableFuture<Optional<OverAllState>> future = null;
         String requestId = UUID.randomUUID().toString();
@@ -190,9 +200,18 @@ public class TravelSupervisorAgent {
             // 而不是 supervisor.getMainAgent().call()——那只是路由 Agent，
             // 只会返回下一步子 Agent 名单（如 ["preference_analysis"]）。
             // graph.invoke 为阻塞调用且无超时参数，用 CompletableFuture 提供硬性时间边界。
-            RunnableConfig config = RunnableConfig.builder()
-                    .addMetadata(TokenUsageInterceptor.REQUEST_ID_KEY, requestId)
-                    .build();
+            // F51：每次调用使用唯一 threadId，父图 checkpoint 按调用隔离。
+            // 否则父图默认 MemorySaver + 默认 threadId 会跨调用复用子 Agent 输出
+            // （TC-10 第三次只跑 preference_analysis、直接沿用上一轮 attractions/routePlan/
+            // budgetEstimate，回答陈旧且与上轮完全相同）。多轮上下文由 Phase A 显式历史注入承担。
+            RunnableConfig.Builder configBuilder = RunnableConfig.builder()
+                    .threadId("rag_" + requestId)
+                    .addMetadata(TokenUsageInterceptor.REQUEST_ID_KEY, requestId);
+            // F64/B2：聊天链画像工具 userId 透传（metadata → ToolContext）
+            if (userId != null) {
+                configBuilder.addMetadata(ProfileToolProvider.USER_ID_METADATA_KEY, userId);
+            }
+            RunnableConfig config = configBuilder.build();
             future = CompletableFuture.supplyAsync(
                     () -> invokeSupervisorSafely(supervisor, userInput, config), SUPERVISOR_EXECUTOR);
             OverAllState finalState = future.orTimeout(MAX_EXECUTION_SECONDS, TimeUnit.SECONDS)
@@ -200,6 +219,60 @@ public class TravelSupervisorAgent {
                     .orElseThrow(() -> new IllegalStateException("Supervisor 未返回最终状态"));
             String result = buildFinalResponse(finalState);
             long totalTokens = tokenUsageInterceptor.endAndGet(requestId);
+            // F77/B4-2：路由截断/非 JSON 防护——四键全空且路由 FINISH、且疑似规划类请求时，
+            // 用新 requestId 重试一次整图（F63 "playplay" 类问题：解析失败被框架当 FINISH，
+            // 预算/规划被跳过）；仍空才走 F66 直答兜底。
+            if (!hasSectionOutput(finalState) && looksLikePlanningRequest(userInput)) {
+                String retryRequestId = UUID.randomUUID().toString();
+                tokenUsageInterceptor.begin(retryRequestId);
+                RunnableConfig.Builder retryBuilder = RunnableConfig.builder()
+                        .threadId("rag_" + retryRequestId)
+                        .addMetadata(TokenUsageInterceptor.REQUEST_ID_KEY, retryRequestId);
+                if (userId != null) {
+                    retryBuilder.addMetadata(ProfileToolProvider.USER_ID_METADATA_KEY, userId);
+                }
+                try {
+                    CompletableFuture<Optional<OverAllState>> retryFuture = CompletableFuture.supplyAsync(
+                            () -> invokeSupervisorSafely(supervisor, userInput, retryBuilder.build()),
+                            SUPERVISOR_EXECUTOR);
+                    Optional<OverAllState> retried =
+                            retryFuture.orTimeout(MAX_EXECUTION_SECONDS, TimeUnit.SECONDS).get();
+                    if (retried.isPresent() && hasSectionOutput(retried.get())) {
+                        finalState = retried.get();
+                        result = buildFinalResponse(finalState);
+                        totalTokens += tokenUsageInterceptor.endAndGet(retryRequestId);
+                        log.info("路由重试成功: 重新生成规划, resultLength={}, tokens累计={}",
+                                result != null ? result.length() : 0, totalTokens);
+                    } else {
+                        tokenUsageInterceptor.endAndGet(retryRequestId);
+                        log.warn("路由重试仍未产生子 Agent 输出，保留原结果");
+                    }
+                } catch (Exception e) {
+                    tokenUsageInterceptor.endAndGet(retryRequestId);
+                    log.warn("路由重试失败，保留原结果: {}", e.getMessage());
+                }
+            }
+            // F66：非规划类问题（画像查询/闲聊等）路由直接 FINISH 且无子 Agent 输出时，
+            // 用主模型基于组合输入直答，避免返回兜底"抱歉，未能生成行程规划"。
+            // （20:18 实测"我的旅行画像里有什么？"→ supervisor_next=[FINISH]，preference/attractions
+            //  /routePlan/budgetEstimate 全为 0，B2 画像问答不可达。）
+            if (!hasSectionOutput(finalState)) {
+                try {
+                    ChatResponse direct = chatModel.call(new Prompt(userInput));
+                    String text = direct.getResult() != null && direct.getResult().getOutput() != null
+                            ? direct.getResult().getOutput().getText() : null;
+                    if (text != null && !text.isBlank()) {
+                        result = text.trim();
+                        if (direct.getMetadata() != null && direct.getMetadata().getUsage() != null) {
+                            totalTokens += direct.getMetadata().getUsage().getTotalTokens();
+                        }
+                        log.info("非规划类问题直答兜底: inputLength={}, answerLength={}",
+                                userInput.length(), result.length());
+                    }
+                } catch (Exception e) {
+                    log.warn("非规划类问题直答兜底失败，保留原结果: {}", e.getMessage());
+                }
+            }
             long cost = System.currentTimeMillis() - start;
             log.info("行程规划完成, 耗时={}ms, 结果长度={}, supervisor_next={}, "
                             + "输出: preference={}, attractions={}, routePlan={}, budgetEstimate={}, tokens={}",
@@ -294,6 +367,10 @@ public class TravelSupervisorAgent {
         if (value instanceof Optional<?> opt) return toText(opt.orElse(null));
         if (value instanceof String s) return s;
         if (value instanceof AssistantMessage am) return am.getText();
+        // F84：框架内部 GraphResponse 对象（如某轮子 Agent 输出异常时被写入 state）
+        // toString 为 "com.alibaba.cloud.ai.graph.GraphResponse@hex"，泄漏进用户回答。
+        // 该对象无可读文本，直接置空跳过对应段落。
+        if (value instanceof com.alibaba.cloud.ai.graph.GraphResponse) return "";
         return value.toString();
     }
 
@@ -344,6 +421,29 @@ public class TravelSupervisorAgent {
     private static int textLen(OverAllState state, String key) {
         String t = toText(state.value(key));
         return t != null ? t.length() : 0;
+    }
+
+    /** F66：四个子 Agent 输出键是否至少有一个非空（判断是否真正走了规划流程） */
+    private static boolean hasSectionOutput(OverAllState state) {
+        return !toText(state.value("preference")).isBlank()
+                || !toText(state.value("attractions")).isBlank()
+                || !toText(state.value("routePlan")).isBlank()
+                || !toText(state.value("budgetEstimate")).isBlank();
+    }
+
+    /** F77/B4-2：疑似规划类请求（避免对画像查询/闲聊等非规划问题多花一次整图调用） */
+    private static boolean looksLikePlanningRequest(String userInput) {
+        if (userInput == null || userInput.isBlank()) {
+            return false;
+        }
+        String q = userInput;
+        int idx = q.lastIndexOf("【当前问题】");
+        if (idx >= 0) {
+            q = q.substring(idx);
+        }
+        return q.contains("规划") || q.contains("行程") || q.contains("推荐")
+                || q.contains("景点") || q.contains("日游") || q.contains("预算")
+                || q.contains("攻略") || q.contains("哪里");
     }
 
     /**

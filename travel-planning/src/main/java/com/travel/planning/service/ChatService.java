@@ -6,14 +6,20 @@ import com.travel.common.entity.ChatSession;
 import com.travel.common.enums.ChatRole;
 import com.travel.common.exception.BusinessException;
 import com.travel.planning.agent.supervisor.TravelSupervisorAgent;
-import com.travel.planning.repository.ChatMessageMapper;
-import com.travel.planning.repository.ChatSessionMapper;
+import com.travel.planning.memory.longterm.ProfileContextAssembler;
+import com.travel.planning.memory.longterm.ProfilePort;
+import com.travel.planning.memory.longterm.PreferenceSaveService;
+import com.travel.planning.memory.knowledge.KnowledgeRetrievalService;
+import com.travel.planning.memory.knowledge.SessionContextChunker;
+import com.travel.planning.memory.knowledge.SessionKnowledgeWriter;
+import com.travel.planning.memory.sessionstore.SessionStorePort;
+import com.travel.planning.memory.shortterm.ShortTermMemoryProperties;
+import com.travel.planning.memory.shortterm.SessionMemoryPort;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
-import java.util.UUID;
 
 /**
  * 聊天服务
@@ -26,56 +32,145 @@ import java.util.UUID;
 @RequiredArgsConstructor
 public class ChatService {
 
-    private final ChatSessionMapper sessionMapper;
-    private final ChatMessageMapper messageMapper;
+    // F67/B3-1：会话/消息持久化收口到 SessionStorePort，业务不再直连 Mapper
+    private final SessionStorePort sessionStorePort;
     private final TravelSupervisorAgent supervisorAgent;
+    private final SessionMemoryPort sessionMemoryPort;
+    private final ProfilePort profilePort;
+    private final ProfileContextAssembler profileContextAssembler;
+    private final ShortTermMemoryProperties memoryProps;
+    private final KnowledgeRetrievalService knowledgeRetrievalService;
+    // F71：偏好陈述消息的确定性保存（不依赖 Agent 工具调用）
+    private final PreferenceSaveService preferenceSaveService;
+    // Phase C/F78：会话级知识切片写入与检索注入
+    private final SessionContextChunker sessionContextChunker;
+    private final SessionKnowledgeWriter sessionKnowledgeWriter;
 
     /**
      * 创建会话
      */
     public String createSession(Long userId, String title) {
-        String sessionId = UUID.randomUUID().toString();
-        ChatSession session = new ChatSession();
-        session.setSessionId(sessionId);
-        session.setUserId(userId);
-        session.setTitle(title != null ? title : "旅游规划对话");
-        session.setStatus("ACTIVE");
-        sessionMapper.insert(session);
-        log.info("创建聊天会话: sessionId={}, userId={}", sessionId, userId);
-        return sessionId;
+        return sessionStorePort.createSession(userId, title);
     }
 
     /**
      * 获取会话历史
      */
     public List<ChatMessage> getHistory(String sessionId) {
-        return messageMapper.findBySessionId(sessionId);
+        return sessionStorePort.listMessages(sessionId);
     }
 
     /**
      * 发送消息并获取响应
      */
     public ChatResponseDTO sendMessage(String sessionId, String message, Long userId) {
+        // F52：防御脏 userId（兜底 0 会导致 user_id=0 画像/会话）。
+        if (userId == null || userId <= 0) {
+            throw new BusinessException(40101, "用户未登录");
+        }
         // 1. 校验会话
-        ChatSession session = sessionMapper.findBySessionId(sessionId);
+        ChatSession session = sessionStorePort.findBySessionId(sessionId);
         if (session == null) {
             throw new BusinessException(40404, "会话不存在: " + sessionId);
         }
 
         // 2. 保存用户消息
-        ChatMessage userMsg = new ChatMessage();
-        userMsg.setSessionId(sessionId);
-        userMsg.setRole(ChatRole.USER.name().toLowerCase());
-        userMsg.setContent(message);
         // F27：user 消息 tokens = 输入估算值（服务端无 tokenizer，启发式估算，见方法注释）
-        userMsg.setTokens(estimateInputTokens(message));
-        messageMapper.insert(userMsg);
+        sessionStorePort.appendMessage(sessionId, ChatRole.USER, message, estimateInputTokens(message));
+        // F71：偏好陈述消息（"记住我喜欢爬山，预算8000元"）确定性保存到画像，
+        // 保证用户明确表达的偏好不因 LLM 跳过工具而丢失（合并语义见 ProfilePort.update）。
+        preferenceSaveService.saveIfPreferenceStatement(userId, message);
+        // Phase C/F78（C1）：约束/反馈类消息立即异步写入会话知识（幂等，失败不影响主流程）
+        sessionKnowledgeWriter.writeAsync(sessionId,
+                sessionContextChunker.chunkUserMessage(sessionId, message));
 
-        // 3. 调用 SupervisorAgent
+        // 3. F50/Phase A + F55/B1：组合 画像 + (摘要+滑动窗口 | 原文历史) + 当前问题
+        //    （原始消息存储不变；组合仅用于本次推理输入）。
+        String profileContext = profileContextAssembler.assemble(profilePort.getOrCreate(userId));
+        String rawHistory = sessionMemoryPort.composeHistoryContext(sessionId, memoryProps.getMaxTurns());
+        int turns = sessionMemoryPort.countUserTurns(sessionId);
+        // F57：以全量汇总 token 作为触发依据（截断前统计），配合轮数触发。
+        int totalHistoryTokens = sessionMemoryPort.totalHistoryTokens(sessionId);
+        String historySection;
+        boolean summaryUsed = false;
+        boolean summaryTriggered = false;
+        // F57：触发条件 = 轮数 ≥ summaryMinTurns 或 全量汇总 token ≥ 预算×ratio。
+        if (memoryProps.isEnabled() && !rawHistory.isBlank()
+                && (turns >= memoryProps.getSummaryMinTurns()
+                    || totalHistoryTokens >= (int) (memoryProps.getHistoryMaxTokens() * memoryProps.getSummaryThresholdRatio()))) {
+            summaryTriggered = true;
+            // F60：触发即异步滚动——doSummarize 内部按 summaryRefreshTurns 决定
+            // 真正重生成或仅续期 TTL；否则摘要生成一次后永不刷新（死代码缺陷）。
+            sessionMemoryPort.summarizeAsync(sessionId);
+            String summary = sessionMemoryPort.getSummaryOrEmpty(sessionId);
+            if (summary.isBlank()) {
+                // 摘要尚未生成（首轮触发）：本轮仍用原文窗口。
+                historySection = rawHistory;
+            } else {
+                StringBuilder sb = new StringBuilder("【会话摘要】\n").append(summary);
+                String recent = sessionMemoryPort.composeRecentWindow(sessionId, memoryProps.getRecentWindowTurns());
+                if (!recent.isBlank()) {
+                    sb.append("\n\n【最近对话】\n").append(recent);
+                }
+                historySection = sb.toString();
+                summaryUsed = true;
+            }
+        } else {
+            historySection = rawHistory;
+        }
+        // F63：确定性预检索注入——把知识库候选景点放入上下文，确保聊天链消费知识库。
+        // F66：非检索意图（画像/偏好/闲聊类）跳过预检索，避免无关候选污染上下文
+        // （20:18 实测"我的旅行画像里有什么？"被注入 5 条无关景点候选）。
+        String candidates = needsKnowledgeRetrieval(message)
+                ? knowledgeRetrievalService.retrieveCandidates(message, 5) : "[]";
+        // Phase C/F78（C3）：按需检索本会话历史知识并注入（约束/反馈/行程块优先）
+        // F83：topK 放大到 8，避免类型加分把行程切片挤出注入（E4 召回问题）
+        String sessionContext = sessionKnowledgeWriter.search(sessionId, message, 8);
+        String composed = composeInput(profileContext, historySection, sessionContext, candidates, message);
+        int inputTokens = sessionMemoryPort.estimateTokens(composed);
+
+        // F58/B1.2：注入总预算兜底（超限先去掉最近窗口，仍超则压缩摘要）。
+        if (inputTokens > memoryProps.getInputMaxTokens()) {
+            if (summaryUsed) {
+                String summaryOnly = sessionMemoryPort.getSummaryOrEmpty(sessionId);
+                historySection = "【会话摘要】\n" + summaryOnly;
+                composed = composeInput(profileContext, historySection, sessionContext, candidates, message);
+                inputTokens = sessionMemoryPort.estimateTokens(composed);
+            }
+            if (inputTokens > memoryProps.getInputMaxTokens() && summaryUsed) {
+                int reserve = sessionMemoryPort.estimateTokens(profileContext)
+                        + sessionMemoryPort.estimateTokens("【当前问题】\n" + message) + 8;
+                String summaryOnly = sessionMemoryPort.getSummaryOrEmpty(sessionId);
+                String cut = sessionMemoryPort.truncateByTokens(
+                        summaryOnly, Math.max(100, memoryProps.getInputMaxTokens() - reserve));
+                historySection = "【会话摘要】\n" + cut;
+                composed = composeInput(profileContext, historySection, sessionContext, candidates, message);
+                inputTokens = sessionMemoryPort.estimateTokens(composed);
+                log.warn("[ChatService] 注入总预算超限，已压缩摘要: tokens={}", inputTokens);
+            } else if (inputTokens > memoryProps.getInputMaxTokens()) {
+                log.warn("[ChatService] 注入总预算超限（无摘要可压缩）: tokens={}", inputTokens);
+            }
+            if (inputTokens > memoryProps.getInputMaxTokens()) {
+                // B3-4/F72：注入总预算仍超限时，收紧画像段（默认 800 → 400 tokens），
+                // 补齐 F65 4.3 指出的"兜底不覆盖画像段"盲区。
+                profileContext = profileContextAssembler.assemble(
+                        profilePort.getOrCreate(userId), memoryProps.getProfileMaxTokens() / 2);
+                composed = composeInput(profileContext, historySection, sessionContext, candidates, message);
+                inputTokens = sessionMemoryPort.estimateTokens(composed);
+                log.warn("[ChatService] 注入总预算超限，已收紧画像段: tokens={}", inputTokens);
+            }
+        }
+
+        log.info("聊天输入组装完成: 总长度={}, 含画像={}, 含历史={}, 含摘要={}, 摘要触发={}, 历史轮数={}, 全量历史token={}, 注入token={}, 含知识库候选={}",
+                composed.length(), !profileContext.isBlank(), !historySection.isBlank(),
+                summaryUsed, summaryTriggered, turns, totalHistoryTokens, inputTokens,
+                !"[]".equals(candidates));
+
         String response;
         long aiTokens = 0;
         try {
-            TravelSupervisorAgent.PlanningResult result = supervisorAgent.executePlanningWithUsage(message);
+            // F64/B2：把 userId 传入 Supervisor，写入 RunnableConfig.metadata 供画像工具读取
+            TravelSupervisorAgent.PlanningResult result = supervisorAgent.executePlanningWithUsage(composed, userId);
             response = result.answer();
             // F27：assistant 消息 tokens = 本次全部 LLM 调用的真实 totalTokens 之和
             aiTokens = result.totalTokens();
@@ -85,18 +180,36 @@ public class ChatService {
         }
 
         // 4. 保存 AI 响应
-        ChatMessage aiMsg = new ChatMessage();
-        aiMsg.setSessionId(sessionId);
-        aiMsg.setRole(ChatRole.ASSISTANT.name().toLowerCase());
-        aiMsg.setContent(response);
-        aiMsg.setTokens((int) aiTokens);
-        messageMapper.insert(aiMsg);
+        sessionStorePort.appendMessage(sessionId, ChatRole.ASSISTANT, response, (int) aiTokens);
 
         return ChatResponseDTO.builder()
                 .sessionId(sessionId)
                 .response(response)
                 .tokens((int) aiTokens)
                 .build();
+    }
+
+    /**
+     * 组合 画像 + 历史/摘要段 + 当前问题
+     */
+    private String composeInput(String profileContext, String historySection, String sessionContext,
+                                String candidates, String message) {
+        StringBuilder input = new StringBuilder();
+        if (!profileContext.isBlank()) {
+            input.append(profileContext).append("\n\n");
+        }
+        if (!historySection.isBlank()) {
+            input.append(historySection).append("\n\n");
+        }
+        // Phase C/F78（C3）：会话历史知识参考段
+        if (sessionContext != null && !sessionContext.isBlank()) {
+            input.append("【会话知识参考】\n").append(sessionContext).append("\n\n");
+        }
+        if (candidates != null && !candidates.isBlank() && !"[]".equals(candidates)) {
+            input.append("【知识库检索候选景点】\n").append(candidates).append("\n\n");
+        }
+        input.append("【当前问题】\n").append(message);
+        return input.toString();
     }
 
     /**
@@ -122,9 +235,27 @@ public class ChatService {
     }
 
     /**
+     * F66：判断当前消息是否需要知识库预检索。
+     * 命中明确的非检索意图标记（画像/偏好/记忆查询、寒暄、功能咨询）时跳过检索，
+     * 规划/景点类问题不受影响（F63 确定性注入仅对检索类消息生效）。
+     */
+    private static boolean needsKnowledgeRetrieval(String message) {
+        if (message == null || message.isBlank()) {
+            return false;
+        }
+        return !(message.contains("画像") || message.contains("偏好")
+                || message.contains("记忆") || message.contains("你是谁")
+                || message.contains("你好") || message.contains("谢谢")
+                || message.contains("能做什么") || message.contains("有什么功能")
+                // F70：偏好陈述类消息（"记住我喜欢爬山，预算8000元"）也跳过预检索
+                || message.contains("记住") || message.contains("设为")
+                || message.contains("改为") || message.contains("设置为"));
+    }
+
+    /**
      * 获取用户活跃会话列表
      */
     public List<ChatSession> listSessions(Long userId) {
-        return sessionMapper.findActiveByUserId(userId);
+        return sessionStorePort.listActiveByUserId(userId);
     }
 }

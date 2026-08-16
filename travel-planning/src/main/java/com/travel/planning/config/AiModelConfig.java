@@ -51,6 +51,10 @@ public class AiModelConfig {
     @Value("${travel.ai.models.coder:qwen-plus}")
     private String coderModel;
 
+    /** F77/B4-2：主模型（含 main Agent 路由）最大生成 token，可配置化（默认 4000） */
+    @Value("${travel.ai.max-output-tokens.main:4000}")
+    private int mainMaxTokens;
+
     /**
      * 单次 LLM 调用超时（秒）。作为每节点 LLM 调用层的硬性退出边界：
      * 避免单次 DashScope 请求悬挂时，只能依赖整体工作流 300s 超时兜底。
@@ -82,7 +86,7 @@ public class AiModelConfig {
     @Bean
     @Primary
     public ChatModel chatModel() {
-        return buildModel(mainModel, 0.7, 4000);
+        return buildModel(mainModel, 0.7, mainMaxTokens);
     }
 
     /**

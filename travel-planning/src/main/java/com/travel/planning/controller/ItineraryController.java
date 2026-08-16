@@ -5,6 +5,7 @@ import com.travel.common.dto.ItineraryResponseDTO;
 import com.travel.common.result.PageResult;
 import com.travel.common.result.R;
 import com.travel.planning.service.ItineraryService;
+import com.travel.planning.util.AuthUtils;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -31,7 +32,8 @@ public class ItineraryController {
     public R<ItineraryResponseDTO> generate(@Valid @RequestBody ItineraryGenerateRequestDTO req,
                                              @RequestHeader(value = "X-User-Id", required = false) Long userId) {
         log.info("生成行程: destination={}, days={}", req.getDestination(), req.getDays());
-        return R.ok(itineraryService.generate(req, userId != null ? userId : 0L));
+        // F68/B3-2：身份来源优先 accessToken（UserContextHolder），其次 X-User-Id 头兜底
+        return R.ok(itineraryService.generate(req, AuthUtils.resolveUserId(userId)));
     }
 
     /**
@@ -47,10 +49,10 @@ public class ItineraryController {
      */
     @GetMapping
     public R<PageResult<ItineraryResponseDTO>> list(
-            @RequestParam Long userId,
+            @RequestParam(required = false) Long userId,
             @RequestParam(defaultValue = "1") int page,
             @RequestParam(defaultValue = "10") int size) {
-        return R.ok(itineraryService.listByUserId(userId, page, size));
+        return R.ok(itineraryService.listByUserId(AuthUtils.resolveUserId(userId), page, size));
     }
 
     /**

@@ -71,6 +71,8 @@ travel:
       coder: qwen3.7-max      # 内容生成：景点描述（qwen3.7-plus 仅兼容模式可用，改 qwen3.7-max）
     timeout:
       seconds: 120            # 单次 LLM 调用超时（秒），作为每节点调用硬性退出边界（F24）
+    max-output-tokens:
+      main: 8000              # 主模型（含 main Agent 路由）最大生成 token（F77/B4-2）
   # 地图 API
   map:
     tencent:
@@ -81,6 +83,28 @@ travel:
   # knowledge 服务地址（Feign 调用）
   knowledge:
     base-url: ${KNOWLEDGE_BASE_URL:http://localhost:8082}
+  # F55/B1：短期会话记忆（摘要压缩）
+  memory:
+    shortterm:
+      enabled: true
+      max-turns: 10
+      history-max-tokens: 2000
+      summary-threshold-ratio: 0.7
+      summary-min-turns: 6
+      summary-max-tokens: 800
+      summary-hard-max-tokens: 800
+      summary-max-chars: 20000
+      summary-refresh-turns: 5
+      summary-validate: true
+      summary-retry-times: 1
+      input-max-tokens: 4000
+      profile-max-tokens: 800
+      summary-ttl-days: 7
+      recent-window-turns: 2
+  # F75/B3-5：LLM 调用统一治理（后台摘要/压缩/偏好抽取并发上限）
+  llm:
+    background-max-concurrent: 2
+    acquire-timeout-ms: 5000
 
 # ============ JWT ============
 jwt:

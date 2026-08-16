@@ -1,4 +1,4 @@
-package com.travel.knowledge.memory;
+package com.travel.knowledge.rag.support;
 
 import java.util.*;
 import java.util.stream.Collectors;
@@ -10,7 +10,8 @@ import java.util.stream.Collectors;
  *
  * <p>公式: score = 1 / (k + rank)，k = 60（行业标准常数）</p>
  *
- * <p>直接复用 interview-memory RRFusion，仅改包名。</p>
+ * <p>F77/B4-1：由 {@code com.travel.knowledge.memory} 迁移至 rag/support（K5 清理，
+ * 消除"memory"命名误导）；仅改包名，逻辑不变。</p>
  *
  * @author david_ency
  * @since 1.0-SNAPSHOT

@@ -3,6 +3,8 @@ package com.travel.planning.client;
 import com.travel.common.result.R;
 import org.springframework.cloud.openfeign.FeignClient;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestParam;
 
 import java.util.List;
@@ -40,4 +42,19 @@ public interface KnowledgeClient {
      */
     @GetMapping("/api/v1/rag/strategies")
     R<Object> getStrategies();
+
+    /**
+     * Phase C/F78：写入一条会话知识切片（knowledge /api/v1/memory/session-context）
+     */
+    @PostMapping("/api/v1/memory/session-context")
+    R<Object> writeSessionContext(@RequestBody Map<String, Object> chunk);
+
+    /**
+     * Phase C/F78：检索会话知识（sessionId 过滤 + Hybrid RRF）
+     */
+    @GetMapping("/api/v1/memory/session-context/search")
+    R<List<Map<String, Object>>> searchSessionContext(
+            @RequestParam("sessionId") String sessionId,
+            @RequestParam("query") String query,
+            @RequestParam("topK") int topK);
 }

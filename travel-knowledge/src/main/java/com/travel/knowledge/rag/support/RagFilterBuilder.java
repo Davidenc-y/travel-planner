@@ -26,8 +26,13 @@ public final class RagFilterBuilder {
      */
     public static QueryBuilder esQuery(QueryIntent intent, String queryText) {
         var bool = QueryBuilders.boolQuery();
-        bool.must(QueryBuilders.multiMatchQuery(queryText, "name", "description"));
+        String text = queryText == null ? "" : queryText.trim();
         if (intent != null) {
+            // F84：免费语义词仅用于过滤（free_entry=1），不参与文本 must。
+            // 否则查询"免费"只存在于 tags，name/description 均无该词 → naive/hybrid BM25 必 0 命中。
+            if (intent.freeOnly()) {
+                text = stripFreeWords(text);
+            }
             if (StringUtils.hasText(intent.city())) {
                 bool.filter(QueryBuilders.termQuery("city", intent.city()));
             }
@@ -38,7 +43,20 @@ public final class RagFilterBuilder {
                 bool.filter(QueryBuilders.termQuery("free_entry", 1));
             }
         }
+        if (text.isEmpty()) {
+            bool.must(QueryBuilders.matchAllQuery());
+        } else {
+            bool.must(QueryBuilders.multiMatchQuery(text, "name", "description"));
+        }
         return bool;
+    }
+
+    private static String stripFreeWords(String text) {
+        String t = text;
+        for (String w : List.of("免费", "免票", "不花钱", "无门票")) {
+            t = t.replace(w, "").trim();
+        }
+        return t;
     }
 
     /**

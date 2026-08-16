@@ -1,6 +1,6 @@
 package com.travel.knowledge.rag.strategy;
 
-import com.travel.knowledge.memory.RRFusion;
+import com.travel.knowledge.rag.support.RRFusion;
 import com.travel.knowledge.rag.model.QueryIntent;
 import com.travel.knowledge.rag.support.RagFilterBuilder;
 import com.travel.knowledge.rag.model.SearchResult;

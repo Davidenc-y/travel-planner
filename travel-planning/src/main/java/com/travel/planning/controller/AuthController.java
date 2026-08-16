@@ -2,6 +2,7 @@ package com.travel.planning.controller;
 
 import com.travel.common.result.R;
 import com.travel.planning.service.UserService;
+import com.travel.planning.util.AuthUtils;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.*;
@@ -60,8 +61,9 @@ public class AuthController {
      * <p>注销 Redis 中的 refreshToken</p>
      */
     @PostMapping("/logout")
-    public R<Void> logout(@RequestHeader("X-User-Id") Long userId) {
-        userService.logout(userId);
+    public R<Void> logout(@RequestHeader(value = "X-User-Id", required = false) Long userId) {
+        // F68/B3-2：accessToken 优先，X-User-Id 头兜底
+        userService.logout(AuthUtils.resolveUserId(userId));
         return R.ok(null);
     }
 }

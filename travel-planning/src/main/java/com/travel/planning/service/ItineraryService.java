@@ -2,14 +2,21 @@ package com.travel.planning.service;
 
 import com.alibaba.cloud.ai.graph.CompiledGraph;
 import com.alibaba.cloud.ai.graph.OverAllState;
+import com.alibaba.cloud.ai.graph.RunnableConfig;
 import com.travel.common.dto.ItineraryGenerateRequestDTO;
 import com.travel.common.dto.ItineraryResponseDTO;
 import com.travel.common.dto.ItineraryResponseDTO.*;
 import com.travel.common.entity.Itinerary;
 import com.travel.common.enums.ItineraryStatus;
+import com.travel.common.exception.BusinessException;
 import com.travel.common.exception.ItineraryGenerationException;
 import com.travel.common.result.PageResult;
 import com.travel.common.util.JsonUtils;
+import com.travel.planning.memory.longterm.ProfileContextAssembler;
+import com.travel.planning.memory.longterm.ProfilePort;
+import com.travel.planning.memory.longterm.ProfileToolProvider;
+import com.travel.planning.memory.knowledge.SessionContextChunker;
+import com.travel.planning.memory.knowledge.SessionKnowledgeWriter;
 import com.travel.planning.repository.ItineraryMapper;
 import com.travel.planning.workflow.TravelWorkflowBuilder;
 import lombok.RequiredArgsConstructor;
@@ -63,13 +70,21 @@ public class ItineraryService {
 
     private final ItineraryMapper itineraryMapper;
     private final TravelWorkflowBuilder workflowBuilder;
-    private final TravelProfileService profileService;
+    private final ProfilePort profilePort;
     private final MindmapGenerator mindmapGenerator;
+    private final ProfileContextAssembler profileContextAssembler;
+    // Phase C/F78：行程知识按天切片异步写入会话知识库
+    private final SessionContextChunker sessionContextChunker;
+    private final SessionKnowledgeWriter sessionKnowledgeWriter;
 
     /**
      * 生成行程（调用 StateGraph 工作流 + 持久化 + 画像更新）
      */
     public ItineraryResponseDTO generate(ItineraryGenerateRequestDTO req, Long userId) {
+        // F52：防御脏 userId（兜底 0 会导致 user_id=0 行程/画像）。
+        if (userId == null || userId <= 0) {
+            throw new BusinessException(40101, "用户未登录");
+        }
         // 1. 幂等检查
         Itinerary existing = itineraryMapper.findByClientRequestId(req.getClientRequestId());
         if (existing != null) {
@@ -77,12 +92,23 @@ public class ItineraryService {
             return toResponseDTO(existing);
         }
 
-        // 2. 构建工作流初始状态
+        // 2. 构建工作流初始状态（F50/Phase A：画像读取注入，偏好进入 preference 阶段）
+        String profileContext = profileContextAssembler.assemble(profilePort.getOrCreate(userId));
         String userInput = buildUserInput(req);
+        if (!profileContext.isBlank()) {
+            userInput = profileContext + "\n\n" + userInput;
+        }
         Map<String, Object> initialState = new HashMap<>();
         initialState.put("userInput", userInput);
         initialState.put("userId", userId);
         initialState.put("retryCount", 0);
+        // B3-6/F73：检索 query 与输入文本分离——rag_retrieval 用结构化需求文本，
+        // 画像前缀只进 messages 不进检索 query（避免画像全文 URL 编码超 Tomcat 头限制，
+        // 22:59 实测 8082 "Request header is too large"）。
+        // F73 补充：检索 query 只保留检索相关字段（目的地+兴趣），剔除 预算/出行人员/天数/
+        // 开始日期——否则"出行人员：家庭"会被 knowledge 识别为景点类型 FAMILY，
+        // city+type 过滤后 0 命中（23:08 实测）。
+        initialState.put("retrievalQuery", buildRetrievalQuery(req));
 
         // 3. 执行工作流
         long start = System.currentTimeMillis();
@@ -93,7 +119,11 @@ public class ItineraryService {
             try {
                 // graph.invoke 为阻塞调用且无超时参数，用 CompletableFuture 提供硬性执行时间边界
                 // （F23 修复：防止预算回退死循环/LLM 卡死时请求无限悬挂）
-                future = CompletableFuture.supplyAsync(() -> graph.invoke(initialState), WORKFLOW_EXECUTOR);
+                // F64/B2：把 userId 写入 RunnableConfig.metadata，供画像工具从 ToolContext 读取
+                RunnableConfig config = RunnableConfig.builder()
+                        .addMetadata(ProfileToolProvider.USER_ID_METADATA_KEY, userId)
+                        .build();
+                future = CompletableFuture.supplyAsync(() -> graph.invoke(initialState, config), WORKFLOW_EXECUTOR);
                 finalState = future.orTimeout(MAX_EXECUTION_SECONDS, TimeUnit.SECONDS)
                         .get()
                         .orElseThrow(() -> new ItineraryGenerationException("工作流未返回最终状态"));
@@ -160,9 +190,17 @@ public class ItineraryService {
 
             log.info("行程生成成功: id={}, destination={}, cost={}", entity.getId(), req.getDestination(), estimatedCost);
 
+            // Phase C/F78（C1）：行程知识按天切片异步写入会话知识库（req.sessionId 存在时）
+            if (req.getSessionId() != null && !req.getSessionId().isBlank()) {
+                sessionKnowledgeWriter.writeAsync(req.getSessionId(),
+                        sessionContextChunker.chunkItinerary(req.getSessionId(), itineraryJson, entity.getId()));
+            }
+
             // 7. 更新用户画像（非阻塞，失败不影响主流程）
-            profileService.recordTrip(userId, req.getDestination(),
-                    JsonUtils.toJson(req.getInterests()), entity.getTitle());
+            // F53：画像更新补充 预算 + 出行人员（→ 出行风格）。
+            profilePort.recordTrip(userId, req.getDestination(),
+                    JsonUtils.toJson(req.getInterests()), entity.getTitle(),
+                    req.getBudget(), req.getParty());
 
             return toResponseDTO(entity);
 
@@ -242,6 +280,17 @@ public class ItineraryService {
                 req.getInterests() != null ? req.getInterests() : "不限",
                 req.getParty() != null ? req.getParty() : "不限",
                 req.getStartDate() != null ? req.getStartDate() : "未指定");
+    }
+
+    /**
+     * F73 补充：检索专用文本（只含检索相关字段），避免行程参数污染检索意图。
+     */
+    private static String buildRetrievalQuery(ItineraryGenerateRequestDTO req) {
+        StringBuilder sb = new StringBuilder("目的地：").append(req.getDestination());
+        if (req.getInterests() != null && !req.getInterests().isEmpty()) {
+            sb.append("\n兴趣：").append(String.join("、", req.getInterests()));
+        }
+        return sb.toString();
     }
 
     /**
