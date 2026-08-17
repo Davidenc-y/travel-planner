@@ -4,9 +4,8 @@ import { useEffect, useState, useRef } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { toast } from 'sonner';
 import { Loader2, ArrowLeft, MapPin, Calendar, DollarSign, Clock } from 'lucide-react';
-import { itineraryApi } from '@/lib/api';
+import { itineraryApi, getErrorMessage } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
-import { AuthProvider } from '@/lib/auth-context';
 import type { ItineraryResponse } from '@/types';
 import { formatCurrency, formatDate } from '@/lib/utils';
 import { MarkmapView } from '@/components/markmap-view';
@@ -32,8 +31,8 @@ function ItineraryDetailContent() {
     try {
       const res = await itineraryApi.getById(Number(params.id));
       setData(res.data.data);
-    } catch {
-      toast.error('加载失败');
+    } catch (err) {
+      toast.error('加载失败: ' + getErrorMessage(err));
     } finally {
       setLoading(false);
     }
@@ -138,9 +137,5 @@ function ItineraryDetailContent() {
 }
 
 export default function ItineraryDetailPage() {
-  return (
-    <AuthProvider>
-      <ItineraryDetailContent />
-    </AuthProvider>
-  );
+  return <ItineraryDetailContent />;
 }

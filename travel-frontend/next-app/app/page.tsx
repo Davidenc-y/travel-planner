@@ -7,10 +7,9 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import { toast } from 'sonner';
 import { Loader2, MapPin, Calendar, DollarSign, Users, Sparkles } from 'lucide-react';
-import { itineraryApi } from '@/lib/api';
+import { itineraryApi, getErrorMessage } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 import { generateUUID } from '@/lib/utils';
-import { AuthProvider } from '@/lib/auth-context';
 
 const schema = z.object({
   destination: z.string().min(1, '目的地不能为空'),
@@ -53,7 +52,7 @@ function HomePageContent() {
       toast.success('行程生成成功！');
       router.push(`/itinerary/${res.data.data.id}`);
     } catch (err: any) {
-      toast.error('生成失败: ' + (err.response?.data?.message || err.message));
+      toast.error('生成失败: ' + getErrorMessage(err));
     } finally {
       setLoading(false);
     }
@@ -185,9 +184,5 @@ function HomePageContent() {
 }
 
 export default function HomePage() {
-  return (
-    <AuthProvider>
-      <HomePageContent />
-    </AuthProvider>
-  );
+  return <HomePageContent />;
 }

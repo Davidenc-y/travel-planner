@@ -1,13 +1,23 @@
 'use client';
 
+import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { User, LogOut, MapPin, Calendar } from 'lucide-react';
+import { User, LogOut, MapPin, Calendar, Route } from 'lucide-react';
+import { itineraryApi } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
-import { AuthProvider } from '@/lib/auth-context';
 
 function ProfileContent() {
   const { username, userId, isAuthenticated, logout } = useAuth();
   const router = useRouter();
+  const [tripCount, setTripCount] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (!isAuthenticated || userId == null) return;
+    // F87：展示真实行程统计（用户面 GET /api/v1/itineraries）
+    itineraryApi.list(userId, 1, 1)
+      .then((res) => setTripCount(res.data.data.total))
+      .catch(() => setTripCount(null));
+  }, [isAuthenticated, userId]);
 
   if (!isAuthenticated) {
     router.push('/login');
@@ -29,18 +39,18 @@ function ProfileContent() {
           </div>
         </div>
 
-        <div className="grid grid-cols-2 gap-3">
-          <div className="bg-slate-50 dark:bg-slate-800/50 rounded-lg p-4">
-            <Calendar className="h-5 w-5 text-brand-500 mb-1" />
-            <p className="text-xs text-slate-400">账号状态</p>
-            <p className="font-medium">活跃</p>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="bg-slate-50 dark:bg-slate-800/50 rounded-lg p-4">
+              <Route className="h-5 w-5 text-brand-500 mb-1" />
+              <p className="text-xs text-slate-400">我的行程</p>
+              <p className="font-medium">{tripCount ?? '—'}</p>
+            </div>
+            <div className="bg-slate-50 dark:bg-slate-800/50 rounded-lg p-4">
+              <Calendar className="h-5 w-5 text-brand-500 mb-1" />
+              <p className="text-xs text-slate-400">账号状态</p>
+              <p className="font-medium">活跃</p>
+            </div>
           </div>
-          <div className="bg-slate-50 dark:bg-slate-800/50 rounded-lg p-4">
-            <MapPin className="h-5 w-5 text-brand-500 mb-1" />
-            <p className="text-xs text-slate-400">会员等级</p>
-            <p className="font-medium">普通用户</p>
-          </div>
-        </div>
       </div>
 
       <div className="glass rounded-2xl p-6">
@@ -74,9 +84,5 @@ function ProfileContent() {
 }
 
 export default function ProfilePage() {
-  return (
-    <AuthProvider>
-      <ProfileContent />
-    </AuthProvider>
-  );
+  return <ProfileContent />;
 }

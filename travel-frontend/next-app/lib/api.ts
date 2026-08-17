@@ -1,11 +1,65 @@
+/**
+ * 前端 API 集中管理模块（F87 重构）。
+ *
+ * 架构：单一 axios 客户端工厂（planning/knowledge 双 baseURL）+ 领域 API 对象
+ * （auth/itinerary/chat/attraction）集中于此，页面禁止直接拼 URL；
+ * 401 时单飞刷新 accessToken 并重放原请求。
+ *
+ * 端点边界（F87 明确）：
+ *  - 前端只允许调用下列"用户面端点"；
+ *  - ETL（/api/v1/etl/*）、RAG 调试（/api/v1/rag/*）、会话知识（/api/v1/memory/*）
+ *    为后端集成与接口测试专用，前端【不】提供任何调用封装，页面也不得使用。
+ */
+
 import axios, { AxiosInstance } from 'axios';
-import type { R } from '@/types';
+import type { AuthResponse, R } from '@/types';
 
 const PLANNING_BASE = process.env.NEXT_PUBLIC_API_PLANNING || 'http://localhost:8081';
 const KNOWLEDGE_BASE = process.env.NEXT_PUBLIC_API_KNOWLEDGE || 'http://localhost:8082';
 
+// ==================== 认证辅助（F87） ====================
+
+function clearAuth(): void {
+  if (typeof window === 'undefined') return;
+  localStorage.removeItem('accessToken');
+  localStorage.removeItem('refreshToken');
+  localStorage.removeItem('userId');
+  localStorage.removeItem('username');
+}
+
+function redirectToLogin(): void {
+  if (typeof window !== 'undefined' && window.location.pathname !== '/login') {
+    window.location.href = '/login';
+  }
+}
+
+let refreshPromise: Promise<string | null> | null = null;
+
+/** 单飞刷新：并发 401 只触发一次 refresh；成功更新 localStorage 并返回新 token */
+async function tryRefresh(): Promise<string | null> {
+  if (typeof window === 'undefined') return null;
+  const refreshToken = localStorage.getItem('refreshToken');
+  if (!refreshToken) return null;
+  try {
+    const res = await axios.post<R<AuthResponse>>(
+      `${PLANNING_BASE}/api/v1/auth/refresh`,
+      { refreshToken },
+      { timeout: 15000 },
+    );
+    const data = res.data.data;
+    localStorage.setItem('accessToken', data.accessToken);
+    localStorage.setItem('refreshToken', data.refreshToken);
+    localStorage.setItem('userId', String(data.userId));
+    localStorage.setItem('username', data.username);
+    return data.accessToken;
+  } catch {
+    clearAuth();
+    return null;
+  }
+}
+
 function createClient(baseURL: string): AxiosInstance {
-  const client = axios.create({ baseURL, timeout: 60000 });
+  const client = axios.create({ baseURL, timeout: 120000 });
   client.interceptors.request.use((config) => {
     if (typeof window !== 'undefined') {
       const token = localStorage.getItem('accessToken');
@@ -22,10 +76,29 @@ function createClient(baseURL: string): AxiosInstance {
   client.interceptors.response.use(
     (res) => res,
     (error) => {
-      if (error.response?.status === 401 && typeof window !== 'undefined') {
-        localStorage.removeItem('accessToken');
-        localStorage.removeItem('refreshToken');
-        window.location.href = '/login';
+      const status = error.response?.status;
+      const original = error.config as { _retried?: boolean } | undefined;
+      // F87：401 先尝试单飞刷新，成功后重放原请求；刷新失败才清本地并跳登录
+      if (status === 401 && original && !original._retried && typeof window !== 'undefined') {
+        original._retried = true;
+        refreshPromise = refreshPromise ?? tryRefresh();
+        return refreshPromise.then((token) => {
+          refreshPromise = null;
+          if (token) {
+            error.config.headers = {
+              ...error.config.headers,
+              Authorization: `Bearer ${token}`,
+            };
+            return client(error.config);
+          }
+          clearAuth();
+          redirectToLogin();
+          return Promise.reject(error);
+        });
+      }
+      if (status === 401) {
+        clearAuth();
+        redirectToLogin();
       }
       return Promise.reject(error);
     }
@@ -36,12 +109,23 @@ function createClient(baseURL: string): AxiosInstance {
 export const planningApi = createClient(PLANNING_BASE);
 export const knowledgeApi = createClient(KNOWLEDGE_BASE);
 
+/**
+ * 统一错误信息提取（F87）：优先后端 message，其次 axios 错误文本。
+ * 页面 toast 一律使用本函数，避免重复拼装。
+ */
+export function getErrorMessage(err: unknown): string {
+  const e = err as { response?: { data?: { message?: string } }; message?: string };
+  return e?.response?.data?.message || e?.message || '请求失败，请稍后重试';
+}
+
 // ==================== Auth ====================
 export const authApi = {
   login: (username: string, password: string) =>
     planningApi.post<R<{ accessToken: string; refreshToken: string; userId: number; username: string }>>('/api/v1/auth/login', { username, password }),
   register: (username: string, password: string, email?: string) =>
     planningApi.post<R<{ accessToken: string; refreshToken: string; userId: number; username: string }>>('/api/v1/auth/register', { username, password, email }),
+  /** F87：退出登录——通知后端注销 Redis refreshToken（best-effort，失败仅清本地） */
+  logout: () => planningApi.post<R<void>>('/api/v1/auth/logout'),
 };
 
 // ==================== Itinerary ====================

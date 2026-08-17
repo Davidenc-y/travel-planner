@@ -8,6 +8,8 @@ export interface ItineraryGenerateRequest {
   party?: string;
   startDate?: string;
   clientRequestId: string;
+  /** F87：可选关联会话（存在时行程知识写入该会话的 session_context） */
+  sessionId?: string;
 }
 
 export interface DayPlan {

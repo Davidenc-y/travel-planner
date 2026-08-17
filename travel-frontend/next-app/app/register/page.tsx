@@ -4,9 +4,8 @@ import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
 import { Loader2, UserPlus } from 'lucide-react';
-import { authApi } from '@/lib/api';
+import { authApi, getErrorMessage } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
-import { AuthProvider } from '@/lib/auth-context';
 
 function RegisterContent() {
   const router = useRouter();
@@ -29,7 +28,7 @@ function RegisterContent() {
       toast.success('注册成功');
       router.push('/');
     } catch (err: any) {
-      toast.error('注册失败: ' + (err.response?.data?.message || err.message));
+      toast.error('注册失败: ' + getErrorMessage(err));
     } finally {
       setLoading(false);
     }
@@ -94,9 +93,5 @@ function RegisterContent() {
 }
 
 export default function RegisterPage() {
-  return (
-    <AuthProvider>
-      <RegisterContent />
-    </AuthProvider>
-  );
+  return <RegisterContent />;
 }

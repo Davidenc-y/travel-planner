@@ -2,6 +2,7 @@
 
 import { createContext, useContext, useEffect, useState, ReactNode } from 'react';
 import { useRouter } from 'next/navigation';
+import { authApi } from './api';
 
 interface AuthContextType {
   userId: number | null;
@@ -44,6 +45,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   const logout = () => {
+    // F87：通知后端注销 Redis refreshToken（best-effort，失败仅清本地）
+    if (typeof window !== 'undefined' && localStorage.getItem('accessToken')) {
+      authApi.logout().catch(() => {});
+    }
     localStorage.removeItem('accessToken');
     localStorage.removeItem('refreshToken');
     localStorage.removeItem('userId');

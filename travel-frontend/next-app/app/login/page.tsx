@@ -4,9 +4,8 @@ import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
 import { Loader2, LogIn } from 'lucide-react';
-import { authApi } from '@/lib/api';
+import { authApi, getErrorMessage } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
-import { AuthProvider } from '@/lib/auth-context';
 
 function LoginContent() {
   const router = useRouter();
@@ -28,7 +27,7 @@ function LoginContent() {
       toast.success('登录成功');
       router.push('/');
     } catch (err: any) {
-      toast.error('登录失败: ' + (err.response?.data?.message || err.message));
+      toast.error('登录失败: ' + getErrorMessage(err));
     } finally {
       setLoading(false);
     }
@@ -85,9 +84,5 @@ function LoginContent() {
 }
 
 export default function LoginPage() {
-  return (
-    <AuthProvider>
-      <LoginContent />
-    </AuthProvider>
-  );
+  return <LoginContent />;
 }

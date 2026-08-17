@@ -4,9 +4,8 @@ import { useEffect, useState, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
 import { Loader2, Send, Plus, MessageSquare } from 'lucide-react';
-import { chatApi } from '@/lib/api';
+import { chatApi, getErrorMessage } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
-import { AuthProvider } from '@/lib/auth-context';
 import type { ChatMessage, ChatSession } from '@/types';
 import { cn, generateUUID } from '@/lib/utils';
 
@@ -95,7 +94,7 @@ function ChatContent() {
       };
       setMessages((prev) => [...prev, aiMsg]);
     } catch (err: any) {
-      toast.error('发送失败');
+      toast.error('发送失败: ' + getErrorMessage(err));
       setMessages((prev) => [...prev, {
         sessionId: currentSessionId!,
         role: 'assistant',
@@ -206,9 +205,5 @@ function ChatContent() {
 }
 
 export default function ChatPage() {
-  return (
-    <AuthProvider>
-      <ChatContent />
-    </AuthProvider>
-  );
+  return <ChatContent />;
 }

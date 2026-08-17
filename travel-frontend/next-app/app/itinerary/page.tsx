@@ -5,9 +5,8 @@ import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { toast } from 'sonner';
 import { Loader2, MapPin, Calendar, DollarSign, Trash2, Plus } from 'lucide-react';
-import { itineraryApi } from '@/lib/api';
+import { itineraryApi, getErrorMessage } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
-import { AuthProvider } from '@/lib/auth-context';
 import type { ItineraryResponse, PageResult } from '@/types';
 import { formatCurrency, formatDate } from '@/lib/utils';
 
@@ -32,7 +31,7 @@ function ItineraryListContent() {
       const res = await itineraryApi.list(userId!, 1, 20);
       setData(res.data.data);
     } catch (err: any) {
-      toast.error('加载失败');
+      toast.error('加载失败: ' + getErrorMessage(err));
     } finally {
       setLoading(false);
     }
@@ -44,8 +43,8 @@ function ItineraryListContent() {
       await itineraryApi.delete(id);
       toast.success('删除成功');
       loadData();
-    } catch {
-      toast.error('删除失败');
+    } catch (err) {
+      toast.error('删除失败: ' + getErrorMessage(err));
     }
   };
 
@@ -114,9 +113,5 @@ function ItineraryListContent() {
 }
 
 export default function ItineraryListPage() {
-  return (
-    <AuthProvider>
-      <ItineraryListContent />
-    </AuthProvider>
-  );
+  return <ItineraryListContent />;
 }

@@ -38,7 +38,8 @@ export function MarkmapView({ data }: MarkmapViewProps) {
       if (cancelled || !ref.current) return;
 
       const md = toMarkdown(data);
-      const { root } = Transformer.mdToData(md);
+      const transformer = new Transformer();
+      const { root } = transformer.transform(md);
 
       if (!instanceRef.current) {
         instanceRef.current = Markmap.create(ref.current, {}, root);
