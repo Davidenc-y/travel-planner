@@ -105,6 +105,12 @@ travel:
   llm:
     background-max-concurrent: 2
     acquire-timeout-ms: 5000
+  # F85 第二步：对话入口意图分类（PLANNING/REFINE/RECALL/PROFILE/CHAT/FUNCTIONAL）
+  chat:
+    intent:
+      enabled: true          # false → 全部走原 supervisor 流程（回滚开关）
+      cache-size: 256
+      llm-fallback: true     # 规则无法判定时用轻模型；false → 直接回退 PLANNING
 
 # ============ JWT ============
 jwt:

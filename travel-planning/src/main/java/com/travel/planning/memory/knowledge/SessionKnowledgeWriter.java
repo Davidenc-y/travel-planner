@@ -9,6 +9,7 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -70,16 +71,42 @@ public class SessionKnowledgeWriter {
      * 检索会话知识并组装为注入文本（"【type】content" 行）；失败/空返回空串。
      */
     public String search(String sessionId, String query, int topK) {
-        if (sessionId == null || sessionId.isBlank() || query == null || query.isBlank()) {
+        return format(retrieve(sessionId, query, topK));
+    }
+
+    /**
+     * F85：检索会话知识并返回结构化切片（供会话事实共识层消费）；
+     * 与 {@link #search} 共用 {@link #retrieve}，同一请求只检索一次。
+     */
+    public List<Map<String, Object>> searchStructured(String sessionId, String query, int topK) {
+        return retrieve(sessionId, query, topK);
+    }
+
+    /** F85：把结构化切片渲染为注入文本（"【type】content" 行）；空列表返回空串。 */
+    public static String format(List<Map<String, Object>> hits) {
+        if (hits == null || hits.isEmpty()) {
             return "";
+        }
+        StringBuilder sb = new StringBuilder();
+        for (Map<String, Object> hit : hits) {
+            sb.append("【").append(hit.getOrDefault("type", "unknown")).append("】")
+                    .append(hit.getOrDefault("content", "")).append("\n");
+        }
+        return sb.toString().trim();
+    }
+
+    /** F85：检索 + F83 最近一次行程过滤，返回结构化切片（不渲染文本）。 */
+    private List<Map<String, Object>> retrieve(String sessionId, String query, int topK) {
+        if (sessionId == null || sessionId.isBlank() || query == null || query.isBlank()) {
+            return List.of();
         }
         try {
             var resp = knowledgeClient.searchSessionContext(sessionId, query, Math.max(1, Math.min(topK, 10)));
             if (resp == null || resp.getData() == null || resp.getData().isEmpty()) {
-                return "";
+                return List.of();
             }
             // F83：多套行程切片混叠会让"上次行程"歧义——itinerary_day 只保留 seq 前缀
-            // "itin:{id}:" 中 id 最大（最近一次）的那套，按天输出；其余类型原样保留。
+            // "itin:{id}:" 中 id 最大（最近一次）的那套；其余类型原样保留。
             String latestItinId = null;
             for (Map<String, Object> hit : resp.getData()) {
                 if ("itinerary_day".equals(String.valueOf(hit.getOrDefault("type", "")))) {
@@ -89,19 +116,18 @@ public class SessionKnowledgeWriter {
                     }
                 }
             }
-            StringBuilder sb = new StringBuilder();
+            List<Map<String, Object>> out = new ArrayList<>();
             for (Map<String, Object> hit : resp.getData()) {
                 if ("itinerary_day".equals(String.valueOf(hit.getOrDefault("type", "")))
                         && latestItinId != null && !latestItinId.equals(planIdOf(hit))) {
-                    continue; // 只注入最近一次行程
+                    continue; // 只保留最近一次行程
                 }
-                sb.append("【").append(hit.getOrDefault("type", "unknown")).append("】")
-                        .append(hit.getOrDefault("content", "")).append("\n");
+                out.add(hit);
             }
-            return sb.toString().trim();
+            return out;
         } catch (Exception e) {
             log.warn("[SessionKnowledge] 会话知识检索失败，降级空注入: {}", e.getMessage());
-            return "";
+            return List.of();
         }
     }
 

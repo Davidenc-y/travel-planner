@@ -15,6 +15,8 @@ import com.travel.planning.memory.longterm.ProfileToolProvider;
 import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.messages.AssistantMessage;
+import org.springframework.ai.chat.messages.SystemMessage;
+import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.prompt.Prompt;
@@ -22,6 +24,7 @@ import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
@@ -222,7 +225,11 @@ public class TravelSupervisorAgent {
             // F77/B4-2：路由截断/非 JSON 防护——四键全空且路由 FINISH、且疑似规划类请求时，
             // 用新 requestId 重试一次整图（F63 "playplay" 类问题：解析失败被框架当 FINISH，
             // 预算/规划被跳过）；仍空才走 F66 直答兜底。
-            if (!hasSectionOutput(finalState) && looksLikePlanningRequest(userInput)) {
+            // F85：回顾类请求（"上次/之前安排了哪些景点"）是合法 FINISH，跳过整图重试直接直答，
+            // 避免白耗一次完整图执行（F82 两档之外的第三类，见 F85 3.5 边界说明）。
+            if (!hasSectionOutput(finalState)
+                    && looksLikePlanningRequest(userInput)
+                    && !isRecallQuery(userInput)) {
                 String retryRequestId = UUID.randomUUID().toString();
                 tokenUsageInterceptor.begin(retryRequestId);
                 RunnableConfig.Builder retryBuilder = RunnableConfig.builder()
@@ -258,7 +265,26 @@ public class TravelSupervisorAgent {
             //  /routePlan/budgetEstimate 全为 0，B2 画像问答不可达。）
             if (!hasSectionOutput(finalState)) {
                 try {
-                    ChatResponse direct = chatModel.call(new Prompt(userInput));
+                    // F85：直答兜底从裸输入升级为"system 指令 + 输入"双消息——
+                    // 回顾类用回顾专用指令（不得编造景点），其余用覆盖优先级指令
+                    // （会话 feedback/最新确认 > constraint > 画像）。
+                    String system;
+                    if (isRecallQuery(userInput)) {
+                        system = """
+                                你是行程回顾助手。仅依据组合输入中【会话最新确认】【会话知识参考】的
+                                itinerary_day 切片与最近对话回答；逐天列出景点；信息不足时明确说明
+                                "未找到该行程记录"，不得编造景点。
+                                """;
+                    } else {
+                        system = """
+                                你正在基于组合输入回答用户的旅行问题。信息优先级：
+                                1) 【会话最新确认】与【会话知识参考】中的 feedback/最新修正 > constraint > 用户画像；
+                                2) 预算/目的地/天数等与画像不一致时，以会话内最近一次确认或修正为准；
+                                3) 仅当输入无相关信息时才可基于常识作答。
+                                """;
+                    }
+                    ChatResponse direct = chatModel.call(new Prompt(
+                            List.of(new SystemMessage(system), new UserMessage(userInput))));
                     String text = direct.getResult() != null && direct.getResult().getOutput() != null
                             ? direct.getResult().getOutput().getText() : null;
                     if (text != null && !text.isBlank()) {
@@ -311,6 +337,88 @@ public class TravelSupervisorAgent {
 
     /** F27：行程规划结果（回答 + 本次真实 token 消耗）。 */
     public record PlanningResult(String answer, long totalTokens) {
+    }
+
+    // ==================== F85 第二步：入口直答 / 回顾管线 ====================
+
+    /**
+     * F85：PROFILE/CHAT/FUNCTIONAL 意图的入口直答（不触发 supervisor），
+     * 使用覆盖优先级 system 指令（会话最新确认/feedback > constraint > 画像）。
+     */
+    public PlanningResult answerDirect(String userInput, Long userId) {
+        String system = """
+                你正在基于组合输入回答用户的旅行问题。信息优先级：
+                1) 【会话最新确认】与【会话知识参考】中的 feedback/最新修正 > constraint > 用户画像；
+                2) 预算/目的地/天数等与画像不一致时，以会话内最近一次确认或修正为准；
+                3) 仅当输入无相关信息时才可基于常识作答。
+                """;
+        ChatResponse direct = chatModel.call(new Prompt(
+                List.of(new SystemMessage(system), new UserMessage(userInput))));
+        String text = direct.getResult() != null && direct.getResult().getOutput() != null
+                ? direct.getResult().getOutput().getText() : "";
+        long tokens = direct.getMetadata() != null && direct.getMetadata().getUsage() != null
+                ? direct.getMetadata().getUsage().getTotalTokens() : 0;
+        log.info("[DirectAnswer] 入口直答: inputLength={}, answerLength={}, tokens={}",
+                userInput == null ? 0 : userInput.length(), text.length(), tokens);
+        return new PlanningResult(
+                text.isBlank() ? "抱歉，暂时无法回答，请稍后重试。" : text.trim(), tokens);
+    }
+
+    /**
+     * F85：RECALL 意图的轻量回顾管线——itinerary_day 切片确定性骨架 + LLM 润色
+     * （零编造、低 token）；无切片时确定性返回"未找到"，不调 LLM。
+     */
+    public PlanningResult answerRecall(String userInput, List<Map<String, Object>> sessionHits) {
+        String skeleton = buildRecallSkeleton(sessionHits);
+        String question = extractCurrentQuestion(userInput);
+        if (skeleton.isBlank()) {
+            String fallback = "未找到该行程记录，请确认您是否在本会话中生成过行程。";
+            log.info("[Recall] 无行程切片，直接返回: {}", fallback);
+            return new PlanningResult(fallback, 0);
+        }
+        String system = """
+                你是行程回顾助手。以下骨架来自会话行程切片，请据此整理回答；
+                不得增删景点；信息不足时说明"未找到该行程记录"。
+                """;
+        ChatResponse direct = chatModel.call(new Prompt(List.of(
+                new SystemMessage(system),
+                new UserMessage(skeleton + "\n\n用户问题：" + question))));
+        String text = direct.getResult() != null && direct.getResult().getOutput() != null
+                ? direct.getResult().getOutput().getText() : "";
+        long tokens = direct.getMetadata() != null && direct.getMetadata().getUsage() != null
+                ? direct.getMetadata().getUsage().getTotalTokens() : 0;
+        log.info("[Recall] 回顾管线完成: skeletonLen={}, answerLen={}, tokens={}",
+                skeleton.length(), text.length(), tokens);
+        return new PlanningResult(text.isBlank() ? skeleton : text.trim(), tokens);
+    }
+
+    /** F85：从结构化切片提取 itinerary_day 骨架（已是最近一次行程过滤后的命中） */
+    private static String buildRecallSkeleton(List<Map<String, Object>> sessionHits) {
+        if (sessionHits == null || sessionHits.isEmpty()) {
+            return "";
+        }
+        List<String> lines = new ArrayList<>();
+        for (Map<String, Object> hit : sessionHits) {
+            if (!"itinerary_day".equals(String.valueOf(hit.getOrDefault("type", "")))) {
+                continue;
+            }
+            String content = String.valueOf(hit.getOrDefault("content", "")).trim();
+            if (!content.isBlank()) {
+                lines.add(content);
+            }
+        }
+        return String.join("\n", lines);
+    }
+
+    private static String extractCurrentQuestion(String userInput) {
+        if (userInput == null) {
+            return "";
+        }
+        int idx = userInput.lastIndexOf("【当前问题】");
+        if (idx >= 0) {
+            return userInput.substring(idx + "【当前问题】".length()).trim();
+        }
+        return userInput.trim();
     }
 
     // ==================== F26 最终回答组装 ====================
@@ -444,6 +552,27 @@ public class TravelSupervisorAgent {
         return q.contains("规划") || q.contains("行程") || q.contains("推荐")
                 || q.contains("景点") || q.contains("日游") || q.contains("预算")
                 || q.contains("攻略") || q.contains("哪里");
+    }
+
+    /**
+     * F85：回顾类问题判定（事实型"上次/之前发生了什么"）。
+     * 变更型（优化/调整/重新规划）必须返回 false——那是规划请求，不能早退。
+     */
+    static boolean isRecallQuery(String userInput) {
+        if (userInput == null || userInput.isBlank()) {
+            return false;
+        }
+        String q = userInput;
+        int idx = q.lastIndexOf("【当前问题】");
+        if (idx >= 0) {
+            q = q.substring(idx);
+        }
+        boolean recall = q.contains("上次") || q.contains("之前")
+                || q.contains("回顾") || q.contains("安排了哪些")
+                || q.contains("都去了") || q.contains("去过") || q.contains("行程记录");
+        boolean change = q.contains("优化") || q.contains("调整") || q.contains("重新规划")
+                || q.contains("改成") || q.contains("换") || q.contains("重新安排");
+        return recall && !change;
     }
 
     /**

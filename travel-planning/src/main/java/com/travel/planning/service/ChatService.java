@@ -11,7 +11,11 @@ import com.travel.planning.memory.longterm.ProfilePort;
 import com.travel.planning.memory.longterm.PreferenceSaveService;
 import com.travel.planning.memory.knowledge.KnowledgeRetrievalService;
 import com.travel.planning.memory.knowledge.SessionContextChunker;
+import com.travel.planning.memory.knowledge.SessionFactConsolidator;
 import com.travel.planning.memory.knowledge.SessionKnowledgeWriter;
+import com.travel.planning.memory.chat.ChatIntent;
+import com.travel.planning.memory.chat.ChatIntentClassifier;
+import com.travel.planning.memory.chat.ChatIntentProperties;
 import com.travel.planning.memory.sessionstore.SessionStorePort;
 import com.travel.planning.memory.shortterm.ShortTermMemoryProperties;
 import com.travel.planning.memory.shortterm.SessionMemoryPort;
@@ -20,6 +24,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
+import java.util.Map;
 
 /**
  * 聊天服务
@@ -45,6 +50,11 @@ public class ChatService {
     // Phase C/F78：会话级知识切片写入与检索注入
     private final SessionContextChunker sessionContextChunker;
     private final SessionKnowledgeWriter sessionKnowledgeWriter;
+    // F85：会话事实共识（同主题 feedback 覆盖旧 constraint，注入【会话最新确认】）
+    private final SessionFactConsolidator sessionFactConsolidator;
+    // F85 第二步：入口意图分类（PLANNING/REFINE/RECALL/PROFILE/CHAT/FUNCTIONAL）
+    private final ChatIntentClassifier chatIntentClassifier;
+    private final ChatIntentProperties chatIntentProperties;
 
     /**
      * 创建会话
@@ -83,6 +93,8 @@ public class ChatService {
         // Phase C/F78（C1）：约束/反馈类消息立即异步写入会话知识（幂等，失败不影响主流程）
         sessionKnowledgeWriter.writeAsync(sessionId,
                 sessionContextChunker.chunkUserMessage(sessionId, message));
+        // F85 第二步：入口意图分类（开关关闭时回退 PLANNING）
+        ChatIntent intent = chatIntentClassifier.classify(message);
 
         // 3. F50/Phase A + F55/B1：组合 画像 + (摘要+滑动窗口 | 原文历史) + 当前问题
         //    （原始消息存储不变；组合仅用于本次推理输入）。
@@ -121,12 +133,15 @@ public class ChatService {
         // F63：确定性预检索注入——把知识库候选景点放入上下文，确保聊天链消费知识库。
         // F66：非检索意图（画像/偏好/闲聊类）跳过预检索，避免无关候选污染上下文
         // （20:18 实测"我的旅行画像里有什么？"被注入 5 条无关景点候选）。
-        String candidates = needsKnowledgeRetrieval(message)
+        String candidates = needsKnowledgeRetrievalByIntent(intent)
                 ? knowledgeRetrievalService.retrieveCandidates(message, 5) : "[]";
-        // Phase C/F78（C3）：按需检索本会话历史知识并注入（约束/反馈/行程块优先）
+        // Phase C/F78（C3）：按需检索本会话历史知识（结构化，供共识层与注入共用，只检索一次）
         // F83：topK 放大到 8，避免类型加分把行程切片挤出注入（E4 召回问题）
-        String sessionContext = sessionKnowledgeWriter.search(sessionId, message, 8);
-        String composed = composeInput(profileContext, historySection, sessionContext, candidates, message);
+        List<Map<String, Object>> sessionHits = sessionKnowledgeWriter.searchStructured(sessionId, message, 8);
+        String sessionContext = SessionKnowledgeWriter.format(sessionHits);
+        // F85：会话事实共识——同主题 feedback 覆盖旧 constraint，注入【会话最新确认】
+        String consensus = sessionFactConsolidator.render(sessionFactConsolidator.consolidate(sessionHits));
+        String composed = composeInput(profileContext, historySection, consensus, sessionContext, candidates, message);
         int inputTokens = sessionMemoryPort.estimateTokens(composed);
 
         // F58/B1.2：注入总预算兜底（超限先去掉最近窗口，仍超则压缩摘要）。
@@ -134,7 +149,7 @@ public class ChatService {
             if (summaryUsed) {
                 String summaryOnly = sessionMemoryPort.getSummaryOrEmpty(sessionId);
                 historySection = "【会话摘要】\n" + summaryOnly;
-                composed = composeInput(profileContext, historySection, sessionContext, candidates, message);
+                composed = composeInput(profileContext, historySection, consensus, sessionContext, candidates, message);
                 inputTokens = sessionMemoryPort.estimateTokens(composed);
             }
             if (inputTokens > memoryProps.getInputMaxTokens() && summaryUsed) {
@@ -144,7 +159,7 @@ public class ChatService {
                 String cut = sessionMemoryPort.truncateByTokens(
                         summaryOnly, Math.max(100, memoryProps.getInputMaxTokens() - reserve));
                 historySection = "【会话摘要】\n" + cut;
-                composed = composeInput(profileContext, historySection, sessionContext, candidates, message);
+                composed = composeInput(profileContext, historySection, consensus, sessionContext, candidates, message);
                 inputTokens = sessionMemoryPort.estimateTokens(composed);
                 log.warn("[ChatService] 注入总预算超限，已压缩摘要: tokens={}", inputTokens);
             } else if (inputTokens > memoryProps.getInputMaxTokens()) {
@@ -155,7 +170,7 @@ public class ChatService {
                 // 补齐 F65 4.3 指出的"兜底不覆盖画像段"盲区。
                 profileContext = profileContextAssembler.assemble(
                         profilePort.getOrCreate(userId), memoryProps.getProfileMaxTokens() / 2);
-                composed = composeInput(profileContext, historySection, sessionContext, candidates, message);
+                composed = composeInput(profileContext, historySection, consensus, sessionContext, candidates, message);
                 inputTokens = sessionMemoryPort.estimateTokens(composed);
                 log.warn("[ChatService] 注入总预算超限，已收紧画像段: tokens={}", inputTokens);
             }
@@ -168,16 +183,38 @@ public class ChatService {
 
         String response;
         long aiTokens = 0;
+        long routeStart = System.currentTimeMillis();
         try {
-            // F64/B2：把 userId 传入 Supervisor，写入 RunnableConfig.metadata 供画像工具读取
-            TravelSupervisorAgent.PlanningResult result = supervisorAgent.executePlanningWithUsage(composed, userId);
-            response = result.answer();
-            // F27：assistant 消息 tokens = 本次全部 LLM 调用的真实 totalTokens 之和
-            aiTokens = result.totalTokens();
+            switch (intent) {
+                case RECALL -> {
+                    // F85：轻量回顾管线（itinerary_day 骨架 + LLM 润色，零编造）
+                    TravelSupervisorAgent.PlanningResult result =
+                            supervisorAgent.answerRecall(composed, sessionHits);
+                    response = result.answer();
+                    aiTokens = result.totalTokens();
+                }
+                case PROFILE, CHAT, FUNCTIONAL -> {
+                    // F85：入口直答（不触发 supervisor，覆盖优先级 system 指令）
+                    TravelSupervisorAgent.PlanningResult result =
+                            supervisorAgent.answerDirect(composed, userId);
+                    response = result.answer();
+                    aiTokens = result.totalTokens();
+                }
+                default -> { // PLANNING / REFINE：F64/B2 把 userId 传入 Supervisor（metadata 供画像工具）
+                    TravelSupervisorAgent.PlanningResult result =
+                            supervisorAgent.executePlanningWithUsage(composed, userId);
+                    response = result.answer();
+                    // F27：assistant 消息 tokens = 本次全部 LLM 调用的真实 totalTokens 之和
+                    aiTokens = result.totalTokens();
+                }
+            }
         } catch (Exception e) {
             log.error("Agent 调用失败", e);
             response = "抱歉，处理您的请求时出现错误，请稍后重试。";
         }
+        long routeElapsed = System.currentTimeMillis() - routeStart;
+        log.info("[ChatRouting] intent={}, router={}, elapsedMs={}",
+                intent, routerOf(intent), routeElapsed);
 
         // 4. 保存 AI 响应
         sessionStorePort.appendMessage(sessionId, ChatRole.ASSISTANT, response, (int) aiTokens);
@@ -192,14 +229,18 @@ public class ChatService {
     /**
      * 组合 画像 + 历史/摘要段 + 当前问题
      */
-    private String composeInput(String profileContext, String historySection, String sessionContext,
-                                String candidates, String message) {
+    private String composeInput(String profileContext, String historySection, String consensus,
+                                String sessionContext, String candidates, String message) {
         StringBuilder input = new StringBuilder();
         if (!profileContext.isBlank()) {
             input.append(profileContext).append("\n\n");
         }
         if (!historySection.isBlank()) {
             input.append(historySection).append("\n\n");
+        }
+        // F85：会话最新确认（确定性覆盖结论）优先于原始切片
+        if (consensus != null && !consensus.isBlank()) {
+            input.append(consensus).append("\n\n");
         }
         // Phase C/F78（C3）：会话历史知识参考段
         if (sessionContext != null && !sessionContext.isBlank()) {
@@ -235,21 +276,19 @@ public class ChatService {
     }
 
     /**
-     * F66：判断当前消息是否需要知识库预检索。
-     * 命中明确的非检索意图标记（画像/偏好/记忆查询、寒暄、功能咨询）时跳过检索，
-     * 规划/景点类问题不受影响（F63 确定性注入仅对检索类消息生效）。
+     * F85：意图驱动的知识预检索门控（取代 F66 独立关键词表，避免两套启发式漂移）。
+     * PROFILE/CHAT/FUNCTIONAL → 跳过预检索；PLANNING/REFINE/RECALL → 开启。
      */
-    private static boolean needsKnowledgeRetrieval(String message) {
-        if (message == null || message.isBlank()) {
-            return false;
-        }
-        return !(message.contains("画像") || message.contains("偏好")
-                || message.contains("记忆") || message.contains("你是谁")
-                || message.contains("你好") || message.contains("谢谢")
-                || message.contains("能做什么") || message.contains("有什么功能")
-                // F70：偏好陈述类消息（"记住我喜欢爬山，预算8000元"）也跳过预检索
-                || message.contains("记住") || message.contains("设为")
-                || message.contains("改为") || message.contains("设置为"));
+    private static boolean needsKnowledgeRetrievalByIntent(ChatIntent intent) {
+        return intent == ChatIntent.PLANNING || intent == ChatIntent.REFINE || intent == ChatIntent.RECALL;
+    }
+
+    private static String routerOf(ChatIntent intent) {
+        return switch (intent) {
+            case RECALL -> "recall";
+            case PROFILE, CHAT, FUNCTIONAL -> "direct";
+            default -> "supervisor";
+        };
     }
 
     /**
