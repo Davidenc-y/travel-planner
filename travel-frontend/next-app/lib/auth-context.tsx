@@ -3,6 +3,24 @@
 import { createContext, useContext, useEffect, useState, ReactNode } from 'react';
 import { useRouter } from 'next/navigation';
 import { authApi } from './api';
+import { toast } from 'sonner';
+import { isTokenExpired } from './token';
+
+// F91：cookie 与 localStorage 双写，供 middleware.ts 路由守卫读取
+function setAuthCookie(token: string) {
+  document.cookie = `accessToken=${encodeURIComponent(token)}; path=/; max-age=86400; SameSite=Lax`;
+}
+
+function clearAuthCookie() {
+  document.cookie = 'accessToken=; path=/; max-age=0; SameSite=Lax';
+}
+
+function clearLocalAuth() {
+  localStorage.removeItem('accessToken');
+  localStorage.removeItem('refreshToken');
+  localStorage.removeItem('userId');
+  localStorage.removeItem('username');
+}
 
 interface AuthContextType {
   userId: number | null;
@@ -28,9 +46,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const savedUserId = localStorage.getItem('userId');
     const savedUsername = localStorage.getItem('username');
     if (savedToken && savedUserId) {
-      setToken(savedToken);
-      setUserId(Number(savedUserId));
-      setUsername(savedUsername);
+      // F95：进入任意页面先校验 accessToken 是否过期；过期则清理并回首页未登录态
+      if (isTokenExpired(savedToken)) {
+        clearLocalAuth();
+        clearAuthCookie();
+        toast.error('登录已过期，请重新登录');
+        if (window.location.pathname !== '/') {
+          router.replace('/');
+        }
+      } else {
+        setToken(savedToken);
+        setUserId(Number(savedUserId));
+        setUsername(savedUsername);
+        // F93：老会话（cookie 双写前登录）只有 localStorage，无 accessToken cookie，
+        // middleware 读不到 cookie 会把 /itinerary 等 307 到登录页；挂载时同步补写 cookie。
+        setAuthCookie(savedToken);
+      }
     }
   }, []);
 
@@ -39,6 +70,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     localStorage.setItem('refreshToken', refreshToken);
     localStorage.setItem('userId', String(userId));
     localStorage.setItem('username', username);
+    setAuthCookie(token);
     setToken(token);
     setUserId(userId);
     setUsername(username);
@@ -49,10 +81,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (typeof window !== 'undefined' && localStorage.getItem('accessToken')) {
       authApi.logout().catch(() => {});
     }
-    localStorage.removeItem('accessToken');
-    localStorage.removeItem('refreshToken');
-    localStorage.removeItem('userId');
-    localStorage.removeItem('username');
+    clearLocalAuth();
+    clearAuthCookie();
     setToken(null);
     setUserId(null);
     setUsername(null);

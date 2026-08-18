@@ -16,6 +16,8 @@ import com.travel.planning.memory.knowledge.SessionKnowledgeWriter;
 import com.travel.planning.memory.chat.ChatIntent;
 import com.travel.planning.memory.chat.ChatIntentClassifier;
 import com.travel.planning.memory.chat.ChatIntentProperties;
+import com.travel.planning.guard.GuardService;
+import com.travel.planning.trace.TraceContext;
 import com.travel.planning.memory.sessionstore.SessionStorePort;
 import com.travel.planning.memory.shortterm.ShortTermMemoryProperties;
 import com.travel.planning.memory.shortterm.SessionMemoryPort;
@@ -55,6 +57,8 @@ public class ChatService {
     // F85 第二步：入口意图分类（PLANNING/REFINE/RECALL/PROFILE/CHAT/FUNCTIONAL）
     private final ChatIntentClassifier chatIntentClassifier;
     private final ChatIntentProperties chatIntentProperties;
+    // F90：Agent 调用前安全防护（Prompt 注入等）
+    private final GuardService guardService;
 
     /**
      * 创建会话
@@ -78,6 +82,11 @@ public class ChatService {
         if (userId == null || userId <= 0) {
             throw new BusinessException(40101, "用户未登录");
         }
+        // F90：调用前安全防护（Prompt 注入检测）
+        var guard = guardService.check(String.valueOf(userId), message);
+        if (!guard.allowed()) {
+            throw new BusinessException(40302, guard.reason());
+        }
         // 1. 校验会话
         ChatSession session = sessionStorePort.findBySessionId(sessionId);
         if (session == null) {
@@ -95,6 +104,13 @@ public class ChatService {
                 sessionContextChunker.chunkUserMessage(sessionId, message));
         // F85 第二步：入口意图分类（开关关闭时回退 PLANNING）
         ChatIntent intent = chatIntentClassifier.classify(message);
+        // F89：追溯上下文填充（user/session/意图路径）
+        if (TraceContext.active()) {
+            TraceContext.Holder h = TraceContext.current();
+            h.trace.setUserId(userId);
+            h.trace.setSessionId(sessionId);
+            h.addPath(intent.name().toLowerCase());
+        }
 
         // 3. F50/Phase A + F55/B1：组合 画像 + (摘要+滑动窗口 | 原文历史) + 当前问题
         //    （原始消息存储不变；组合仅用于本次推理输入）。

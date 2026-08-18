@@ -30,6 +30,8 @@ public class TokenUsageInterceptor extends ModelInterceptor {
     public static final String REQUEST_ID_KEY = "travel_request_id";
 
     private final ConcurrentMap<String, Long> totals = new ConcurrentHashMap<>();
+    private final ConcurrentMap<String, Long> promptTotals = new ConcurrentHashMap<>();
+    private final ConcurrentMap<String, Long> completionTotals = new ConcurrentHashMap<>();
 
     @Override
     public String getName() {
@@ -39,12 +41,29 @@ public class TokenUsageInterceptor extends ModelInterceptor {
     /** 开启一次请求的 token 累计。 */
     public void begin(String requestId) {
         totals.put(requestId, 0L);
+        promptTotals.put(requestId, 0L);
+        completionTotals.put(requestId, 0L);
     }
 
     /** 结束请求并返回累计的 totalTokens；重复调用返回 0。 */
     public long endAndGet(String requestId) {
         Long value = totals.remove(requestId);
+        promptTotals.remove(requestId);
+        completionTotals.remove(requestId);
         return value != null ? value : 0L;
+    }
+
+    /**
+     * F89：取出但不清理（供追溯在服务结束时读取 prompt/completion/total）。
+     *
+     * @return long[]{prompt, completion, total}
+     */
+    public long[] peek(String requestId) {
+        return new long[]{
+                promptTotals.getOrDefault(requestId, 0L),
+                completionTotals.getOrDefault(requestId, 0L),
+                totals.getOrDefault(requestId, 0L),
+        };
     }
 
     @Override
@@ -62,6 +81,13 @@ public class TokenUsageInterceptor extends ModelInterceptor {
         Usage usage = response.getChatResponse().getMetadata().getUsage();
         if (usage != null && usage.getTotalTokens() != null) {
             totals.computeIfPresent(requestId, (k, current) -> current + usage.getTotalTokens());
+            if (usage.getPromptTokens() != null) {
+                promptTotals.computeIfPresent(requestId, (k, current) -> current + usage.getPromptTokens());
+            }
+            if (usage.getCompletionTokens() != null) {
+                completionTotals.computeIfPresent(requestId,
+                        (k, current) -> current + usage.getCompletionTokens());
+            }
         }
         return response;
     }

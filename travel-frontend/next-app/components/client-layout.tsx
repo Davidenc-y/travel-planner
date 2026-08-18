@@ -2,22 +2,23 @@
 
 import { ReactNode } from 'react';
 import Link from 'next/link';
-import { usePathname } from 'next/navigation';
-import { MapPin, MessageSquare, Search, User, LogOut, Compass } from 'lucide-react';
+import { usePathname, useRouter } from 'next/navigation';
+import { MapPin, MessageSquare, Search, LogOut, Compass } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { ThemeToggle } from './theme-toggle';
 import { useAuth } from '@/lib/auth-context';
 
 const navItems = [
-  { href: '/', label: '首页', icon: Compass },
+  // F96：原"首页"改为"规划"（进入 /plan 规划功能页）；"/" 现为欢迎展示页（点击 Logo 返回）
+  { href: '/plan', label: '规划', icon: Compass },
   { href: '/itinerary', label: '行程', icon: MapPin },
   { href: '/chat', label: '聊天', icon: MessageSquare },
   { href: '/attractions', label: '景点', icon: Search },
-  { href: '/profile', label: '我的', icon: User },
 ];
 
 export function ClientLayout({ children }: { children: ReactNode }) {
   const pathname = usePathname();
+  const router = useRouter();
   const { isAuthenticated, username, logout } = useAuth();
 
   const isAuthPage = pathname === '/login' || pathname === '/register';
@@ -61,9 +62,19 @@ export function ClientLayout({ children }: { children: ReactNode }) {
           <div className="flex items-center gap-2">
             {isAuthenticated ? (
               <>
-                <span className="text-sm text-slate-600 dark:text-slate-300 hidden sm:inline">
-                  {username}
-                </span>
+                {/* F98：点击"头像占位 + 用户名"进入个人中心（MinIO 头像后续接入，先占位） */}
+                <button
+                  onClick={() => router.push('/profile')}
+                  className="flex items-center gap-2 rounded-lg px-2 py-1 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+                  aria-label="个人中心"
+                >
+                  <span className="flex h-8 w-8 items-center justify-center rounded-full bg-brand-500 text-white text-sm font-bold">
+                    {username?.charAt(0).toUpperCase() || 'U'}
+                  </span>
+                  <span className="text-sm text-slate-600 dark:text-slate-300 hidden sm:inline">
+                    {username}
+                  </span>
+                </button>
                 <button
                   onClick={logout}
                   className="p-2 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"

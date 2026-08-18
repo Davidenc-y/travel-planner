@@ -4,17 +4,27 @@ import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { toast } from 'sonner';
-import { Loader2, MapPin, Calendar, DollarSign, Trash2, Plus } from 'lucide-react';
+import { MapPin, Calendar, DollarSign, Trash2, Plus } from 'lucide-react';
 import { itineraryApi, getErrorMessage } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 import type { ItineraryResponse, PageResult } from '@/types';
 import { formatCurrency, formatDate } from '@/lib/utils';
+import { CardGridSkeleton } from '@/components/ui/skeleton';
+import { EmptyState } from '@/components/ui/empty-state';
+import { takePrefetch } from '@/lib/prefetch';
+import { ItineraryCardModal } from '@/components/feature/itinerary-card-modal';
 
 function ItineraryListContent() {
   const router = useRouter();
   const { userId, isAuthenticated } = useAuth();
   const [data, setData] = useState<PageResult<ItineraryResponse> | null>(null);
   const [loading, setLoading] = useState(true);
+  const [page, setPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(1);
+  const [pageSize, setPageSize] = useState(8);
+  const [selectedId, setSelectedId] = useState<number | null>(null);
+// F99：行程列表每页条数可选（默认 8）
+const PAGE_SIZE_OPTIONS = [8, 10, 20, 50];
 
   useEffect(() => {
     if (!isAuthenticated) {
@@ -26,10 +36,24 @@ function ItineraryListContent() {
     }
   }, [userId, isAuthenticated]);
 
-  const loadData = async () => {
+const loadData = async (targetPage = 1, size = pageSize) => {
+    // F102：命中预取缓存则直接展示（取走即删），避免切换卡顿
+    const cached = takePrefetch<PageResult<ItineraryResponse>>(`itinerary:${targetPage}:${size}`);
+    if (cached) {
+      setData(cached);
+      setPage(targetPage);
+      setPageSize(size);
+      setTotalPages(Math.max(1, cached.totalPages || 1));
+      setLoading(false);
+      return;
+    }
     try {
-      const res = await itineraryApi.list(userId!, 1, 20);
-      setData(res.data.data);
+      const res = await itineraryApi.list(userId!, targetPage, size);
+      const d = res.data.data;
+      setData(d);
+      setPage(targetPage);
+      setPageSize(size);
+      setTotalPages(Math.max(1, d?.totalPages || 1));
     } catch (err: any) {
       toast.error('加载失败: ' + getErrorMessage(err));
     } finally {
@@ -49,11 +73,7 @@ function ItineraryListContent() {
   };
 
   if (loading) {
-    return (
-      <div className="flex justify-center items-center py-20">
-        <Loader2 className="h-8 w-8 animate-spin text-brand-500" />
-      </div>
-    );
+    return <CardGridSkeleton count={4} />;
   }
 
   return (
@@ -61,7 +81,7 @@ function ItineraryListContent() {
       <div className="flex items-center justify-between mb-6">
         <h1 className="text-2xl font-bold">我的行程</h1>
         <Link
-          href="/"
+          href="/plan"
           className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-brand-500 text-white text-sm font-medium hover:bg-brand-600 magnetic"
         >
           <Plus className="h-4 w-4" /> 新建行程
@@ -74,7 +94,7 @@ function ItineraryListContent() {
             <div
               key={item.id}
               className="glass rounded-xl p-5 hover:shadow-lg transition-all magnetic cursor-pointer"
-              onClick={() => router.push(`/itinerary/${item.id}`)}
+              onClick={() => setSelectedId(item.id)}
             >
               <div className="flex items-start justify-between">
                 <div className="flex-1">
@@ -103,11 +123,44 @@ function ItineraryListContent() {
           ))}
         </div>
       ) : (
-        <div className="text-center py-20 text-slate-400">
-          <MapPin className="h-12 w-12 mx-auto mb-3 opacity-50" />
-          <p>还没有行程，开始规划你的第一次旅行吧！</p>
+        <EmptyState message="还没有行程，开始规划你的第一次旅行吧！" />
+      )}
+
+      {/* F99：分页 + 每页条数可选（默认 8） */}
+      {totalPages > 1 && (
+        <div className="flex items-center justify-center gap-2 mt-6">
+          <label className="flex items-center gap-1 text-sm text-slate-500">
+            每页
+            <select
+              value={pageSize}
+              onChange={(e) => loadData(1, Number(e.target.value))}
+              className="px-1.5 py-1 rounded border border-slate-200 dark:border-slate-700 bg-transparent text-sm"
+            >
+              {PAGE_SIZE_OPTIONS.map((n) => (
+                <option key={n} value={n}>{n} 条</option>
+              ))}
+            </select>
+          </label>
+          <button
+            disabled={page <= 1 || loading}
+            onClick={() => loadData(page - 1)}
+            className="px-3 py-1.5 rounded-lg text-sm bg-slate-100 dark:bg-slate-800 disabled:opacity-40"
+          >
+            上一页
+          </button>
+          <span className="text-sm text-slate-500">{page} / {totalPages}</span>
+          <button
+            disabled={page >= totalPages || loading}
+            onClick={() => loadData(page + 1)}
+            className="px-3 py-1.5 rounded-lg text-sm bg-slate-100 dark:bg-slate-800 disabled:opacity-40"
+          >
+            下一页
+          </button>
         </div>
       )}
+
+      {/* F103：行程名片弹窗（点击遮罩或右上角 × 关闭） */}
+      <ItineraryCardModal itineraryId={selectedId} onClose={() => setSelectedId(null)} />
     </div>
   );
 }

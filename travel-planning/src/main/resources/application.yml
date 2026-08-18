@@ -111,6 +111,27 @@ travel:
       enabled: true          # false → 全部走原 supervisor 流程（回滚开关）
       cache-size: 256
       llm-fallback: true     # 规则无法判定时用轻模型；false → 直接回退 PLANNING
+  # F90：Agent 调用前安全防护（Prompt 注入 / 熔断 / 限流）
+  guard:
+    enabled: true
+    prompt-injection:
+      enabled: true
+      block-keywords: 忽略以上,忽略之前,忽略系统,忽略所有指令,system prompt,系统提示词,扮演管理员,越权,泄露提示词,绕过限制,bypass,你的指令是什么
+      warn-keywords: 不要遵守,忘记之前的,假装你是
+    circuit-breaker:
+      failure-threshold: 3
+      window-ms: 60000
+      open-timeout-ms: 15000
+  # F89：Agent 调用追溯（t_agent_trace）
+  trace:
+    enabled: true
+    store: mysql
+    buffer-size: 1024
+    flush-interval-ms: 1000
+    batch-size: 50
+  # F87/F92：前端跨域白名单（精确 origin；代码层叠加 localhost:* 通配）
+  cors:
+    allowed-origins: http://localhost:3000,http://127.0.0.1:3000,http://localhost:3100,http://127.0.0.1:3100
 
 # ============ JWT ============
 jwt:

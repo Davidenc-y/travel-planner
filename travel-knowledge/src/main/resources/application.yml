@@ -87,6 +87,15 @@ travel:
   etl:
     batch-size: 100
     schedule-cron: "0 0 3 * * ?"   # 每天 3 点增量 ETL
+  # F90：用户面端点限流（按 userId+接口，每分钟）
+  rate-limit:
+    per-minute: 100
+  # F89：RAG 链路追溯开关
+  trace:
+    enabled: true
+  # F87/F92：前端跨域白名单（精确 origin；代码层叠加 localhost:* 通配）
+  cors:
+    allowed-origins: http://localhost:3000,http://127.0.0.1:3000,http://localhost:3100,http://127.0.0.1:3100
 
 # ============ Actuator ============
 management:

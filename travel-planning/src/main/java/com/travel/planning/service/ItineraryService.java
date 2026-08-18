@@ -17,6 +17,8 @@ import com.travel.planning.memory.longterm.ProfilePort;
 import com.travel.planning.memory.longterm.ProfileToolProvider;
 import com.travel.planning.memory.knowledge.SessionContextChunker;
 import com.travel.planning.memory.knowledge.SessionKnowledgeWriter;
+import com.travel.planning.guard.GuardService;
+import com.travel.planning.trace.TraceContext;
 import com.travel.planning.repository.ItineraryMapper;
 import com.travel.planning.workflow.TravelWorkflowBuilder;
 import lombok.RequiredArgsConstructor;
@@ -76,6 +78,8 @@ public class ItineraryService {
     // Phase C/F78：行程知识按天切片异步写入会话知识库
     private final SessionContextChunker sessionContextChunker;
     private final SessionKnowledgeWriter sessionKnowledgeWriter;
+    // F90：Agent 调用前安全防护（Prompt 注入等）
+    private final GuardService guardService;
 
     /**
      * 生成行程（调用 StateGraph 工作流 + 持久化 + 画像更新）
@@ -84,6 +88,21 @@ public class ItineraryService {
         // F52：防御脏 userId（兜底 0 会导致 user_id=0 行程/画像）。
         if (userId == null || userId <= 0) {
             throw new BusinessException(40101, "用户未登录");
+        }
+        // F90：调用前安全防护（对目的地/兴趣等文本做注入检测）
+        String guardInput = String.join(" ", req.getDestination(),
+                req.getInterests() == null ? "" : String.join(",", req.getInterests()),
+                req.getParty() == null ? "" : req.getParty());
+        var guard = guardService.check(String.valueOf(userId), guardInput);
+        if (!guard.allowed()) {
+            throw new BusinessException(40302, guard.reason());
+        }
+        // F89：追溯上下文填充（user/session）
+        if (TraceContext.active()) {
+            TraceContext.Holder h = TraceContext.current();
+            h.trace.setUserId(userId);
+            h.trace.setSessionId(req.getSessionId());
+            h.addPath("itinerary");
         }
         // 1. 幂等检查
         Itinerary existing = itineraryMapper.findByClientRequestId(req.getClientRequestId());

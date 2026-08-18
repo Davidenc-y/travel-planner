@@ -25,6 +25,8 @@ function clearAuth(): void {
   localStorage.removeItem('refreshToken');
   localStorage.removeItem('userId');
   localStorage.removeItem('username');
+  // F94：401 清凭据时同步清理 cookie（否则 middleware 仍放行，页面与守卫状态分裂）
+  document.cookie = 'accessToken=; path=/; max-age=0; SameSite=Lax';
 }
 
 function redirectToLogin(): void {
@@ -51,6 +53,9 @@ async function tryRefresh(): Promise<string | null> {
     localStorage.setItem('refreshToken', data.refreshToken);
     localStorage.setItem('userId', String(data.userId));
     localStorage.setItem('username', data.username);
+    if (typeof document !== 'undefined') {
+      document.cookie = `accessToken=${encodeURIComponent(data.accessToken)}; path=/; max-age=86400; SameSite=Lax`;
+    }
     return data.accessToken;
   } catch {
     clearAuth();
@@ -150,6 +155,25 @@ export const chatApi = {
     planningApi.get<R<import('@/types').ChatMessage[]>>(`/api/v1/chat/sessions/${sessionId}/history`),
   sendMessage: (sessionId: string, message: string) =>
     planningApi.post<R<import('@/types').ChatResponse>>(`/api/v1/chat/sessions/${sessionId}/messages`, { message }),
+  /**
+   * F92：流式聊天预留（SSE）。当前后端为一次性 JSON 响应，本方法返回原生 fetch Response；
+   * 后端支持 SSE 后，消费 response.body 的 ReadableStream 即可实现打字机效果。
+   */
+  sendMessageStream: (sessionId: string, message: string, signal?: AbortSignal) =>
+    fetch(`${PLANNING_BASE}/api/v1/chat/sessions/${sessionId}/messages`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(typeof window !== 'undefined' && localStorage.getItem('accessToken')
+          ? { Authorization: `Bearer ${localStorage.getItem('accessToken')}` }
+          : {}),
+        ...(typeof window !== 'undefined' && localStorage.getItem('userId')
+          ? { 'X-User-Id': localStorage.getItem('userId')! }
+          : {}),
+      },
+      body: JSON.stringify({ message }),
+      signal,
+    }),
 };
 
 // ==================== Attractions ====================

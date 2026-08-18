@@ -7,7 +7,10 @@ import { Loader2, Send, Plus, MessageSquare } from 'lucide-react';
 import { chatApi, getErrorMessage } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 import type { ChatMessage, ChatSession } from '@/types';
-import { cn, generateUUID } from '@/lib/utils';
+import { cn } from '@/lib/utils';
+import { ChatMessageContent } from '@/components/feature/chat-message-content';
+import { Skeleton } from '@/components/ui/skeleton';
+import { takePrefetch } from '@/lib/prefetch';
 
 function ChatContent() {
   const router = useRouter();
@@ -37,6 +40,13 @@ function ChatContent() {
   }, [messages]);
 
   const loadSessions = async () => {
+    // F102：命中预取缓存则直接展示
+    const cached = takePrefetch<ChatSession[]>('chat:sessions');
+    if (cached) {
+      setSessions(cached);
+      setLoading(false);
+      return;
+    }
     try {
       const res = await chatApi.listSessions(userId!);
       setSessions(res.data.data || []);
@@ -107,8 +117,9 @@ function ChatContent() {
 
   if (loading) {
     return (
-      <div className="flex justify-center items-center py-20">
-        <Loader2 className="h-8 w-8 animate-spin text-brand-500" />
+      <div className="space-y-4">
+        <Skeleton className="h-10 w-40" />
+        <Skeleton className="h-64 w-full" />
       </div>
     );
   }
@@ -167,7 +178,13 @@ function ChatContent() {
                       : 'bg-slate-100 dark:bg-slate-800 rounded-bl-sm'
                   )}
                 >
-                  <p className="text-sm whitespace-pre-wrap">{msg.content}</p>
+                  {msg.role === 'user' ? (
+                    <p className="text-sm whitespace-pre-wrap">{msg.content}</p>
+                  ) : (
+                    <div className="text-sm">
+                      <ChatMessageContent content={msg.content} />
+                    </div>
+                  )}
                 </div>
               </div>
             ))

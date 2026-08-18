@@ -4,15 +4,24 @@ import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
 import { Loader2, LogIn } from 'lucide-react';
+import { useEffect } from 'react';
 import { authApi, getErrorMessage } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 
 function LoginContent() {
   const router = useRouter();
-  const { login } = useAuth();
+  const { login, isAuthenticated } = useAuth();
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
+
+  // F93：已登录（localStorage 有 token）时自动回跳原目标页（middleware 307 带 from 参数）
+  useEffect(() => {
+    if (isAuthenticated) {
+      const from = new URLSearchParams(window.location.search).get('from');
+      router.replace(from && from.startsWith('/') ? from : '/');
+    }
+  }, [isAuthenticated, router]);
 
   const handleLogin = async () => {
     if (!username || !password) {
@@ -25,7 +34,11 @@ function LoginContent() {
       const data = res.data.data;
       login(data.accessToken, data.refreshToken, data.userId, data.username);
       toast.success('登录成功');
-      router.push('/');
+      // F97：整页跳转（cookie 已写入，服务端 middleware 必然放行），
+      // 避免客户端 router 导航与 middleware 竞争导致"停留在登录页、需手动刷新"
+      const from = new URLSearchParams(window.location.search).get('from');
+      const target = from && from.startsWith('/') ? from : '/';
+      window.location.href = target;
     } catch (err: any) {
       toast.error('登录失败: ' + getErrorMessage(err));
     } finally {

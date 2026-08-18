@@ -36,6 +36,12 @@
             <artifactId>spring-boot-starter-actuator</artifactId>
         </dependency>
 
+        <!-- Spring AOP（F89 Agent 追溯切面） -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-aop</artifactId>
+        </dependency>
+
         <!-- Spring AI Alibaba DashScope（LLM/Embedding） -->
         <dependency>
             <groupId>com.alibaba.cloud.ai</groupId>

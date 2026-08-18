@@ -4,8 +4,12 @@ import { useState } from 'react';
 import { toast } from 'sonner';
 import { Loader2, Search, MapPin, Star, Ticket } from 'lucide-react';
 import { attractionApi, getErrorMessage } from '@/lib/api';
-import type { Attraction, SearchResult } from '@/types';
+import type { Attraction, PageResult, SearchResult } from '@/types';
 import { formatCurrency } from '@/lib/utils';
+import { CardGridSkeleton } from '@/components/ui/skeleton';
+import { EmptyState } from '@/components/ui/empty-state';
+import { PagedSelect } from '@/components/ui/paged-options';
+import { takePrefetch } from '@/lib/prefetch';
 
 const typeLabels: Record<string, string> = {
   CULTURE: '文化', NATURE: '自然', FOOD: '美食',
@@ -20,6 +24,7 @@ const ragTypes = [
 ];
 
 const cityOptions = ['北京', '上海', '广州', '深圳', '杭州', '成都', '西安', '厦门', '南京', '重庆', '武汉', '长沙'];
+const ALL_CITY = '__all__';
 const PAGE_SIZE = 12;
 
 export default function AttractionsPage() {
@@ -27,7 +32,8 @@ export default function AttractionsPage() {
   const [ragType, setRagType] = useState('hybrid');
   const [results, setResults] = useState<SearchResult[]>([]);
   const [list, setList] = useState<Attraction[]>([]);
-  const [city, setCity] = useState<string>('');
+  const [cities, setCities] = useState<string[]>([]);
+  const [allSelected, setAllSelected] = useState(false);
   const [page, setPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
   const [loading, setLoading] = useState(false);
@@ -47,10 +53,21 @@ export default function AttractionsPage() {
     }
   };
 
-  const loadAll = async (targetPage = 1, targetCity = city) => {
+  const loadAll = async (targetPage = 1, cityList = cities, all = allSelected) => {
+    // F102：命中预取缓存则直接展示
+    const cached = takePrefetch<PageResult<Attraction>>(`attractions:${targetPage}:${PAGE_SIZE}`);
+    if (cached) {
+      setList(cached.list || []);
+      setTotalPages(Math.max(1, cached.totalPages || 1));
+      setPage(targetPage);
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     try {
-      const res = await attractionApi.list(targetCity || undefined, undefined, targetPage, PAGE_SIZE);
+      // F101：多城市逗号分隔传给后端（空数组=全部）
+      const cityQuery = !all && cityList.length > 0 ? cityList.join(',') : undefined;
+      const res = await attractionApi.list(cityQuery, undefined, targetPage, PAGE_SIZE);
       const data = res.data.data;
       setList(data?.list || []);
       setTotalPages(Math.max(1, data?.totalPages || 1));
@@ -64,8 +81,26 @@ export default function AttractionsPage() {
 
   const switchToBrowse = () => {
     setMode('browse');
-    setCity('');
-    loadAll(1, '');
+    setCities([]);
+    setAllSelected(false);
+    loadAll(1, [], false);
+  };
+
+  // F102：多选城市；"全部"与其他城市互斥（选中全部→其他取消；点城市→全部取消）
+  const onToggleCity = (v: string) => {
+    if (v === ALL_CITY) {
+      const nextAll = !allSelected;
+      setAllSelected(nextAll);
+      setCities([]);
+      loadAll(1, [], nextAll);
+      return;
+    }
+    const next = allSelected ? [v] : cities.includes(v)
+      ? cities.filter((c) => c !== v)
+      : [...cities, v];
+    setAllSelected(false);
+    setCities(next);
+    loadAll(1, next, false);
   };
 
   return (
@@ -80,7 +115,7 @@ export default function AttractionsPage() {
             mode === 'search' ? 'bg-brand-500 text-white' : 'bg-slate-100 dark:bg-slate-800'
           }`}
         >
-          RAG 检索
+          检索
         </button>
         <button
           onClick={switchToBrowse}
@@ -141,29 +176,22 @@ export default function AttractionsPage() {
         </>
       ) : (
         <>
-          {/* 城市筛选 */}
-          <div className="flex flex-wrap gap-2 mb-4">
-            <button
-              onClick={() => loadAll(1, '')}
-              className={`px-3 py-1.5 rounded-lg text-sm transition-colors ${
-                city === '' ? 'bg-brand-500 text-white' : 'bg-slate-100 dark:bg-slate-800'
-              }`}
-            >
-              全部
-            </button>
-            {cityOptions.map((c) => (
-              <button
-                key={c}
-                onClick={() => { setCity(c); loadAll(1, c); }}
-                className={`px-3 py-1.5 rounded-lg text-sm transition-colors ${
-                  city === c ? 'bg-brand-500 text-white' : 'bg-slate-100 dark:bg-slate-800'
-                }`}
-              >
-                {c}
-              </button>
-            ))}
+          {/* 城市筛选（F102：分页下拉多选，默认每页 10；"全部"与其他城市互斥） */}
+          <div className="mb-4 max-w-sm">
+            <PagedSelect
+              multiple
+              options={[
+                { value: ALL_CITY, label: '全部' },
+                ...cityOptions.map((c) => ({ value: c })),
+              ]}
+              selected={allSelected ? [ALL_CITY] : cities}
+              onToggle={onToggleCity}
+              placeholder={cities.length > 0 ? `已选 ${cities.length} 个城市` : '全部城市'}
+              defaultPageSize={10}
+            />
           </div>
 
+          {loading && <CardGridSkeleton count={6} />}
           <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
             {list.map((a) => (
               <div key={a.id} className="glass rounded-xl p-4 magnetic">
@@ -186,7 +214,9 @@ export default function AttractionsPage() {
               </div>
             ))}
             {list.length === 0 && !loading && (
-              <p className="col-span-full text-center py-10 text-slate-400">暂无数据</p>
+              <div className="col-span-full">
+                <EmptyState message="暂无数据" />
+              </div>
             )}
           </div>
 

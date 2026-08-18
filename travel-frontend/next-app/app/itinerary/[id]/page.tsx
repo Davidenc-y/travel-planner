@@ -2,16 +2,26 @@
 
 import { useEffect, useState, useRef } from 'react';
 import { useParams, useRouter } from 'next/navigation';
+import { useSearchParams } from 'next/navigation';
+import { decodeItineraryId } from '@/lib/url-guard';
 import { toast } from 'sonner';
-import { Loader2, ArrowLeft, MapPin, Calendar, DollarSign, Clock } from 'lucide-react';
+import { ArrowLeft, MapPin, Calendar, DollarSign, Clock } from 'lucide-react';
 import { itineraryApi, getErrorMessage } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 import type { ItineraryResponse } from '@/types';
 import { formatCurrency, formatDate } from '@/lib/utils';
 import { MarkmapView } from '@/components/markmap-view';
+import dynamic from 'next/dynamic';
+import { Skeleton } from '@/components/ui/skeleton';
+
+const BudgetPie = dynamic(() => import('@/components/feature/budget-pie').then((m) => m.BudgetPie), {
+  ssr: false,
+  loading: () => <Skeleton className="h-56 w-full" />,
+});
 
 function ItineraryDetailContent() {
   const params = useParams();
+  const searchParams = useSearchParams();
   const router = useRouter();
   const { isAuthenticated } = useAuth();
   const [data, setData] = useState<ItineraryResponse | null>(null);
@@ -22,14 +32,19 @@ function ItineraryDetailContent() {
       router.push('/login');
       return;
     }
-    if (params.id) {
+    // F94：地址栏参数名为短码（?i=38），还原为 itineraryId 再请求后端原始接口
+const q = searchParams.get('itineraryId');
+const rawId = q ? decodeItineraryId(q) : (Array.isArray(params.id) ? params.id[0] : params.id);
+    if (rawId) {
       loadData();
     }
-  }, [params.id, isAuthenticated]);
+  }, [params.id, searchParams, isAuthenticated]);
 
   const loadData = async () => {
     try {
-      const res = await itineraryApi.getById(Number(params.id));
+const q2 = searchParams.get('itineraryId');
+const rawId = q2 ? decodeItineraryId(q2) : (Array.isArray(params.id) ? params.id[0] : params.id);
+      const res = await itineraryApi.getById(Number(rawId));
       setData(res.data.data);
     } catch (err) {
       toast.error('加载失败: ' + getErrorMessage(err));
@@ -40,8 +55,10 @@ function ItineraryDetailContent() {
 
   if (loading) {
     return (
-      <div className="flex justify-center items-center py-20">
-        <Loader2 className="h-8 w-8 animate-spin text-brand-500" />
+      <div className="space-y-4">
+        <Skeleton className="h-8 w-1/3" />
+        <Skeleton className="h-24 w-full" />
+        <Skeleton className="h-64 w-full" />
       </div>
     );
   }
@@ -129,6 +146,16 @@ function ItineraryDetailContent() {
           <h2 className="text-xl font-semibold mb-3">思维导图</h2>
           <div className="glass rounded-xl p-4 h-[400px]">
             <MarkmapView data={data.mindmap} />
+          </div>
+        </div>
+      )}
+
+      {/* F92：预算概览 */}
+      {data.estimatedCost != null && (
+        <div className="mt-6">
+          <h2 className="text-xl font-semibold mb-3">预算概览</h2>
+          <div className="glass rounded-xl p-4">
+            <BudgetPie estimatedCost={data.estimatedCost} />
           </div>
         </div>
       )}

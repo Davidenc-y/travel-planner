@@ -4,6 +4,8 @@ import './globals.css';
 import { ThemeProvider } from '@/components/theme-provider';
 import { ClientLayout } from '@/components/client-layout';
 import { AuthProvider } from '@/lib/auth-context';
+import { ErrorBoundary } from '@/lib/error-boundary';
+import { PrefetchProvider } from '@/components/prefetch-provider';
 import { Toaster } from 'sonner';
 
 const inter = Inter({ subsets: ['latin'] });
@@ -19,8 +21,11 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       <body className={inter.className}>
         <ThemeProvider attribute="class" defaultTheme="system" enableSystem>
           <AuthProvider>
-            <ClientLayout>{children}</ClientLayout>
-            <Toaster position="top-right" richColors />
+            <ErrorBoundary>
+              <PrefetchProvider />
+              <ClientLayout>{children}</ClientLayout>
+              <Toaster position="top-right" richColors />
+            </ErrorBoundary>
           </AuthProvider>
         </ThemeProvider>
       </body>

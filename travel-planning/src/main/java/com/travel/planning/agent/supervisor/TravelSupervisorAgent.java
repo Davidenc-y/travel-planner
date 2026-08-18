@@ -19,8 +19,11 @@ import org.springframework.ai.chat.messages.SystemMessage;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.model.ChatResponse;
+import org.springframework.ai.chat.metadata.Usage;
 import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.stereotype.Component;
+import com.travel.planning.trace.TraceContext;
+import com.travel.common.guard.CircuitBreaker;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -69,6 +72,8 @@ public class TravelSupervisorAgent {
     private final BudgetEstimationAgent budgetAgent;
 
     private final TokenUsageInterceptor tokenUsageInterceptor;
+    // F91：熔断（LLM/Supervisor 调用保护）
+    private final CircuitBreaker.Registry circuitBreakerRegistry;
 
     private SupervisorAgent supervisor;
 
@@ -95,13 +100,15 @@ public class TravelSupervisorAgent {
                                   AttractionFilterAgent attrAgent,
                                   RouteArrangementAgent routeAgent,
                                   BudgetEstimationAgent budgetAgent,
-                                  TokenUsageInterceptor tokenUsageInterceptor) {
+                                  TokenUsageInterceptor tokenUsageInterceptor,
+                                  CircuitBreaker.Registry circuitBreakerRegistry) {
         this.chatModel = chatModel;
         this.prefAgent = prefAgent;
         this.attrAgent = attrAgent;
         this.routeAgent = routeAgent;
         this.budgetAgent = budgetAgent;
         this.tokenUsageInterceptor = tokenUsageInterceptor;
+        this.circuitBreakerRegistry = circuitBreakerRegistry;
     }
 
     @PostConstruct
@@ -196,7 +203,9 @@ public class TravelSupervisorAgent {
         log.info("开始执行行程规划: input={}, userId={}", userInput, userId);
         long start = System.currentTimeMillis();
         CompletableFuture<Optional<OverAllState>> future = null;
-        String requestId = UUID.randomUUID().toString();
+        // F89：追溯启用时复用切面生成的 requestId，与 TokenUsageInterceptor 关联
+        String requestId = TraceContext.active() ? TraceContext.current().requestId
+                : UUID.randomUUID().toString();
         tokenUsageInterceptor.begin(requestId);
         try {
             // F26 修复：必须执行 SupervisorAgent 整图（多步路由循环），
@@ -216,12 +225,16 @@ public class TravelSupervisorAgent {
             }
             RunnableConfig config = configBuilder.build();
             future = CompletableFuture.supplyAsync(
-                    () -> invokeSupervisorSafely(supervisor, userInput, config), SUPERVISOR_EXECUTOR);
+                    () -> circuitBreakerRegistry.of("supervisor").call("supervisor",
+                            () -> invokeSupervisorSafely(supervisor, userInput, config)),
+                    SUPERVISOR_EXECUTOR);
             OverAllState finalState = future.orTimeout(MAX_EXECUTION_SECONDS, TimeUnit.SECONDS)
                     .get()
                     .orElseThrow(() -> new IllegalStateException("Supervisor 未返回最终状态"));
             String result = buildFinalResponse(finalState);
+            long[] mainUsage = tokenUsageInterceptor.peek(requestId);
             long totalTokens = tokenUsageInterceptor.endAndGet(requestId);
+            applyTraceTokens(mainUsage);
             // F77/B4-2：路由截断/非 JSON 防护——四键全空且路由 FINISH、且疑似规划类请求时，
             // 用新 requestId 重试一次整图（F63 "playplay" 类问题：解析失败被框架当 FINISH，
             // 预算/规划被跳过）；仍空才走 F66 直答兜底。
@@ -240,14 +253,17 @@ public class TravelSupervisorAgent {
                 }
                 try {
                     CompletableFuture<Optional<OverAllState>> retryFuture = CompletableFuture.supplyAsync(
-                            () -> invokeSupervisorSafely(supervisor, userInput, retryBuilder.build()),
+                            () -> circuitBreakerRegistry.of("supervisor").call("supervisor",
+                                    () -> invokeSupervisorSafely(supervisor, userInput, retryBuilder.build())),
                             SUPERVISOR_EXECUTOR);
                     Optional<OverAllState> retried =
                             retryFuture.orTimeout(MAX_EXECUTION_SECONDS, TimeUnit.SECONDS).get();
                     if (retried.isPresent() && hasSectionOutput(retried.get())) {
                         finalState = retried.get();
                         result = buildFinalResponse(finalState);
+                        long[] retryUsage = tokenUsageInterceptor.peek(retryRequestId);
                         totalTokens += tokenUsageInterceptor.endAndGet(retryRequestId);
+                        applyTraceTokens(retryUsage);
                         log.info("路由重试成功: 重新生成规划, resultLength={}, tokens累计={}",
                                 result != null ? result.length() : 0, totalTokens);
                     } else {
@@ -290,7 +306,12 @@ public class TravelSupervisorAgent {
                     if (text != null && !text.isBlank()) {
                         result = text.trim();
                         if (direct.getMetadata() != null && direct.getMetadata().getUsage() != null) {
-                            totalTokens += direct.getMetadata().getUsage().getTotalTokens();
+                            Usage u = direct.getMetadata().getUsage();
+                            totalTokens += u.getTotalTokens() != null ? u.getTotalTokens() : 0;
+                            applyTraceTokens(new long[]{
+                                    u.getPromptTokens() != null ? u.getPromptTokens() : 0,
+                                    u.getCompletionTokens() != null ? u.getCompletionTokens() : 0,
+                                    u.getTotalTokens() != null ? u.getTotalTokens() : 0});
                         }
                         log.info("非规划类问题直答兜底: inputLength={}, answerLength={}",
                                 userInput.length(), result.length());
@@ -309,6 +330,7 @@ public class TravelSupervisorAgent {
                     textLen(finalState, "routePlan"),
                     textLen(finalState, "budgetEstimate"),
                     totalTokens);
+            applyTracePath(finalState);
             return new PlanningResult(result, totalTokens);
         } catch (ExecutionException e) {
             Throwable cause = e.getCause();
@@ -321,6 +343,10 @@ public class TravelSupervisorAgent {
                         "行程规划超时（超过 " + MAX_EXECUTION_SECONDS + " 秒），请稍后重试", e);
             }
             if (cause instanceof RuntimeException re) {
+                if (cause instanceof CircuitBreaker.CircuitOpenException) {
+                    log.warn("[CircuitBreaker] 熔断中，拒绝执行: {}", cause.getMessage());
+                    throw new IllegalStateException("服务繁忙，请稍后重试", cause);
+                }
                 throw re;
             }
             throw new IllegalStateException("行程规划执行失败", cause);
@@ -346,20 +372,24 @@ public class TravelSupervisorAgent {
      * 使用覆盖优先级 system 指令（会话最新确认/feedback > constraint > 画像）。
      */
     public PlanningResult answerDirect(String userInput, Long userId) {
+        if (TraceContext.active()) {
+            TraceContext.current().addPath("direct");
+        }
         String system = """
                 你正在基于组合输入回答用户的旅行问题。信息优先级：
                 1) 【会话最新确认】与【会话知识参考】中的 feedback/最新修正 > constraint > 用户画像；
                 2) 预算/目的地/天数等与画像不一致时，以会话内最近一次确认或修正为准；
                 3) 仅当输入无相关信息时才可基于常识作答。
                 """;
-        ChatResponse direct = chatModel.call(new Prompt(
-                List.of(new SystemMessage(system), new UserMessage(userInput))));
+        ChatResponse direct = circuitBreakerRegistry.of("chat").call("chat", () -> chatModel.call(
+                new Prompt(List.of(new SystemMessage(system), new UserMessage(userInput)))));
         String text = direct.getResult() != null && direct.getResult().getOutput() != null
                 ? direct.getResult().getOutput().getText() : "";
         long tokens = direct.getMetadata() != null && direct.getMetadata().getUsage() != null
                 ? direct.getMetadata().getUsage().getTotalTokens() : 0;
         log.info("[DirectAnswer] 入口直答: inputLength={}, answerLength={}, tokens={}",
                 userInput == null ? 0 : userInput.length(), text.length(), tokens);
+        applyDirectTokens(direct);
         return new PlanningResult(
                 text.isBlank() ? "抱歉，暂时无法回答，请稍后重试。" : text.trim(), tokens);
     }
@@ -369,6 +399,9 @@ public class TravelSupervisorAgent {
      * （零编造、低 token）；无切片时确定性返回"未找到"，不调 LLM。
      */
     public PlanningResult answerRecall(String userInput, List<Map<String, Object>> sessionHits) {
+        if (TraceContext.active()) {
+            TraceContext.current().addPath("recall");
+        }
         String skeleton = buildRecallSkeleton(sessionHits);
         String question = extractCurrentQuestion(userInput);
         if (skeleton.isBlank()) {
@@ -380,16 +413,62 @@ public class TravelSupervisorAgent {
                 你是行程回顾助手。以下骨架来自会话行程切片，请据此整理回答；
                 不得增删景点；信息不足时说明"未找到该行程记录"。
                 """;
-        ChatResponse direct = chatModel.call(new Prompt(List.of(
-                new SystemMessage(system),
-                new UserMessage(skeleton + "\n\n用户问题：" + question))));
+        ChatResponse direct = circuitBreakerRegistry.of("chat").call("chat", () -> chatModel.call(
+                new Prompt(List.of(
+                        new SystemMessage(system),
+                        new UserMessage(skeleton + "\n\n用户问题：" + question)))));
         String text = direct.getResult() != null && direct.getResult().getOutput() != null
                 ? direct.getResult().getOutput().getText() : "";
         long tokens = direct.getMetadata() != null && direct.getMetadata().getUsage() != null
                 ? direct.getMetadata().getUsage().getTotalTokens() : 0;
         log.info("[Recall] 回顾管线完成: skeletonLen={}, answerLen={}, tokens={}",
                 skeleton.length(), text.length(), tokens);
+        applyDirectTokens(direct);
         return new PlanningResult(text.isBlank() ? skeleton : text.trim(), tokens);
+    }
+
+    /** F89：直答/回顾路径的 token 写入追溯上下文 */
+    private static void applyDirectTokens(ChatResponse direct) {
+        if (!TraceContext.active() || direct.getMetadata() == null
+                || direct.getMetadata().getUsage() == null) {
+            return;
+        }
+        Usage u = direct.getMetadata().getUsage();
+        TraceContext.Holder h = TraceContext.current();
+        h.promptTokens += u.getPromptTokens() != null ? u.getPromptTokens() : 0;
+        h.completionTokens += u.getCompletionTokens() != null ? u.getCompletionTokens() : 0;
+        h.totalTokens += u.getTotalTokens() != null ? u.getTotalTokens() : 0;
+    }
+
+    /** F89：token 累计写入追溯上下文 */
+    private static void applyTraceTokens(long[] usage) {
+        if (!TraceContext.active()) {
+            return;
+        }
+        TraceContext.Holder h = TraceContext.current();
+        h.promptTokens += usage[0];
+        h.completionTokens += usage[1];
+        h.totalTokens += usage[2];
+    }
+
+    /** F89：调用路径 [supervisor, preference_analysis, ...] 写入追溯上下文 */
+    private static void applyTracePath(OverAllState state) {
+        if (!TraceContext.active()) {
+            return;
+        }
+        TraceContext.Holder h = TraceContext.current();
+        h.addPath("supervisor");
+        String[][] sections = {
+                {"preference", "preference_analysis"},
+                {"attractions", "attraction_filter"},
+                {"routePlan", "route_arrangement"},
+                {"budgetEstimate", "budget_estimation"},
+        };
+        for (String[] s : sections) {
+            if (!toText(state.value(s[0])).isBlank()) {
+                h.addPath(s[1]);
+            }
+        }
     }
 
     /** F85：从结构化切片提取 itinerary_day 骨架（已是最近一次行程过滤后的命中） */
