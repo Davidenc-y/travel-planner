@@ -25,6 +25,10 @@ import java.util.List;
 @RequiredArgsConstructor
 public class AttractionImportService {
 
+    /** F104 2.9：导入统计（新增/更新/跳过），供流水线与测试接口观测 */
+    public record ImportStats(int inserted, int updated, int skipped) {
+    }
+
     private final AttractionMapper attractionMapper;
     private final AttractionEtlService etlService;
 
@@ -36,6 +40,28 @@ public class AttractionImportService {
      */
     @Transactional
     public int importFromJsonFile(String filePath) throws Exception {
+        return importFromJsonFile(filePath, "insert");
+    }
+
+    /**
+     * 从 JSON 文件导入景点（F104 2.9：支持 insert/upsert 去重与更新）
+     *
+     * @param filePath JSON 文件路径
+     * @param mode     insert（默认，已存在跳过）/ upsert（已存在更新，爬虫刷新用）
+     * @return 成功新增数量（保持与 TC-13 口径兼容；updated/skip 记日志）
+     */
+    @Transactional
+    public int importFromJsonFile(String filePath, String mode) throws Exception {
+        return importWithStats(filePath, mode).inserted();
+    }
+
+    /**
+     * 从 JSON 文件导入景点并返回统计（F104 2.9：insert/upsert）
+     *
+     * @return {inserted, updated, skipped}
+     */
+    @Transactional
+    public ImportStats importWithStats(String filePath, String mode) throws Exception {
         // F30：统一路径分隔符（Windows 反斜杠 → 正斜杠），
         // 避免 Postman 传入原始反斜杠或 URL 编码差异导致 File 定位失败；跨平台均安全。
         String normalizedPath = filePath == null ? null : filePath.replace('\\', '/');
@@ -49,6 +75,7 @@ public class AttractionImportService {
                 JsonUtils.getMapper().getTypeFactory().constructCollectionType(List.class, Attraction.class));
 
         int success = 0;
+        int updated = 0;
         int skip = 0;
         for (Attraction a : attractions) {
             try {
@@ -58,7 +85,33 @@ public class AttractionImportService {
                                 .eq(Attraction::getName, a.getName())
                                 .eq(Attraction::getCity, a.getCity()));
                 if (existing != null) {
-                    skip++;
+                    if (!"upsert".equalsIgnoreCase(mode)) {
+                        skip++;
+                        continue;
+                    }
+                    // F104 2.9 upsert：复制可更新字段（保留 id/审计字段），重新 ETL 生效
+                    // F108：空字段不覆盖既有值（AMap 部分 POI 缺 rating/ticketPrice/description，
+                    // 直接拷贝 null 会清空库内已有优质数据）。
+                    java.util.List<String> ignore = new java.util.ArrayList<>(
+                            java.util.List.of("id", "createdAt", "updatedAt", "indexed", "deleted"));
+                    if (a.getRating() == null) ignore.add("rating");
+                    if (a.getRatingCount() == null) ignore.add("ratingCount");
+                    if (a.getTicketPrice() == null) ignore.add("ticketPrice");
+                    if (a.getFreeEntry() == null) ignore.add("freeEntry");
+                    if (a.getDescription() == null) ignore.add("description");
+                    if (a.getLat() == null) ignore.add("lat");
+                    if (a.getLng() == null) ignore.add("lng");
+                    if (a.getAddress() == null) ignore.add("address");
+                    if (a.getOpenHours() == null) ignore.add("openHours");
+                    if (a.getRecommendedDuration() == null) ignore.add("recommendedDuration");
+                    if (a.getTags() == null) ignore.add("tags");
+                    if (a.getImageUrl() == null) ignore.add("imageUrl");
+                    org.springframework.beans.BeanUtils.copyProperties(a, existing,
+                            ignore.toArray(new String[0]));
+                    existing.setIndexed(0);
+                    attractionMapper.updateById(existing);
+                    etlService.etlOne(existing);
+                    updated++;
                     continue;
                 }
 
@@ -78,8 +131,9 @@ public class AttractionImportService {
             }
         }
 
-        log.info("导入完成: 总计={}, 成功={}, 跳过(已存在)={}", attractions.size(), success, skip);
-        return success;
+        log.info("导入完成(mode={}): 总计={}, 新增={}, 更新={}, 跳过={}",
+                mode, attractions.size(), success, updated, skip);
+        return new ImportStats(success, updated, skip);
     }
 
     /**

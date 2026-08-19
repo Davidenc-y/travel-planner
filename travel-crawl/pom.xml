@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+    <parent>
+        <groupId>com.travel.planner</groupId>
+        <artifactId>travel-planner</artifactId>
+        <version>1.0-SNAPSHOT</version>
+    </parent>
+
+    <groupId>com.travel.crawl</groupId>
+    <artifactId>travel-crawl</artifactId>
+    <packaging>jar</packaging>
+    <name>travel-crawl</name>
+    <description>旅行景点爬虫模块（F104 规划：官方 API + jsoup，安全限频，0/1 串行文件队列）</description>
+
+    <dependencies>
+        <!-- Spring Boot Web（测试接口 /api/v1/crawl/* 用） -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-web</artifactId>
+        </dependency>
+        <!-- HTML 解析（详情页补充源） -->
+        <dependency>
+            <groupId>org.jsoup</groupId>
+            <artifactId>jsoup</artifactId>
+            <version>1.17.2</version>
+        </dependency>
+        <!-- 说明：骨架阶段不依赖 travel-common，保持轻量与解耦；
+             后续导入联动通过 HTTP 调用 knowledge /api/v1/etl/import 实现 -->
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+            </plugin>
+        </plugins>
+    </build>
+</project>

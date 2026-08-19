@@ -6,6 +6,7 @@ import com.travel.knowledge.service.AttractionImportService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.*;
+import jakarta.servlet.http.HttpServletResponse;
 
 import java.util.Map;
 
@@ -65,10 +66,18 @@ public class EtlController {
      * @return 成功导入数量
      */
     @PostMapping("/import")
-    public R<Integer> importFromJson(@RequestParam String filePath) {
+    public R<Integer> importFromJson(@RequestParam String filePath,
+                                     @RequestParam(defaultValue = "insert") String mode,
+                                     HttpServletResponse response) {
         log.info("触发数据导入: {}", filePath);
         try {
-            return R.ok(importService.importFromJsonFile(filePath));
+            AttractionImportService.ImportStats stats = importService.importWithStats(filePath, mode);
+            // F104 2.9：透传新增/更新/跳过统计（TC-13 的 R<Integer> 契约不变）
+            response.setHeader("X-Import-Stats",
+                    "{\"inserted\":" + stats.inserted()
+                            + ",\"updated\":" + stats.updated()
+                            + ",\"skipped\":" + stats.skipped() + "}");
+            return R.ok(stats.inserted());
         } catch (Exception e) {
             log.error("数据导入失败", e);
             return R.fail(50003, "数据导入失败: " + e.getMessage());

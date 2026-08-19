@@ -9,6 +9,11 @@ server:
 spring:
   application:
     name: travel-planning
+  # F104 P1：头像上传 ≤5MB（默认 1MB 会拒收）
+  servlet:
+    multipart:
+      max-file-size: 5MB
+      max-request-size: 6MB
 
   # Spring Cloud 兼容性检查 — Spring Boot 3.5.0 + Spring Cloud 4.2.0
   # 实际 API 兼容，仅版本号检查不通过，禁用即可
@@ -63,6 +68,13 @@ mybatis-plus:
 
 # ============ 应用专属配置 ============
 travel:
+  # F104 P1：MinIO 业务对象存储（头像 avatars 桶）
+  minio:
+    endpoint: http://192.168.253.129:9000
+    access-key: minioadmin
+    secret-key: minioadmin
+    attractions-bucket: attractions
+    avatars-bucket: avatars
   # 多模型路由
   ai:
     models:

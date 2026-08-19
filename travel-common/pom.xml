@@ -43,6 +43,12 @@
             <artifactId>redisson-spring-boot-starter</artifactId>
         </dependency>
 
+        <!-- MinIO（F104 P1 业务对象存储，版本由父 pom 管理） -->
+        <dependency>
+            <groupId>io.minio</groupId>
+            <artifactId>minio</artifactId>
+        </dependency>
+
         <!-- Hutool -->
         <dependency>
             <groupId>cn.hutool</groupId>

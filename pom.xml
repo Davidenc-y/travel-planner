@@ -27,6 +27,7 @@
         <module>travel-planning</module>
         <module>travel-knowledge</module>
         <module>travel-frontend</module>
+        <module>travel-crawl</module>
     </modules>
 
     <!-- ============================================================ -->
