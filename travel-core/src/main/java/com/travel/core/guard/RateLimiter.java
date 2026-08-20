@@ -1,4 +1,4 @@
-package com.travel.common.guard;
+package com.travel.core.guard;
 
 import lombok.extern.slf4j.Slf4j;
 
@@ -7,10 +7,10 @@ import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
- * 简单固定窗口限流器（F90）。
+ * 简单固定窗口限流器（F90 下沉至 travel-core，F110-B）。
  *
  * <p>按 key（如 userId:接口）在每分钟窗口内允许 perMinute 次；窗口滑动后重置。
- * 线程安全、无外部依赖，供 planning/knowledge 两服务复用，未来可替换为
+ * 线程安全、无外部依赖，供 planning/knowledge/crawl 复用，未来可替换为
  * Guava/RateLimiter 或 Redis 分布式实现（接口不变）。</p>
  */
 @Slf4j

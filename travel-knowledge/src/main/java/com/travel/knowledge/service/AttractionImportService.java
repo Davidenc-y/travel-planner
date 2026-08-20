@@ -1,6 +1,8 @@
 package com.travel.knowledge.service;
 
 import com.travel.common.entity.Attraction;
+import com.travel.core.data.MergeRules;
+import com.travel.core.data.SourceConfidence;
 import com.travel.common.util.JsonUtils;
 import com.travel.knowledge.etl.AttractionEtlService;
 import com.travel.knowledge.repository.AttractionMapper;
@@ -10,6 +12,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.io.File;
+import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -27,6 +30,10 @@ public class AttractionImportService {
 
     /** F104 2.9：导入统计（新增/更新/跳过），供流水线与测试接口观测 */
     public record ImportStats(int inserted, int updated, int skipped) {
+    }
+
+    /** F119：导入结果 = 统计 + 受影响行（入库事务提交后由调用方并行 ETL） */
+    public record ImportResult(ImportStats stats, List<Attraction> affected) {
     }
 
     private final AttractionMapper attractionMapper;
@@ -52,7 +59,7 @@ public class AttractionImportService {
      */
     @Transactional
     public int importFromJsonFile(String filePath, String mode) throws Exception {
-        return importWithStats(filePath, mode).inserted();
+        return importWithStats(filePath, mode).stats().inserted();
     }
 
     /**
@@ -61,7 +68,7 @@ public class AttractionImportService {
      * @return {inserted, updated, skipped}
      */
     @Transactional
-    public ImportStats importWithStats(String filePath, String mode) throws Exception {
+    public ImportResult importWithStats(String filePath, String mode) throws Exception {
         // F30：统一路径分隔符（Windows 反斜杠 → 正斜杠），
         // 避免 Postman 传入原始反斜杠或 URL 编码差异导致 File 定位失败；跨平台均安全。
         String normalizedPath = filePath == null ? null : filePath.replace('\\', '/');
@@ -77,40 +84,24 @@ public class AttractionImportService {
         int success = 0;
         int updated = 0;
         int skip = 0;
+        List<Attraction> affected = new ArrayList<>();
         for (Attraction a : attractions) {
             try {
                 // 检查是否已存在（按名称+城市去重）
-                Attraction existing = attractionMapper.selectOne(
-                        new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<Attraction>()
-                                .eq(Attraction::getName, a.getName())
-                                .eq(Attraction::getCity, a.getCity()));
+                Attraction existing = findExisting(a);
                 if (existing != null) {
                     if (!"upsert".equalsIgnoreCase(mode)) {
                         skip++;
                         continue;
                     }
-                    // F104 2.9 upsert：复制可更新字段（保留 id/审计字段），重新 ETL 生效
-                    // F108：空字段不覆盖既有值（AMap 部分 POI 缺 rating/ticketPrice/description，
-                    // 直接拷贝 null 会清空库内已有优质数据）。
-                    java.util.List<String> ignore = new java.util.ArrayList<>(
-                            java.util.List.of("id", "createdAt", "updatedAt", "indexed", "deleted"));
-                    if (a.getRating() == null) ignore.add("rating");
-                    if (a.getRatingCount() == null) ignore.add("ratingCount");
-                    if (a.getTicketPrice() == null) ignore.add("ticketPrice");
-                    if (a.getFreeEntry() == null) ignore.add("freeEntry");
-                    if (a.getDescription() == null) ignore.add("description");
-                    if (a.getLat() == null) ignore.add("lat");
-                    if (a.getLng() == null) ignore.add("lng");
-                    if (a.getAddress() == null) ignore.add("address");
-                    if (a.getOpenHours() == null) ignore.add("openHours");
-                    if (a.getRecommendedDuration() == null) ignore.add("recommendedDuration");
-                    if (a.getTags() == null) ignore.add("tags");
-                    if (a.getImageUrl() == null) ignore.add("imageUrl");
-                    org.springframework.beans.BeanUtils.copyProperties(a, existing,
-                            ignore.toArray(new String[0]));
+                    // F110-B：字段级合并策略（非空 且 来源置信度不低于现有值才覆盖），
+                    // 取代 F108 的空值保护特例；身份字段 name/city/poiId 不覆盖。
+                    mergeFields(existing, a,
+                            SourceConfidence.ofSource(existing.getSource()),
+                            SourceConfidence.ofSource(a.getSource()));
                     existing.setIndexed(0);
                     attractionMapper.updateById(existing);
-                    etlService.etlOne(existing);
+                    affected.add(existing);
                     updated++;
                     continue;
                 }
@@ -121,9 +112,7 @@ public class AttractionImportService {
                 if (a.getSource() == null) a.setSource("manual");
 
                 attractionMapper.insert(a);
-
-                // 同步触发 ETL
-                etlService.etlOne(a);
+                affected.add(a);
                 success++;
             } catch (Exception e) {
                 log.error("导入失败: name={}, city={}, error={}",
@@ -133,7 +122,47 @@ public class AttractionImportService {
 
         log.info("导入完成(mode={}): 总计={}, 新增={}, 更新={}, 跳过={}",
                 mode, attractions.size(), success, updated, skip);
-        return new ImportStats(success, updated, skip);
+        return new ImportResult(new ImportStats(success, updated, skip), affected);
+    }
+
+    /** 存在性查询：优先 poi_id（F110-B 幂等键），其次 name+city */
+    private Attraction findExisting(Attraction a) {
+        if (a.getPoiId() != null && !a.getPoiId().isBlank()) {
+            Attraction byPoi = attractionMapper.selectOne(
+                    new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<Attraction>()
+                            .eq(Attraction::getPoiId, a.getPoiId()));
+            if (byPoi != null) {
+                return byPoi;
+            }
+        }
+        return attractionMapper.selectOne(
+                new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<Attraction>()
+                        .eq(Attraction::getName, a.getName())
+                        .eq(Attraction::getCity, a.getCity()));
+    }
+
+    /** F110-B 字段级合并：incoming 非空且置信度 >= 现有值时覆盖；身份字段除外 */
+    private void mergeFields(Attraction t, Attraction incoming,
+                             SourceConfidence tConf, SourceConfidence inConf) {
+        t.setDistrict(MergeRules.choose(t.getDistrict(), tConf, incoming.getDistrict(), inConf));
+        t.setType(MergeRules.choose(t.getType(), tConf, incoming.getType(), inConf));
+        t.setDescription(MergeRules.choose(t.getDescription(), tConf, incoming.getDescription(), inConf));
+        t.setLat(MergeRules.choose(t.getLat(), tConf, incoming.getLat(), inConf));
+        t.setLng(MergeRules.choose(t.getLng(), tConf, incoming.getLng(), inConf));
+        t.setAddress(MergeRules.choose(t.getAddress(), tConf, incoming.getAddress(), inConf));
+        t.setOpenHours(MergeRules.choose(t.getOpenHours(), tConf, incoming.getOpenHours(), inConf));
+        t.setTicketPrice(MergeRules.choose(t.getTicketPrice(), tConf, incoming.getTicketPrice(), inConf));
+        t.setFreeEntry(MergeRules.choose(t.getFreeEntry(), tConf, incoming.getFreeEntry(), inConf));
+        t.setRating(MergeRules.choose(t.getRating(), tConf, incoming.getRating(), inConf));
+        t.setRatingCount(MergeRules.choose(t.getRatingCount(), tConf, incoming.getRatingCount(), inConf));
+        t.setTags(MergeRules.choose(t.getTags(), tConf, incoming.getTags(), inConf));
+        t.setRecommendedDuration(MergeRules.choose(
+                t.getRecommendedDuration(), tConf, incoming.getRecommendedDuration(), inConf));
+        t.setImageUrl(MergeRules.choose(t.getImageUrl(), tConf, incoming.getImageUrl(), inConf));
+        t.setSource(MergeRules.choose(t.getSource(), tConf, incoming.getSource(), inConf));
+        if (t.getPoiId() == null && incoming.getPoiId() != null) {
+            t.setPoiId(incoming.getPoiId());
+        }
     }
 
     /**

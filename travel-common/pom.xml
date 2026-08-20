@@ -18,6 +18,12 @@
     <description>公共基础模块：Entity/DTO/Enum/Exception/Result/Util</description>
 
     <dependencies>
+        <!-- 纯 Java 共享内核（熔断/限流/归一化/合并策略），无自动配置 -->
+        <dependency>
+            <groupId>com.travel.core</groupId>
+            <artifactId>travel-core</artifactId>
+        </dependency>
+
         <!-- Spring Boot Web（提供 R<T> 序列化、@RestControllerAdvice 等） -->
         <dependency>
             <groupId>org.springframework.boot</groupId>

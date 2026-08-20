@@ -3,7 +3,7 @@ package com.travel.crawl.store;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.type.CollectionType;
 import com.travel.crawl.config.CrawlProperties;
-import com.travel.crawl.model.CrawlItem;
+import com.travel.crawl.model.AttractionRaw;
 import com.travel.crawl.util.Normalizer;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
@@ -40,22 +40,22 @@ public class LocalCrawlFileStore implements CrawlFileStore {
     }
 
     @Override
-    public void append(List<CrawlItem> items) throws IOException {
+    public void append(List<AttractionRaw> items) throws IOException {
         if (items == null || items.isEmpty()) {
             return;
         }
         synchronized (lock) {
             Path target = latestPending();
-            List<CrawlItem> merged = new ArrayList<>();
-            Map<String, CrawlItem> byKey = new LinkedHashMap<>();
+            List<AttractionRaw> merged = new ArrayList<>();
+            Map<String, AttractionRaw> byKey = new LinkedHashMap<>();
             if (target != null) {
-                for (CrawlItem it : readFile(target)) {
+                for (AttractionRaw it : readFile(target)) {
                     byKey.put(normalizer.dedupKey(it), it);
                 }
             } else {
                 target = dir.resolve("0_" + LocalDateTime.now().format(TS) + "_" + PREFIX);
             }
-            for (CrawlItem it : items) {
+            for (AttractionRaw it : items) {
                 byKey.put(normalizer.dedupKey(it), it);
             }
             merged.addAll(byKey.values());
@@ -106,17 +106,17 @@ public class LocalCrawlFileStore implements CrawlFileStore {
         return Files.isRegularFile(p) && p.getFileName().toString().startsWith("0_");
     }
 
-    private List<CrawlItem> readFile(Path p) throws IOException {
+    private List<AttractionRaw> readFile(Path p) throws IOException {
         if (Files.size(p) == 0) {
             return List.of();
         }
         CollectionType type = mapper.getTypeFactory()
-                .constructCollectionType(List.class, CrawlItem.class);
-        List<CrawlItem> list = mapper.readValue(p.toFile(), type);
+                .constructCollectionType(List.class, AttractionRaw.class);
+        List<AttractionRaw> list = mapper.readValue(p.toFile(), type);
         return list == null ? List.of() : list;
     }
 
-    private void atomicWrite(Path target, List<CrawlItem> items) throws IOException {
+    private void atomicWrite(Path target, List<AttractionRaw> items) throws IOException {
         Path tmp = target.resolveSibling(target.getFileName() + ".tmp");
         mapper.writeValue(tmp.toFile(), items);
         Files.move(tmp, target, StandardCopyOption.REPLACE_EXISTING);

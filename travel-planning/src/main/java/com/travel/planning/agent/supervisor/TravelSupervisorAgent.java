@@ -23,7 +23,7 @@ import org.springframework.ai.chat.metadata.Usage;
 import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.stereotype.Component;
 import com.travel.planning.trace.TraceContext;
-import com.travel.common.guard.CircuitBreaker;
+import com.travel.core.guard.CircuitBreaker;
 
 import java.util.ArrayList;
 import java.util.List;

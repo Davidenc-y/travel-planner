@@ -1,12 +1,14 @@
 package com.travel.crawl.service;
 
-import com.travel.crawl.api.AmapClient;
 import com.travel.crawl.config.CrawlProperties;
-import com.travel.crawl.model.CrawlItem;
-import com.travel.crawl.pipeline.CrawlImageUploader;
+import com.travel.crawl.model.AttractionRaw;
+import com.travel.crawl.pipeline.CrawlPipeline;
 import com.travel.crawl.pipeline.PipelinePublisher;
+import com.travel.crawl.source.CrawlQuery;
+import com.travel.crawl.source.CrawlSource;
 import com.travel.crawl.store.CrawlFileStore;
-import com.travel.crawl.util.MonthlyQuotaGuard;
+import com.travel.crawl.store.CrawlQueue;
+import com.travel.crawl.util.QuotaGuard;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
@@ -17,33 +19,37 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
 
-/** 爬虫编排（F104 P0/P2）：分批轮转全量 + 定时一轮 + 内部测试循环 + 导入联动。 */
+/**
+ * 爬虫编排（F110-B）：Source SPI 多源抓取（主源空结果自动回退备胎）→ 管道
+ * （enrich/image/validate/dedupe）→ 执行队列（local/redis）→ 发布导入联动。
+ * 对外契约（trigger/status/test-rotate）保持不变，兼容 F108 回归。
+ */
 @Slf4j
 @Service
 public class CrawlService {
 
     private final CrawlProperties props;
-    private final AmapClient amapClient;
-    private final CrawlFileStore fileStore;
+    private final List<CrawlSource> sources;
+    private final CrawlQueue queue;
     private final PipelinePublisher pipelinePublisher;
-    private final MonthlyQuotaGuard quotaGuard;
-    private final HtmlDetailEnricher enricher;
-    private final CrawlImageUploader imageUploader;
+    private final QuotaGuard quotaGuard;
+    private final CrawlFileStore fileStore;
+    private final CrawlPipeline pipeline;
 
     private final AtomicBoolean running = new AtomicBoolean(false);
     private volatile int cityCursor = 0;
     private volatile Map<String, Object> lastResult = Map.of();
 
-    public CrawlService(CrawlProperties props, AmapClient amapClient, CrawlFileStore fileStore,
-                        PipelinePublisher pipelinePublisher, MonthlyQuotaGuard quotaGuard,
-                        HtmlDetailEnricher enricher, CrawlImageUploader imageUploader) {
+    public CrawlService(CrawlProperties props, List<CrawlSource> sources, CrawlQueue queue,
+                        PipelinePublisher pipelinePublisher, QuotaGuard quotaGuard,
+                        CrawlFileStore fileStore, CrawlPipeline pipeline) {
         this.props = props;
-        this.amapClient = amapClient;
-        this.fileStore = fileStore;
+        this.sources = sources;
+        this.queue = queue;
         this.pipelinePublisher = pipelinePublisher;
         this.quotaGuard = quotaGuard;
-        this.enricher = enricher;
-        this.imageUploader = imageUploader;
+        this.fileStore = fileStore;
+        this.pipeline = pipeline;
     }
 
     /** 执行一轮抓取（可指定单城市覆盖轮转） */
@@ -116,42 +122,83 @@ public class CrawlService {
         m.put("state", state == null ? (running.get() ? "running" : "idle") : state);
         m.put("quotaUsed", quotaGuard.used());
         m.put("quotaLimit", quotaGuard.limit());
+        m.put("queuePending", queue.pendingCount());
         m.put("cities", props.getAmap().getCities());
         m.put("files", fileStore.listFiles().stream().map(p -> p.getFileName().toString()).toList());
         m.put("lastResult", lastResult);
         return m;
     }
 
+    /** 人工补录（F110-B Phase 3）：入队→发布导入（MANUAL 置信度，upsert）→ack */
+    public Map<String, Object> importManual(AttractionRaw item) {
+        if (!props.isEnabled()) {
+            return status("disabled");
+        }
+        if (!running.compareAndSet(false, true)) {
+            return status("busy");
+        }
+        try {
+            queue.enqueue(List.of(item));
+            int imported = 0;
+            int updated = 0;
+            int skipped = 0;
+            List<String> done = new ArrayList<>();
+            for (CrawlQueue.CrawlBatch batch : queue.drain(100)) {
+                PipelinePublisher.PipelineResult result = pipelinePublisher.publish(Path.of(batch.ref()));
+                if (result.ok()) {
+                    queue.ack(batch.ref());
+                    imported += batch.items().size();
+                    updated += result.updated();
+                    skipped += result.skipped();
+                    done.add(Path.of(batch.ref()).getFileName().toString());
+                }
+            }
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("imported", imported);
+            m.put("updated", updated);
+            m.put("skipped", skipped);
+            m.put("importedFiles", done);
+            return m;
+        } finally {
+            running.set(false);
+        }
+    }
+
     private Map<String, Object> doRound(String cityOverride, int pageLimit) {
         List<String> cities = pickCities(cityOverride, props.getBatchCitiesPerRound());
         int requests = 0;
         int items = 0;
+        int descFilled = 0;
+        int descTotal = 0;
+        int descRate = 0;
         boolean quotaExhausted = false;
         int maxRequests = Math.max(1, props.getMaxRequestsPerRound());
         outer:
         for (String c : cities) {
+            String adcode = props.getAmap().cityAdcodeMap().get(c);
             for (int page = 1; page <= pageLimit; page++) {
                 if (requests >= maxRequests) {
                     log.info("[Crawl] 本轮请求数已达上限 {}，停止抓取", maxRequests);
                     break outer;
                 }
-                List<CrawlItem> pageItems;
+                List<AttractionRaw> pageItems;
                 try {
-                    pageItems = amapClient.search(c, page);
+                    pageItems = fetch(CrawlQuery.ofCity(c, adcode, props.getAmap().getTypes()), page);
                 } catch (IllegalStateException e) {
                     quotaExhausted = true;
                     log.warn("[Crawl] 配额耗尽，提前停止: {}", e.getMessage());
                     break;
                 }
                 requests++;
-                pageItems = enricher.enrich(pageItems);
-                pageItems = imageUploader.upload(pageItems);
+                pageItems = pipeline.process(pageItems);
                 items += pageItems.size();
-                try {
-                    fileStore.append(pageItems);
-                } catch (Exception e) {
-                    log.warn("[Crawl] 文件追加失败: {}", e.getMessage());
+                descTotal += pageItems.size();
+                for (AttractionRaw it : pageItems) {
+                    if (it.description() != null && !it.description().isBlank()) {
+                        descFilled++;
+                    }
                 }
+                queue.enqueue(pageItems);
                 if (pageItems.isEmpty()) {
                     break;
                 }
@@ -160,21 +207,25 @@ public class CrawlService {
                 break;
             }
         }
+        if (descTotal > 0) {
+            descRate = (int) Math.round(descFilled * 100.0 / descTotal);
+            log.info("[Crawl] 本轮描述填充率: {}/{} = {}%", descFilled, descTotal, descRate);
+        }
 
-        // 导入联动：读取 0_* → 发布导入（upsert）→ 成功置 1
+        // 发布导入联动：drain → 发布（upsert）→ 成功 ack（local=0→1 / redis=XACK）
         int imported = 0;
         int updated = 0;
         int skipped = 0;
         List<String> done = new ArrayList<>();
         try {
-            for (CrawlFileStore.PendingFile pf : fileStore.readPending()) {
-                PipelinePublisher.PipelineResult result = pipelinePublisher.publish(pf.file());
+            for (CrawlQueue.CrawlBatch batch : queue.drain(100)) {
+                PipelinePublisher.PipelineResult result = pipelinePublisher.publish(Path.of(batch.ref()));
                 if (result.ok()) {
-                    fileStore.markDone(pf.file());
-                    imported += pf.items().size();
+                    queue.ack(batch.ref());
+                    imported += batch.items().size();
                     updated += result.updated();
                     skipped += result.skipped();
-                    done.add(pf.file().getFileName().toString());
+                    done.add(Path.of(batch.ref()).getFileName().toString());
                 }
             }
         } catch (Exception e) {
@@ -185,13 +236,38 @@ public class CrawlService {
         m.put("cities", cities);
         m.put("requests", requests);
         m.put("items", items);
+        m.put("descriptionFilled", descFilled);
+        m.put("descriptionTotal", descTotal);
+        m.put("descriptionFillRate", descRate);
         m.put("imported", imported);
         m.put("updated", updated);
         m.put("skipped", skipped);
         m.put("quotaUsed", quotaGuard.used());
         m.put("quotaLimit", quotaGuard.limit());
+        m.put("queuePending", queue.pendingCount());
         m.put("importedFiles", done);
         return m;
+    }
+
+    /** 多源抓取：优先 amap-text（adcode 优先），空结果依次回退其余启用源 */
+    private List<AttractionRaw> fetch(CrawlQuery query, int page) {
+        for (CrawlSource source : sources) {
+            if (!source.enabled()) {
+                continue;
+            }
+            try {
+                List<AttractionRaw> items = source.fetch(query, page);
+                if (!items.isEmpty()) {
+                    return items;
+                }
+                log.info("[Crawl] 源 {} 返回空，尝试下一源", source.name());
+            } catch (IllegalStateException e) {
+                throw e;
+            } catch (Exception e) {
+                log.warn("[Crawl] 源 {} 异常: {}", source.name(), e.getMessage());
+            }
+        }
+        return List.of();
     }
 
     private List<String> pickCities(String override, int batch) {

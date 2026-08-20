@@ -7,7 +7,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 /** 月度免费配额保护（F104 2.5）：5000/月，85% 告警、100% 停、次月重置。 */
 @Slf4j
-public class MonthlyQuotaGuard {
+public class MonthlyQuotaGuard implements QuotaGuard {
 
     private final int quota;
     private final double warnRatio;

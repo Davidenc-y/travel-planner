@@ -1,4 +1,4 @@
-package com.travel.common.guard;
+package com.travel.core.guard;
 
 import lombok.extern.slf4j.Slf4j;
 
@@ -10,11 +10,11 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
 
 /**
- * 轻量三态熔断器（F91）。
+ * 轻量三态熔断器（F91 下沉至 travel-core，F110-B）。
  *
  * <p>CLOSED（正常）→ 窗口内失败率超阈值 → OPEN（熔断 openTimeoutMs）→ HALF_OPEN
  * （放行一个探测请求）→ 成功回 CLOSED / 失败回 OPEN。线程安全、无外部依赖，
- * 供 planning/knowledge 复用；接口可替换为 resilience4j 实现。</p>
+ * 供 planning/knowledge/crawl 复用；接口可替换为 resilience4j 实现。</p>
  */
 @Slf4j
 public class CircuitBreaker {

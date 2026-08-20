@@ -1,8 +1,8 @@
 package com.travel.planning.config;
 
-import com.travel.common.guard.CircuitBreaker;
-import com.travel.common.guard.RateLimiter;
 import com.travel.common.guard.RateLimitInterceptor;
+import com.travel.core.guard.CircuitBreaker;
+import com.travel.core.guard.RateLimiter;
 import com.travel.planning.guard.GuardProperties;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;

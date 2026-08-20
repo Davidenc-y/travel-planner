@@ -1,6 +1,7 @@
 package com.travel.common.entity;
 
 import com.baomidou.mybatisplus.annotation.TableName;
+import com.baomidou.mybatisplus.annotation.TableField;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
 
@@ -64,6 +65,10 @@ public class Attraction extends BaseEntity {
 
     /** 图片 OSS URL */
     private String imageUrl;
+
+    /** 数据源 POI ID（F110-B 幂等键：高德 poi id 等） */
+    @TableField("poi_id")
+    private String poiId;
 
     /** 来源: ctrip/mafengwo/manual */
     private String source;

@@ -1,6 +1,6 @@
 package com.travel.crawl.store;
 
-import com.travel.crawl.model.CrawlItem;
+import com.travel.crawl.model.AttractionRaw;
 
 import java.io.IOException;
 import java.nio.file.Path;
@@ -10,7 +10,7 @@ import java.util.List;
 public interface CrawlFileStore {
 
     /** 串行追加（按归一化去重键合并去重；存在 0_* 则追加，否则新建） */
-    void append(List<CrawlItem> items) throws IOException;
+    void append(List<AttractionRaw> items) throws IOException;
 
     /** 读取全部待处理文件（0_*）及其内容 */
     List<PendingFile> readPending() throws IOException;
@@ -20,6 +20,6 @@ public interface CrawlFileStore {
 
     List<Path> listFiles();
 
-    record PendingFile(Path file, List<CrawlItem> items) {
+    record PendingFile(Path file, List<AttractionRaw> items) {
     }
 }

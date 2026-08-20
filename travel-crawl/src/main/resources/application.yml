@@ -1,6 +1,12 @@
 spring:
   application:
     name: travel-crawl
+  # F110-B：Redis（执行队列/持久配额，queue-type/quota-type=redis 时使用）
+  data:
+    redis:
+      host: ${CRAWL_REDIS_HOST:192.168.253.129}
+      port: ${CRAWL_REDIS_PORT:6379}
+      timeout: 5000ms
 
 server:
   port: 8087
@@ -27,29 +33,136 @@ travel:
     import:
       update-existing: true
       alias-map: {}
-    # jsoup 详情补充源（默认关闭）
-    enrich:
-      enabled: false
-      site-url: ""
+    # 详情补充源（F115：Wikidata 短描述默认开；HTML 站点补充默认关）
+    detail:
+      # 每批（单次管道调用）最多补全条目数：控制慢网络下单轮时长（默认 10）
+      max-items-per-batch: 10
+      wikidata:
+        enabled: true
+        base-url: https://www.wikidata.org
+        user-agent: "travel-planner-crawler/1.0 (contact: travel-planner@example.com)"
+        min-interval-ms: 1200
+        timeout-ms: 30000
+        connect-timeout-ms: 20000
+        max-search-results: 3
+        cache-enabled: true
+        cache-max-size: 256
+        cache-ttl-days: 7
+        # 部分网络对 Java TLS 指纹丢包（wikidata.org），JDK HttpClient 失败时降级 curl
+        fallback-curl-enabled: true
+        curl-path: "curl"
+        curl-timeout-ms: 40000
+        # auto=JDK优先+curl降级；curl=直连curl（国内网络推荐，规避 Java TLS 指纹丢包）
+        fetch-mode: "auto"
+      html:
+        enabled: false
+        site-url: ""
+        min-interval-ms: 2000
     # 爬取图片转存 MinIO（F104 P1 导入联动：抓取后→knowledge 上传端点→imageUrl 落库）
     image:
       upload-enabled: true
       max-bytes: 5242880          # 单张 ≤5MB
       timeout-ms: 15000           # 下载/上传超时 15s
+      parallelism: 4              # F119：图片下载+转存并行度（1~8）
     # 流水线 MQ（Phase 2 预留；false=本地直连 knowledge 导入）
     pipeline-mq-enabled: false
     # ============ 文件队列（0/1 前缀） ============
     file-dir: D:/IntelliJ_IDEA/project_graduate/travel-planner/scripts/data/crawl
     queue-capacity: 10000
+    # F110-B：执行队列/配额类型（local=进程内+0/1 文件；redis=Redis Stream/持久计数）
+    queue-type: local
+    quota-type: local
+    # F110-B：多源与备胎（mock/around 默认关）
+    sources:
+      mock-enabled: false
+      around-enabled: false
+      city-centers:
+        - {city: 北京, location: "116.4074,39.9042"}
+        - {city: 上海, location: "121.4737,31.2304"}
+        - {city: 广州, location: "113.2644,23.1291"}
+        - {city: 深圳, location: "114.0579,22.5431"}
+        - {city: 杭州, location: "120.1551,30.2741"}
+        - {city: 成都, location: "104.0665,30.5723"}
+        - {city: 西安, location: "108.9398,34.3416"}
+        - {city: 厦门, location: "118.0894,24.4798"}
+        - {city: 南京, location: "118.7969,32.0603"}
+        - {city: 武汉, location: "114.3054,30.5931"}
+        - {city: 长沙, location: "112.9388,28.2282"}
+        - {city: 苏州, location: "120.5853,31.2989"}
+        - {city: 桂林, location: "110.2900,25.2736"}
+        - {city: 青岛, location: "120.3826,36.0671"}
+        - {city: 大连, location: "121.6147,38.9140"}
+        - {city: 三亚, location: "109.5119,18.2528"}
+        - {city: 天津, location: "117.2009,39.0842"}
+        - {city: 重庆, location: "106.5516,29.5630"}
+    # F110-B：错误重试（CUQPS/网络，每次仍计配额）
+    retry:
+      max-retries: 2
+      retry-backoff-base-ms: 1000
+    # F110-B：按源熔断（复用 travel-core CircuitBreaker）
+    circuit:
+      failure-threshold: 3
+      window-ms: 60000
+      open-timeout-ms: 15000
     # ============ 导入联动（读取后调 knowledge 导入+向量化） ============
     knowledge-base-url: http://localhost:8082
     # ============ 官方 API（高德） ============
     amap:
-      # ★ 高德 Web 服务 Key
+      # ★ 高德 Web 服务 Key ${AMAP_WEB_API_KEY:}
       web-api-key: ${AMAP_WEB_API_KEY:}
       base-url: https://restapi.amap.com/v5/place/text
       # F104：全量地级行政单位（4 直辖市 + 293 地级市 + 自治州/地区/盟），覆盖全国 31 省级行政区
       cities: 北京,上海,天津,重庆,石家庄,唐山,秦皇岛,邯郸,邢台,保定,张家口,承德,沧州,廊坊,衡水,太原,大同,阳泉,长治,晋城,朔州,晋中,运城,忻州,临汾,吕梁,呼和浩特,包头,乌海,赤峰,通辽,鄂尔多斯,呼伦贝尔,巴彦淖尔,乌兰察布,兴安盟,锡林郭勒盟,阿拉善盟,沈阳,大连,鞍山,抚顺,本溪,丹东,锦州,营口,阜新,辽阳,盘锦,铁岭,朝阳,葫芦岛,长春,吉林,四平,辽源,通化,白山,松原,白城,延边朝鲜族自治州,哈尔滨,齐齐哈尔,鸡西,鹤岗,双鸭山,大庆,伊春,佳木斯,七台河,牡丹江,黑河,绥化,大兴安岭地区,南京,无锡,徐州,常州,苏州,南通,连云港,淮安,盐城,扬州,镇江,泰州,宿迁,杭州,宁波,温州,嘉兴,湖州,绍兴,金华,衢州,舟山,台州,丽水,合肥,芜湖,蚌埠,淮南,马鞍山,淮北,铜陵,安庆,黄山,滁州,阜阳,宿州,六安,亳州,池州,宣城,福州,厦门,莆田,三明,泉州,漳州,南平,龙岩,宁德,南昌,景德镇,萍乡,九江,新余,鹰潭,赣州,吉安,宜春,抚州,上饶,济南,青岛,淄博,枣庄,东营,烟台,潍坊,济宁,泰安,威海,日照,临沂,德州,聊城,滨州,菏泽,郑州,开封,洛阳,平顶山,安阳,鹤壁,新乡,焦作,濮阳,许昌,漯河,三门峡,南阳,商丘,信阳,周口,驻马店,武汉,黄石,十堰,宜昌,襄阳,鄂州,荆门,孝感,荆州,黄冈,咸宁,随州,恩施土家族苗族自治州,长沙,株洲,湘潭,衡阳,邵阳,岳阳,常德,张家界,益阳,郴州,永州,怀化,娄底,湘西土家族苗族自治州,广州,韶关,深圳,珠海,汕头,佛山,江门,湛江,茂名,肇庆,惠州,梅州,汕尾,河源,阳江,清远,东莞,中山,潮州,揭阳,云浮,南宁,柳州,桂林,梧州,北海,防城港,钦州,贵港,玉林,百色,贺州,河池,来宾,崇左,海口,三亚,三沙,儋州,成都,自贡,攀枝花,泸州,德阳,绵阳,广元,遂宁,内江,乐山,南充,眉山,宜宾,广安,达州,雅安,巴中,资阳,阿坝藏族羌族自治州,甘孜藏族自治州,凉山彝族自治州,贵阳,六盘水,遵义,安顺,毕节,铜仁,黔西南布依族苗族自治州,黔东南苗族侗族自治州,黔南布依族苗族自治州,昆明,曲靖,玉溪,保山,昭通,丽江,普洱,临沧,楚雄彝族自治州,红河哈尼族彝族自治州,文山壮族苗族自治州,西双版纳傣族自治州,大理白族自治州,德宏傣族景颇族自治州,怒江傈僳族自治州,迪庆藏族自治州,拉萨,日喀则,昌都,林芝,山南,那曲,阿里地区,西安,铜川,宝鸡,咸阳,渭南,延安,汉中,榆林,安康,商洛,兰州,嘉峪关,金昌,白银,天水,武威,张掖,平凉,酒泉,庆阳,定西,陇南,临夏回族自治州,甘南藏族自治州,西宁,海东,海北藏族自治州,黄南藏族自治州,海南藏族自治州,果洛藏族自治州,玉树藏族自治州,海西蒙古族藏族自治州,银川,石嘴山,吴忠,固原,中卫,乌鲁木齐,克拉玛依,吐鲁番,哈密,昌吉回族自治州,博尔塔拉蒙古自治州,巴音郭楞蒙古自治州,阿克苏地区,克孜勒苏柯尔克孜自治州,喀什地区,和田地区,伊犁哈萨克自治州,塔城地区,阿勒泰地区
+      # F110-B：城市名→adcode（region 优先 adcode；其余城市由 generate_city_adcodes.py 补齐；
+      # List<Bean> 绑定，规避 Spring Boot 3.5 非空 String Map 绑定回归）
+      city-adcodes:
+        - {city: 北京, adcode: "110000"}
+        - {city: 上海, adcode: "310000"}
+        - {city: 天津, adcode: "120000"}
+        - {city: 重庆, adcode: "500000"}
+        - {city: 广州, adcode: "440100"}
+        - {city: 深圳, adcode: "440300"}
+        - {city: 杭州, adcode: "330100"}
+        - {city: 成都, adcode: "510100"}
+        - {city: 西安, adcode: "610100"}
+        - {city: 厦门, adcode: "350200"}
+        - {city: 南京, adcode: "320100"}
+        - {city: 武汉, adcode: "420100"}
+        - {city: 长沙, adcode: "430100"}
+        - {city: 苏州, adcode: "320500"}
+        - {city: 桂林, adcode: "450300"}
+        - {city: 青岛, adcode: "370200"}
+        - {city: 大连, adcode: "210200"}
+        - {city: 三亚, adcode: "460200"}
+        - {city: 珠海, adcode: "440400"}
+        - {city: 佛山, adcode: "440600"}
+        - {city: 东莞, adcode: "441900"}
+        - {city: 中山, adcode: "442000"}
+        - {city: 郑州, adcode: "410100"}
+        - {city: 济南, adcode: "370100"}
+        - {city: 昆明, adcode: "530100"}
+        - {city: 哈尔滨, adcode: "230100"}
+        - {city: 沈阳, adcode: "210100"}
+        - {city: 长春, adcode: "220100"}
+        - {city: 石家庄, adcode: "130100"}
+        - {city: 太原, adcode: "140100"}
+        - {city: 合肥, adcode: "340100"}
+        - {city: 福州, adcode: "350100"}
+        - {city: 南昌, adcode: "360100"}
+        - {city: 南宁, adcode: "450100"}
+        - {city: 海口, adcode: "460100"}
+        - {city: 贵阳, adcode: "520100"}
+        - {city: 兰州, adcode: "620100"}
+        - {city: 西宁, adcode: "630100"}
+        - {city: 银川, adcode: "640100"}
+        - {city: 乌鲁木齐, adcode: "650100"}
+        - {city: 呼和浩特, adcode: "150100"}
+        - {city: 拉萨, adcode: "540100"}
+      # F110-B：typecode 前缀→业务标签（tags 推导；未命中走类型名兜底）
+      type-tag-map:
+        - {type-code: "110100", tags: ["文化", "地标"]}
+        - {type-code: "110200", tags: ["公园", "自然"]}
+        - {type-code: "110300", tags: ["宗教", "文化"]}
       types: "110000"
     # ============ UA 轮换 ============
     user-agents:
@@ -58,6 +171,8 @@ travel:
       - "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0 Safari/537.36"
     # ============ 内部测试接口（默认关闭，不对外开放） ============
     test-endpoint-enabled: false
+    # ============ 人工补录接口（F110-B Phase 3，默认关闭） ============
+    manual-endpoint-enabled: false
 
 logging:
   level:

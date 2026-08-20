@@ -3,8 +3,9 @@ package com.travel.crawl.pipeline;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.travel.crawl.config.CrawlProperties;
-import com.travel.crawl.model.CrawlItem;
+import com.travel.crawl.model.AttractionRaw;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import java.io.ByteArrayOutputStream;
@@ -19,14 +20,19 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.UUID;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.Semaphore;
 
 /**
  * 爬取图片入 MinIO（F104 P1 导入联动）：抓取后、写文件前，把高德图床 URL
  * 下载并经 knowledge 上传端点（/api/v1/files/images?bucket=attractions）转存 MinIO，
  * 使 t_attraction.imageUrl 指向业务对象存储。
  *
- * <p>降级语义：关闭开关 / 下载失败 / 非 jpg|jpeg|png / 超限时，原样保留原始 URL，
- * 不阻断主抓取链路（符合 F104 2.2 失败降级）。</p>
+ * <p>F119：并行下载+转存（虚拟线程 + 有界信号量），按原顺序收集；降级语义不变——
+ * 关闭开关 / 下载失败 / 非 jpg|jpeg|png / 超限时，原样保留原始 URL，不阻断主抓取链路。</p>
  */
 @Slf4j
 @Component
@@ -35,44 +41,114 @@ public class CrawlImageUploader {
     private final CrawlProperties props;
     private final HttpClient httpClient;
     private final ObjectMapper mapper = new ObjectMapper();
+    /** 可注入执行器（测试）；null=每批新建虚拟线程执行器 */
+    private final ExecutorService executor;
+    /** 可注入信号量（测试）；null=每批按 parallelism 新建 */
+    private final Semaphore semaphore;
 
+    @Autowired
     public CrawlImageUploader(CrawlProperties props) {
+        this(props, null, null);
+    }
+
+    /** 测试/定制构造：注入执行器与信号量（null 时按配置自动创建） */
+    CrawlImageUploader(CrawlProperties props, ExecutorService executor, Semaphore semaphore) {
         this.props = props;
         this.httpClient = HttpClient.newBuilder()
                 .connectTimeout(Duration.ofSeconds(15)).build();
+        this.executor = executor;
+        this.semaphore = semaphore;
     }
 
-    /** 逐条上传；失败保留原 URL */
-    public List<CrawlItem> upload(List<CrawlItem> items) {
+    /**
+     * 并行上传（F119）：虚拟线程 + 有界信号量；按原顺序收集；
+     * 单条失败保留原 URL（降级语义与串行一致）。
+     */
+    public List<AttractionRaw> upload(List<AttractionRaw> items) {
         if (!props.getImage().isUploadEnabled()) {
             return items;
         }
         if (items == null || items.isEmpty()) {
             return items;
         }
-        List<CrawlItem> out = new ArrayList<>(items.size());
-        for (CrawlItem it : items) {
-            String imageUrl = it.imageUrl();
-            if (imageUrl == null || imageUrl.isBlank()) {
-                out.add(it);
-                continue;
+        int parallelism = Math.max(1, Math.min(props.getImage().getParallelism(), 8));
+        Semaphore gate = semaphore != null ? semaphore : new Semaphore(parallelism);
+        ExecutorService exec = executor != null ? executor
+                : Executors.newVirtualThreadPerTaskExecutor();
+        List<String> originals = new ArrayList<>(items.size());
+        List<Future<AttractionRaw>> futures = new ArrayList<>(items.size());
+        for (AttractionRaw it : items) {
+            originals.add(it.imageUrl());
+            futures.add(exec.submit(() -> uploadItem(it, gate)));
+        }
+        List<AttractionRaw> out = new ArrayList<>(items.size());
+        int withImage = 0;
+        int uploaded = 0;
+        long t0 = System.currentTimeMillis();
+        try {
+            for (int i = 0; i < futures.size(); i++) {
+                AttractionRaw r;
+                try {
+                    r = futures.get(i).get();
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    r = items.get(i);
+                } catch (ExecutionException e) {
+                    log.warn("[ImageUpload] 任务异常（原样保留）: name={}, error={}",
+                            items.get(i).name(),
+                            e.getCause() == null ? e : e.getCause().getMessage());
+                    r = items.get(i);
+                }
+                String orig = originals.get(i);
+                if (orig != null && !orig.isBlank()) {
+                    withImage++;
+                    if (r.imageUrl() != null && !r.imageUrl().equals(orig)) {
+                        uploaded++;
+                    }
+                }
+                out.add(r);
             }
+        } finally {
+            if (executor == null) {
+                exec.shutdown();
+            }
+        }
+        log.info("[ImageUpload] 阶段耗时={}ms, 并行={}, 有图={}, 成功={}, 失败={}",
+                System.currentTimeMillis() - t0, parallelism, withImage, uploaded,
+                withImage - uploaded);
+        return out;
+    }
+
+    /** 单条下载+转存：Semaphore 限并发；异常/失败返回原条目 */
+    private AttractionRaw uploadItem(AttractionRaw it, Semaphore gate) {
+        String imageUrl = it.imageUrl();
+        if (imageUrl == null || imageUrl.isBlank()) {
+            return it;
+        }
+        try {
+            gate.acquire();
             try {
                 String minioUrl = uploadOne(imageUrl);
                 if (minioUrl != null && !minioUrl.isBlank()) {
-                    out.add(new CrawlItem(it.name(), it.city(), it.district(), it.type(),
-                            it.description(), it.lat(), it.lng(), it.address(), it.openHours(),
-                            it.ticketPrice(), it.freeEntry(), it.rating(), it.ratingCount(),
-                            it.tags(), it.recommendedDuration(), minioUrl, it.source()));
-                    continue;
+                    return new AttractionRaw(it.poiId(), it.name(), it.city(), it.district(),
+                            it.type(), it.description(), it.lat(), it.lng(), it.address(),
+                            it.openHours(), it.ticketPrice(), it.freeEntry(), it.rating(),
+                            it.ratingCount(), it.tags(), it.recommendedDuration(), minioUrl,
+                            it.source(), it.confidence(), it.imageUrls(), it.fetchedAt());
                 }
-            } catch (Exception e) {
-                log.warn("[ImageUpload] 转存 MinIO 失败（保留原 URL）: name={}, error={}",
-                        it.name(), e.getMessage());
+                return it;
+            } finally {
+                gate.release();
             }
-            out.add(it);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            log.warn("[ImageUpload] 中断（原样保留）: name={}", it.name());
+            return it;
+        } catch (Exception e) {
+            log.warn("[ImageUpload] 转存 MinIO 失败（保留原 URL）: name={}, error={}",
+                    it.name(), e.getMessage());
+            return it;
         }
-        return out;
     }
 
     /** 下载并上传单张图片（包可见，便于单元测试边界方法） */

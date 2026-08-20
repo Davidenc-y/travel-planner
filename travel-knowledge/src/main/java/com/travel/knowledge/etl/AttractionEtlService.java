@@ -2,10 +2,12 @@ package com.travel.knowledge.etl;
 
 import com.travel.common.entity.Attraction;
 import com.travel.common.util.JsonUtils;
+import com.travel.core.guard.RateLimiter;
+import com.travel.knowledge.config.EtlProperties;
 import com.travel.knowledge.repository.AttractionMapper;
 import io.milvus.client.MilvusServiceClient;
 import io.milvus.param.dml.InsertParam;
-import lombok.RequiredArgsConstructor;
+import io.milvus.param.dml.UpsertParam;
 import lombok.extern.slf4j.Slf4j;
 import org.elasticsearch.action.index.IndexRequest;
 import org.elasticsearch.client.RestHighLevelClient;
@@ -15,6 +17,12 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
 import java.util.*;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.Semaphore;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * 景点 ETL 管道服务
@@ -38,7 +46,6 @@ import java.util.*;
 @Slf4j
 @Service
 @SuppressWarnings("deprecation")
-@RequiredArgsConstructor
 public class AttractionEtlService {
 
     private static final String MILVUS_COLLECTION = "attraction_vectors";
@@ -48,6 +55,66 @@ public class AttractionEtlService {
     private final EmbeddingModel embeddingModel;
     private final MilvusServiceClient milvusClient;
     private final RestHighLevelClient esClient;
+    private final EtlProperties etlProps;
+    private final Semaphore etlGate;
+    private final RateLimiter embeddingLimiter;
+    private final AtomicLong lastEmbeddingNanos = new AtomicLong();
+
+    public AttractionEtlService(AttractionMapper attractionMapper, EmbeddingModel embeddingModel,
+                                MilvusServiceClient milvusClient, RestHighLevelClient esClient,
+                                EtlProperties etlProps) {
+        this.attractionMapper = attractionMapper;
+        this.embeddingModel = embeddingModel;
+        this.milvusClient = milvusClient;
+        this.esClient = esClient;
+        this.etlProps = etlProps;
+        this.etlGate = new Semaphore(Math.max(1, Math.min(etlProps.getParallelism(), 8)));
+        this.embeddingLimiter = new RateLimiter(Math.max(1, etlProps.getEmbeddingQps() * 60));
+    }
+
+    /**
+     * F119：并行 ETL 批次（虚拟线程 + 有界信号量 + Embedding 全局节流）。
+     * 行间相互独立、客户端均线程安全；单行失败保持 indexed=0 由定时 ETL 兜底。
+     *
+     * @return 成功条数
+     */
+    public int etlBatch(List<Attraction> rows) {
+        if (rows == null || rows.isEmpty()) {
+            return 0;
+        }
+        long t0 = System.currentTimeMillis();
+        ExecutorService exec = Executors.newVirtualThreadPerTaskExecutor();
+        List<Future<Boolean>> futures = new ArrayList<>(rows.size());
+        for (Attraction a : rows) {
+            futures.add(exec.submit(() -> etlOneGuarded(a)));
+        }
+        int success = 0;
+        int fail = 0;
+        try {
+            for (Future<Boolean> f : futures) {
+                try {
+                    if (Boolean.TRUE.equals(f.get())) {
+                        success++;
+                    } else {
+                        fail++;
+                    }
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    fail++;
+                } catch (ExecutionException e) {
+                    log.warn("[ETL] 并行任务异常: {}",
+                            e.getCause() == null ? e : e.getCause().getMessage());
+                    fail++;
+                }
+            }
+        } finally {
+            exec.shutdown();
+        }
+        log.info("[ETL] 批次完成: 总计={}, 成功={}, 失败={}, 并行={}, 耗时={}ms",
+                rows.size(), success, fail, etlProps.getParallelism(),
+                System.currentTimeMillis() - t0);
+        return success;
+    }
 
     /**
      * 全量 ETL：处理所有未索引景点
@@ -129,17 +196,51 @@ public class AttractionEtlService {
     // ==================== 内部方法 ====================
 
     private int processBatch(List<Attraction> attractions) {
-        int success = 0;
-        int fail = 0;
-        for (Attraction a : attractions) {
-            if (etlOne(a)) {
-                success++;
-            } else {
-                fail++;
+        return etlBatch(attractions);
+    }
+
+    /** 信号量 + Embedding 节流 + 单条 ETL（F119） */
+    private boolean etlOneGuarded(Attraction a) {
+        try {
+            etlGate.acquire();
+            try {
+                paceEmbedding();
+                return etlOne(a);
+            } finally {
+                etlGate.release();
             }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            log.warn("[ETL] 中断: id={}", a.getId());
+            return false;
         }
-        log.info("ETL 批次完成: 总计={}, 成功={}, 失败={}", attractions.size(), success, fail);
-        return success;
+    }
+
+    /**
+     * 全局 Embedding 节流：按 embeddingQps 保证相邻两次调用最小间隔
+     * （防 DashScope 并发 429；QPS=4 → 250ms 间隔，可配）。
+     */
+    private void paceEmbedding() throws InterruptedException {
+        long interval = Math.max(200_000_000L,
+                1_000_000_000L / Math.max(1, etlProps.getEmbeddingQps()));
+        long deadline = System.nanoTime() + etlProps.getTimeoutMs() * 1_000_000L;
+        while (true) {
+            long now = System.nanoTime();
+            long prev = lastEmbeddingNanos.get();
+            if (prev == 0 || now - prev >= interval) {
+                if (lastEmbeddingNanos.compareAndSet(prev, now)) {
+                    return;
+                }
+                continue;
+            }
+            if (now >= deadline) {
+                log.warn("[ETL] Embedding 节流等待超时，降级放行");
+                return;
+            }
+            long waitNanos = Math.min(interval - (now - prev),
+                    deadline - now);
+            Thread.sleep(waitNanos / 1_000_000L, (int) (waitNanos % 1_000_000L));
+        }
     }
 
     /**
@@ -202,7 +303,18 @@ public class AttractionEtlService {
                 .withFields(fields)
                 .build();
 
-        milvusClient.insert(insertParam);
+        // F110-B：优先 Upsert（按主键幂等，避免同一景点重复实体累积，见 F37/F110-B）；
+        // 失败回退 insert 保持既有行为。
+        try {
+            UpsertParam upsertParam = UpsertParam.newBuilder()
+                    .withCollectionName(MILVUS_COLLECTION)
+                    .withFields(fields)
+                    .build();
+            milvusClient.upsert(upsertParam);
+        } catch (Exception e) {
+            log.warn("[ETL] Milvus upsert 失败，回退 insert: {}", e.getMessage());
+            milvusClient.insert(insertParam);
+        }
         log.debug("Milvus 写入成功: id={}", docId);
     }
 

@@ -99,6 +99,9 @@ travel:
   etl:
     batch-size: 100
     schedule-cron: "0 0 3 * * ?"   # 每天 3 点增量 ETL
+    parallelism: 4                 # F119：ETL 并行度（1~8）
+    embedding-qps: 4               # F119：DashScope Embedding 全局节流（次/秒）
+    timeout-ms: 60000              # F119：单条 ETL 节流等待兜底（毫秒）
   # F90：用户面端点限流（按 userId+接口，每分钟）
   rate-limit:
     per-minute: 100

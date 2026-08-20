@@ -71,13 +71,16 @@ public class EtlController {
                                      HttpServletResponse response) {
         log.info("触发数据导入: {}", filePath);
         try {
-            AttractionImportService.ImportStats stats = importService.importWithStats(filePath, mode);
+            AttractionImportService.ImportResult result = importService.importWithStats(filePath, mode);
+            // F119：入库事务提交后，并行 ETL（await 完成，契约不变）
+            int etlOk = etlService.etlBatch(result.affected());
+            log.info("导入后并行 ETL: 处理 {} 条, 成功 {} 条", result.affected().size(), etlOk);
             // F104 2.9：透传新增/更新/跳过统计（TC-13 的 R<Integer> 契约不变）
             response.setHeader("X-Import-Stats",
-                    "{\"inserted\":" + stats.inserted()
-                            + ",\"updated\":" + stats.updated()
-                            + ",\"skipped\":" + stats.skipped() + "}");
-            return R.ok(stats.inserted());
+                    "{\"inserted\":" + result.stats().inserted()
+                            + ",\"updated\":" + result.stats().updated()
+                            + ",\"skipped\":" + result.stats().skipped() + "}");
+            return R.ok(result.stats().inserted());
         } catch (Exception e) {
             log.error("数据导入失败", e);
             return R.fail(50003, "数据导入失败: " + e.getMessage());

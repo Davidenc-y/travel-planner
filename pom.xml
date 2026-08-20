@@ -23,6 +23,7 @@
     <description>旅游行程智能规划助手 - 基于Spring AI Alibaba</description>
 
     <modules>
+        <module>travel-core</module>
         <module>travel-common</module>
         <module>travel-planning</module>
         <module>travel-knowledge</module>
@@ -127,6 +128,11 @@
             </dependency>
 
             <!-- 内部模块 -->
+            <dependency>
+                <groupId>com.travel.core</groupId>
+                <artifactId>travel-core</artifactId>
+                <version>${project.version}</version>
+            </dependency>
             <dependency>
                 <groupId>com.travel.common</groupId>
                 <artifactId>travel-common</artifactId>

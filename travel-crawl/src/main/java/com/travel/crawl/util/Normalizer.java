@@ -1,7 +1,7 @@
 package com.travel.crawl.util;
 
 import com.travel.crawl.config.CrawlProperties;
-import com.travel.crawl.model.CrawlItem;
+import com.travel.crawl.model.AttractionRaw;
 import org.springframework.stereotype.Component;
 
 import java.util.Map;
@@ -18,7 +18,7 @@ public final class Normalizer {
         this.aliasMap = props.getImportCfg().getAliasMap();
     }
 
-    public String dedupKey(CrawlItem item) {
+    public String dedupKey(AttractionRaw item) {
         return normalize(item.name()) + ":" + (item.city() == null ? "" : item.city().trim());
     }
 
