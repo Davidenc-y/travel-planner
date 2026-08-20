@@ -26,11 +26,12 @@ final class SupervisorResponseFormatter {
             return null;
         }
         String cleaned = raw.trim();
+        // M3-2/P2-10：按 state key 分派（标题仅供展示，不参与逻辑）
         return switch (title) {
-            case "偏好分析" -> formatPreference(cleaned);
-            case "推荐景点" -> formatAttractions(cleaned);
-            case "每日行程" -> formatRoutePlan(cleaned);
-            case "预算估算" -> formatBudget(cleaned);
+            case "preference" -> formatPreference(cleaned);
+            case "attractions" -> formatAttractions(cleaned);
+            case "routePlan" -> formatRoutePlan(cleaned);
+            case "budgetEstimate" -> formatBudget(cleaned);
             default -> cleaned;
         };
     }

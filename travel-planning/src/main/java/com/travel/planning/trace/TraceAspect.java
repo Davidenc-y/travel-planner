@@ -2,6 +2,7 @@ package com.travel.planning.trace;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.aspectj.lang.ProceedingJoinPoint;
 import org.aspectj.lang.annotation.Around;
 import org.aspectj.lang.annotation.Aspect;
@@ -24,6 +25,10 @@ public class TraceAspect {
     private final AgentTraceCollector collector;
     private final TraceProperties properties;
 
+    /** M3-1：模型名从配置读取（travel.ai.models.main），不再硬编码 */
+    @Value("${travel.ai.models.main:qwen3.7-max}")
+    private String modelName;
+
     @Around("execution(* com.travel.planning.service.ChatService.sendMessage(..))"
             + " || execution(* com.travel.planning.service.ItineraryService.generate(..))")
     public Object around(ProceedingJoinPoint pjp) throws Throwable {
@@ -39,7 +44,7 @@ public class TraceAspect {
         holder.trace.setEndpoint(isGenerate
                 ? "POST /api/v1/itineraries/generate"
                 : "POST /api/v1/chat/sessions/{id}/messages");
-        holder.trace.setModelName("qwen3.7-max");
+        holder.trace.setModelName(modelName);
         holder.path.add(type);
         try {
             Object result = pjp.proceed();

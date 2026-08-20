@@ -24,6 +24,7 @@ import com.travel.planning.workflow.TravelWorkflowBuilder;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.reactive.function.client.WebClientResponseException;
 
 import java.math.BigDecimal;
@@ -205,7 +206,7 @@ public class ItineraryService {
             entity.setMindmapData(finalMindmap);
             entity.setEstimatedCost(estimatedCost);
             entity.setClientRequestId(req.getClientRequestId());
-            itineraryMapper.insert(entity);
+            persistItinerary(entity);
 
             log.info("行程生成成功: id={}, destination={}, cost={}", entity.getId(), req.getDestination(), estimatedCost);
 
@@ -229,6 +230,13 @@ public class ItineraryService {
             log.error("行程生成失败: {}", e.getMessage(), e);
             throw new ItineraryGenerationException(buildUpstreamMessage(e), e);
         }
+    }
+
+    /** M3-2/P0-5：行程持久化独立事务（避免 LLM 长耗时占用事务连接，同时保证插入原子性） */
+    @Transactional
+    private Itinerary persistItinerary(Itinerary entity) {
+        itineraryMapper.insert(entity);
+        return entity;
     }
 
     /**

@@ -30,4 +30,18 @@ public final class ImageValidator {
             throw new IllegalArgumentException("仅支持 image/jpeg 或 image/png");
         }
     }
+
+    /** M3-1：图片魔数校验（jpg: FF D8 FF；png: 89 50 4E 47 0D 0A 1A 0A） */
+    public static void validate(byte[] content) {
+        if (content == null || content.length < 4) {
+            throw new IllegalArgumentException("图片内容为空或过短");
+        }
+        boolean jpeg = (content[0] & 0xFF) == 0xFF && (content[1] & 0xFF) == 0xD8
+                && (content[2] & 0xFF) == 0xFF;
+        boolean png = (content[0] & 0xFF) == 0x89 && (content[1] & 0xFF) == 0x50
+                && (content[2] & 0xFF) == 0x4E && (content[3] & 0xFF) == 0x47;
+        if (!jpeg && !png) {
+            throw new IllegalArgumentException("图片内容校验失败（非 jpg/png）");
+        }
+    }
 }

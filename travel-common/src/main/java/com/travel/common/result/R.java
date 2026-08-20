@@ -17,6 +17,9 @@ public class R<T> implements Serializable {
 
     private static final long serialVersionUID = 1L;
 
+    /** M3-6：成功业务码常量 */
+    public static final int CODE_OK = 200;
+
     /** 状态码：200=成功, 4xx=客户端错误, 5xx=服务端错误 */
     private int code;
 
@@ -65,6 +68,6 @@ public class R<T> implements Serializable {
      * 判断是否成功
      */
     public boolean isSuccess() {
-        return code == 200;
+        return code == CODE_OK;
     }
 }

@@ -4,6 +4,7 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import com.travel.common.guard.RateLimitInterceptor;
 import org.springframework.stereotype.Component;
 import org.springframework.web.servlet.HandlerInterceptor;
 
@@ -38,6 +39,8 @@ public class JwtAuthInterceptor implements HandlerInterceptor {
                     if (userId != null && userId > 0) {
                         UserContextHolder.setUserId(userId);
                         UserContextHolder.setUsername(username);
+                        // M3-1：同步写请求属性，供限流/日志使用（防 X-User-Id 伪造）
+                        request.setAttribute(RateLimitInterceptor.ATTR_USER_ID, userId);
                     }
                 }
             } catch (Exception e) {

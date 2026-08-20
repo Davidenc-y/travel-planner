@@ -37,6 +37,10 @@ public class RateLimiter {
             }
             return old;
         });
+        // M3-8/P2-17：窗口数超过阈值时清理过期窗口，防内存泄漏
+        if (windows.size() > 4096) {
+            windows.entrySet().removeIf(e -> e.getValue().minute() != minute);
+        }
         int count = w.count.incrementAndGet();
         return count <= perMinute;
     }

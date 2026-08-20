@@ -372,17 +372,10 @@ public class TravelWorkflowBuilder {
         public Map<String, Object> apply(OverAllState state) throws Exception {
             String itinerary = toText(state.value("itinerary"));
             log.info("[Node:mindmap_output] 生成思维导图, itineraryLen={}", itinerary.length());
-            String mindmap = """
-                    {
-                      "title": "旅行规划",
-                      "sections": [
-                        {"title": "行程安排", "items": ["第1天", "第2天", "第3天"]},
-                        {"title": "预算规划", "items": ["交通", "住宿", "餐饮", "门票"]},
-                        {"title": "注意事项", "items": ["天气", "证件", "紧急联系人"]}
-                      ]
-                    }""";
+            // M3-2/P0-6：不再输出与真实行程无关的静态 JSON；
+            // 由 ItineraryService 基于 itineraryJson 调用 MindmapGenerator 动态生成。
             Map<String, Object> result = new HashMap<>();
-            result.put("mindmap", mindmap);
+            result.put("mindmap", "");
             return result;
         }
     }

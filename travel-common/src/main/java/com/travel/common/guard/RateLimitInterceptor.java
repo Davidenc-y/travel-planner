@@ -15,6 +15,9 @@ import org.springframework.web.servlet.HandlerInterceptor;
 @Slf4j
 public class RateLimitInterceptor implements HandlerInterceptor {
 
+    /** M3-1：JWT 拦截器写入的请求级 userId（优于可伪造的 X-User-Id 头） */
+    public static final String ATTR_USER_ID = "travel.userId";
+
     private final RateLimiter limiter;
 
     public RateLimitInterceptor(RateLimiter limiter) {
@@ -37,6 +40,10 @@ public class RateLimitInterceptor implements HandlerInterceptor {
     }
 
     private String resolveUserId(HttpServletRequest request) {
+        Object attr = request.getAttribute(ATTR_USER_ID);
+        if (attr != null && !attr.toString().isBlank()) {
+            return attr.toString();
+        }
         String userId = request.getHeader("X-User-Id");
         if (userId == null || userId.isBlank()) {
             userId = "anonymous";

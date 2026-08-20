@@ -162,16 +162,17 @@ public class ChatService {
 
         // F58/B1.2：注入总预算兜底（超限先去掉最近窗口，仍超则压缩摘要）。
         if (inputTokens > memoryProps.getInputMaxTokens()) {
-            if (summaryUsed) {
-                String summaryOnly = sessionMemoryPort.getSummaryOrEmpty(sessionId);
+            // M3-2/P2-11：不再依赖 summaryUsed 才压缩——只要存在摘要即尝试（无摘要也能走该路径）
+            String summaryOnly = sessionMemoryPort.getSummaryOrEmpty(sessionId);
+            boolean hasSummary = !summaryOnly.isBlank();
+            if (hasSummary) {
                 historySection = "【会话摘要】\n" + summaryOnly;
                 composed = composeInput(profileContext, historySection, consensus, sessionContext, candidates, message);
                 inputTokens = sessionMemoryPort.estimateTokens(composed);
             }
-            if (inputTokens > memoryProps.getInputMaxTokens() && summaryUsed) {
+            if (inputTokens > memoryProps.getInputMaxTokens() && hasSummary) {
                 int reserve = sessionMemoryPort.estimateTokens(profileContext)
                         + sessionMemoryPort.estimateTokens("【当前问题】\n" + message) + 8;
-                String summaryOnly = sessionMemoryPort.getSummaryOrEmpty(sessionId);
                 String cut = sessionMemoryPort.truncateByTokens(
                         summaryOnly, Math.max(100, memoryProps.getInputMaxTokens() - reserve));
                 historySection = "【会话摘要】\n" + cut;

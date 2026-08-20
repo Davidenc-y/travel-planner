@@ -1,6 +1,7 @@
 package com.travel.common.exception;
 
 import com.travel.common.result.R;
+import jakarta.servlet.http.HttpServletResponse;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.validation.FieldError;
@@ -24,12 +25,19 @@ import jakarta.validation.ConstraintViolationException;
 @RestControllerAdvice
 public class GlobalExceptionHandler {
 
+    /** M3-6：业务异常 HTTP 状态对齐开关（默认 false 保持 HTTP 200 + body code 兼容旧契约） */
+    @org.springframework.beans.factory.annotation.Value("${travel.api.http-status-aligned:false}")
+    private boolean httpStatusAligned;
+
     /**
      * 业务异常
      */
     @ExceptionHandler(BusinessException.class)
-    public R<Void> handleBusiness(BusinessException e) {
+    public R<Void> handleBusiness(BusinessException e, HttpServletResponse response) {
         log.warn("业务异常: code={}, msg={}", e.getCode(), e.getMessage());
+        if (httpStatusAligned) {
+            response.setStatus(ErrorCode.of(e.getCode()).httpStatus());
+        }
         return R.fail(e.getCode(), e.getMessage());
     }
 

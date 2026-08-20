@@ -3,10 +3,9 @@ package com.travel.knowledge.rag.strategy;
 import com.travel.knowledge.rag.model.QueryIntent;
 import com.travel.knowledge.rag.support.RagFilterBuilder;
 import com.travel.knowledge.rag.model.SearchResult;
+import com.travel.knowledge.store.EsDocumentStore;
 import lombok.extern.slf4j.Slf4j;
-import org.elasticsearch.client.RestHighLevelClient;
 import org.elasticsearch.search.SearchHit;
-import org.elasticsearch.search.builder.SearchSourceBuilder;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
@@ -31,11 +30,11 @@ public class NaiveRagStrategy implements RagStrategy {
 
     private static final String INDEX_NAME = "attraction_index";
 
-    private final RestHighLevelClient esClient;
+    private final EsDocumentStore esStore;
 
     @Autowired
-    public NaiveRagStrategy(RestHighLevelClient esClient) {
-        this.esClient = esClient;
+    public NaiveRagStrategy(EsDocumentStore esStore) {
+        this.esStore = esStore;
     }
 
     @Override
@@ -44,17 +43,10 @@ public class NaiveRagStrategy implements RagStrategy {
         long start = System.currentTimeMillis();
 
         try {
-            var searchRequest = new org.elasticsearch.action.search.SearchRequest(INDEX_NAME);
-            var sourceBuilder = new SearchSourceBuilder();
-            // F40/P1：与 Hybrid 共用 RagFilterBuilder（multiMatch + city/type filter）。
-            sourceBuilder.query(RagFilterBuilder.esQuery(intent, intent.rawQuery()));
-            sourceBuilder.size(topK);
-            searchRequest.source(sourceBuilder);
-
-            var response = esClient.search(searchRequest, org.elasticsearch.client.RequestOptions.DEFAULT);
             List<SearchResult> results = new ArrayList<>();
-
-            for (SearchHit hit : response.getHits().getHits()) {
+            // M3-3：统一经 EsDocumentStore 检索
+            for (SearchHit hit : esStore.search(INDEX_NAME,
+                    RagFilterBuilder.esQuery(intent, intent.rawQuery()), topK)) {
                 var sourceMap = hit.getSourceAsMap();
                 results.add(SearchResult.builder()
                         .docId(hit.getId())

@@ -16,6 +16,7 @@ import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.util.UUID;
+import java.io.ByteArrayInputStream;
 
 /**
  * 用户头像上传（F104 P1）：图片存 MinIO avatars 桶并回写 t_user.avatar。
@@ -43,18 +44,16 @@ public class AvatarController {
             return R.fail(40001, "图片不能超过 5MB");
         }
         try {
+            byte[] data = file.getBytes();
             ImageValidator.validate(file.getOriginalFilename(), file.getContentType());
-        } catch (IllegalArgumentException e) {
-            return R.fail(40001, e.getMessage());
-        }
-        try {
+            ImageValidator.validate(data); // M3-1：魔数校验
             String original = file.getOriginalFilename() == null ? "avatar.png"
                     : file.getOriginalFilename();
             String ext = original.contains(".")
                     ? original.substring(original.lastIndexOf('.')).toLowerCase()
                     : ".png";
             String object = "u" + userId + "-" + UUID.randomUUID().toString().replace("-", "").substring(0, 16) + ext;
-            String url = fileStoragePort.upload(file.getInputStream(), file.getSize(),
+            String url = fileStoragePort.upload(new ByteArrayInputStream(data), data.length,
                     file.getContentType(), props.getAvatarsBucket(), object);
 
             // F121/P1：更新前清理旧头像对象（best-effort，仅删除 avatars 桶内对象）
@@ -74,6 +73,8 @@ public class AvatarController {
             userMapper.updateById(user);
             log.info("[Avatar] 头像更新成功: userId={}", userId);
             return R.ok(url);
+        } catch (IllegalArgumentException e) {
+            return R.fail(40001, e.getMessage());
         } catch (Exception e) {
             log.error("[Avatar] 头像上传失败", e);
             return R.fail(50003, "上传失败: " + e.getMessage());

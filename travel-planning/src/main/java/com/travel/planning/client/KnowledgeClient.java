@@ -38,12 +38,6 @@ public interface KnowledgeClient {
             @RequestParam("topK") int topK);
 
     /**
-     * 获取已注册的 RAG 策略列表
-     */
-    @GetMapping("/api/v1/rag/strategies")
-    R<Object> getStrategies();
-
-    /**
      * Phase C/F78：写入一条会话知识切片（knowledge /api/v1/memory/session-context）
      */
     @PostMapping("/api/v1/memory/session-context")

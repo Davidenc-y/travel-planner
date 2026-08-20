@@ -4,6 +4,7 @@ import lombok.extern.slf4j.Slf4j;
 
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
@@ -29,6 +30,8 @@ public class CircuitBreaker {
     private final AtomicInteger failures = new AtomicInteger();
     private final AtomicLong windowStart = new AtomicLong(System.currentTimeMillis());
     private final AtomicLong openedAt = new AtomicLong(0);
+    /** M3-8：HALF_OPEN 单探测许可（防并发全部放行） */
+    private final AtomicBoolean halfOpenProbe = new AtomicBoolean(false);
 
     public CircuitBreaker(int failureThreshold, long windowMs, long openTimeoutMs) {
         this.failureThreshold = Math.max(1, failureThreshold);
@@ -45,6 +48,10 @@ public class CircuitBreaker {
         if (isOpen()) {
             throw new CircuitOpenException("熔断中: " + key);
         }
+        boolean probe = state.get() == State.HALF_OPEN;
+        if (probe && !halfOpenProbe.compareAndSet(false, true)) {
+            throw new CircuitOpenException("半开探测中，拒绝并发请求: " + key);
+        }
         try {
             T result = supplier.get();
             onSuccess();
@@ -52,6 +59,10 @@ public class CircuitBreaker {
         } catch (Exception e) {
             onFailure();
             throw e;
+        } finally {
+            if (probe) {
+                halfOpenProbe.set(false);
+            }
         }
     }
 

@@ -4,15 +4,10 @@ import com.travel.knowledge.rag.support.RRFusion;
 import com.travel.knowledge.rag.model.QueryIntent;
 import com.travel.knowledge.rag.support.RagFilterBuilder;
 import com.travel.knowledge.rag.model.SearchResult;
-import io.milvus.param.MetricType;
-import io.milvus.param.R;
-import io.milvus.param.dml.SearchParam;
-import io.milvus.grpc.SearchResults;
-import io.milvus.response.SearchResultsWrapper;
+import com.travel.knowledge.store.EsDocumentStore;
+import com.travel.knowledge.store.MilvusVectorStore;
 import lombok.extern.slf4j.Slf4j;
-import org.elasticsearch.client.RestHighLevelClient;
 import org.elasticsearch.search.SearchHit;
-import org.elasticsearch.search.builder.SearchSourceBuilder;
 import org.springframework.ai.embedding.EmbeddingModel;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
@@ -21,6 +16,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.stream.Collectors;
 
 /**
@@ -39,17 +35,17 @@ public class HybridRagStrategy implements RagStrategy {
     private static final String ES_INDEX = "attraction_index";
     private static final String MILVUS_COLLECTION = "attraction_vectors";
 
-    private final RestHighLevelClient esClient;
+    private final EsDocumentStore esStore;
     private final EmbeddingModel embeddingModel;
-    private final io.milvus.client.MilvusServiceClient milvusClient;
+    private final MilvusVectorStore milvusStore;
 
     @Autowired
-    public HybridRagStrategy(RestHighLevelClient esClient,
+    public HybridRagStrategy(EsDocumentStore esStore,
                               EmbeddingModel embeddingModel,
-                              io.milvus.client.MilvusServiceClient milvusClient) {
-        this.esClient = esClient;
+                              MilvusVectorStore milvusStore) {
+        this.esStore = esStore;
         this.embeddingModel = embeddingModel;
-        this.milvusClient = milvusClient;
+        this.milvusStore = milvusStore;
     }
 
     @Override
@@ -84,18 +80,10 @@ public class HybridRagStrategy implements RagStrategy {
      */
     private List<RRFusion.ScoredItem> bm25Search(QueryIntent intent, int topK) {
         try {
-            var searchRequest = new org.elasticsearch.action.search.SearchRequest(ES_INDEX);
-            var sourceBuilder = new SearchSourceBuilder();
-            // F40/P1：统一由 RagFilterBuilder 依据 QueryIntent 构建 ES 查询
-            // （multiMatch + city/type filter），替换 F39 的静态城市检测。
-            sourceBuilder.query(RagFilterBuilder.esQuery(intent, intent.rawQuery()));
-            sourceBuilder.size(topK);
-            searchRequest.source(sourceBuilder);
-
-            var response = esClient.search(searchRequest, org.elasticsearch.client.RequestOptions.DEFAULT);
             List<RRFusion.ScoredItem> results = new ArrayList<>();
-
-            for (SearchHit hit : response.getHits().getHits()) {
+            // M3-3：统一经 EsDocumentStore 检索
+            for (SearchHit hit : esStore.search(ES_INDEX,
+                    RagFilterBuilder.esQuery(intent, intent.rawQuery()), topK)) {
                 var sourceMap = hit.getSourceAsMap();
                 results.add(new RRFusion.ScoredItem(
                         hit.getId(),
@@ -119,68 +107,27 @@ public class HybridRagStrategy implements RagStrategy {
      */
     private List<RRFusion.ScoredItem> knnSearch(QueryIntent intent, int topK) {
         try {
-            // F40/P1：Milvus 侧过滤由 RagFilterBuilder 依据 QueryIntent 生成 expr。
             String expr = RagFilterBuilder.milvusExpr(intent);
-
-            // 1. 生成查询向量
             var embeddingResponse = embeddingModel.embedForResponse(List.of(intent.rawQuery()));
             float[] queryVector = embeddingResponse.getResults().get(0).getOutput();
-
-            // F35：Milvus SDK 要求 SearchParam 的 float 向量为 List<Float>（同 F31 插入侧装箱）。
-            // 直接传 float[] 会在 build() 阶段抛
-            // ParamException "Target vector type must be List<Float> or ByteBuffer"，
-            // 导致 KNN 路失败、Hybrid 退化为 BM25-only（TC-19 实测根因）。
-            List<Float> queryVectorList = new ArrayList<>(queryVector.length);
-            for (float v : queryVector) {
-                queryVectorList.add(v);
-            }
-
-            // 2. 构建 SearchParam（Milvus SDK 2.3.4 API）
-            var searchBuilder = SearchParam.newBuilder()
-                    .withCollectionName(MILVUS_COLLECTION)
-                    .withVectorFieldName("vector")
-                    .withVectors(List.of(queryVectorList))
-                    .withTopK(topK)
-                    .withMetricType(MetricType.L2)
-                    .withOutFields(List.of("name", "description", "city", "type", "tags",
-                            "rating", "ticketPrice", "createdAt", "imageUrl"));
-            if (expr != null) {
-                searchBuilder.withExpr(expr);
-            }
-            SearchParam searchParam = searchBuilder.build();
-
-            // 3. 执行搜索
-            R<SearchResults> response = milvusClient.search(searchParam);
-
-            if (response.getStatus() != R.Status.Success.getCode()) {
-                log.error("[HybridRAG] KNN 检索失败: {}", response.getMessage());
-                return Collections.emptyList();
-            }
-
-            // 4. 解析结果（Milvus SDK 2.3.4 API：IDScore 不是 IDQuery）
-            SearchResultsWrapper wrapper = new SearchResultsWrapper(response.getData().getResults());
-            List<SearchResultsWrapper.IDScore> scoreList = wrapper.getIDScore(0);
-
+            // M3-3：统一经 MilvusVectorStore 检索（装箱/解析封装）
+            List<MilvusVectorStore.SearchRow> rows = milvusStore.search(
+                    MILVUS_COLLECTION, MilvusVectorStore.box(queryVector), expr, topK,
+                    List.of("name", "description", "city", "type", "tags",
+                            "rating", "ticketPrice", "createdAt", "imageUrl"),
+                    io.milvus.param.MetricType.L2);
             List<RRFusion.ScoredItem> results = new ArrayList<>();
-            for (SearchResultsWrapper.IDScore score : scoreList) {
-                // F35：attraction_vectors 主键为 VARCHAR(64)（init_milvus.py），必须用 getStrID()。
-                // getLongID() 仅适用于 Int64 主键，VARCHAR 下恒为 0，会导致全部 docId 变成 "0"，
-                // RRF 融合无法与 BM25（ES _id）匹配（K7）。
-                String docId = score.getStrID();
-                float distance = score.getScore();
-                // Milvus L2 距离越小越相似，转换为相似度
-                double similarity = 1.0 / (1.0 + distance);
-
-                // F35：KNN 独有命中直接从 Milvus out fields 回填元数据（K2），
-                // 避免仅出现在 KNN 路的文档 title/snippet 为空。
+            for (MilvusVectorStore.SearchRow row : rows) {
+                double similarity = 1.0 / (1.0 + row.score());
+                Map<String, Object> f = row.fields();
                 results.add(new RRFusion.ScoredItem(
-                        docId,
-                        fieldValue(score, "name"),
-                        fieldValue(score, "description"),
+                        row.id(),
+                        str(f.get("name")),
+                        str(f.get("description")),
                         similarity,
-                        parseTags(safeGet(score, "tags")),
-                        fieldValue(score, "createdAt"),
-                        fieldValue(score, "imageUrl")
+                        parseTags(f.get("tags")),
+                        str(f.get("createdAt")),
+                        str(f.get("imageUrl"))
                 ));
             }
             return results;
@@ -191,20 +138,8 @@ public class HybridRagStrategy implements RagStrategy {
         }
     }
 
-    /**
-     * 安全读取 Milvus 输出字段（缺失/异常时返回空串）
-     */
-    private String fieldValue(SearchResultsWrapper.IDScore score, String field) {
-        Object v = safeGet(score, field);
+    private String str(Object v) {
         return v == null ? "" : v.toString();
-    }
-
-    private Object safeGet(SearchResultsWrapper.IDScore score, String field) {
-        try {
-            return score.get(field);
-        } catch (Exception e) {
-            return null;
-        }
     }
 
     /**

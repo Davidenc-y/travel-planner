@@ -5,13 +5,10 @@ import com.travel.common.util.JsonUtils;
 import com.travel.core.guard.RateLimiter;
 import com.travel.knowledge.config.EtlProperties;
 import com.travel.knowledge.repository.AttractionMapper;
+import com.travel.knowledge.store.EsDocumentStore;
+import com.travel.knowledge.store.MilvusVectorStore;
 import io.milvus.client.MilvusServiceClient;
-import io.milvus.param.dml.InsertParam;
-import io.milvus.param.dml.UpsertParam;
 import lombok.extern.slf4j.Slf4j;
-import org.elasticsearch.action.index.IndexRequest;
-import org.elasticsearch.client.RestHighLevelClient;
-import org.elasticsearch.xcontent.XContentType;
 import org.springframework.ai.embedding.EmbeddingModel;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
@@ -53,20 +50,20 @@ public class AttractionEtlService {
 
     private final AttractionMapper attractionMapper;
     private final EmbeddingModel embeddingModel;
-    private final MilvusServiceClient milvusClient;
-    private final RestHighLevelClient esClient;
+    private final MilvusVectorStore milvusStore;
+    private final EsDocumentStore esStore;
     private final EtlProperties etlProps;
     private final Semaphore etlGate;
     private final RateLimiter embeddingLimiter;
     private final AtomicLong lastEmbeddingNanos = new AtomicLong();
 
     public AttractionEtlService(AttractionMapper attractionMapper, EmbeddingModel embeddingModel,
-                                MilvusServiceClient milvusClient, RestHighLevelClient esClient,
+                                MilvusVectorStore milvusStore, EsDocumentStore esStore,
                                 EtlProperties etlProps) {
         this.attractionMapper = attractionMapper;
         this.embeddingModel = embeddingModel;
-        this.milvusClient = milvusClient;
-        this.esClient = esClient;
+        this.milvusStore = milvusStore;
+        this.esStore = esStore;
         this.etlProps = etlProps;
         this.etlGate = new Semaphore(Math.max(1, Math.min(etlProps.getParallelism(), 8)));
         this.embeddingLimiter = new RateLimiter(Math.max(1, etlProps.getEmbeddingQps() * 60));
@@ -268,56 +265,19 @@ public class AttractionEtlService {
      */
     private void insertToMilvus(String docId, float[] vector, Attraction a) {
         List<String> tags = JsonUtils.parseList(a.getTags(), String.class);
-
-        // F31：Milvus SDK 要求 FLOAT_VECTOR 字段值为 List<Float>（单行即
-        // Collections.singletonList(List<Float>)），直接传 float[] 会在客户端校验阶段抛
-        // ParamException "Float vector field's value type must be List<Float>"，
-        // 被 SDK 重试掩盖但每次写入都会刷 ERROR 堆栈（TC-13 控制台大量报错根因）。
-        List<Float> vectorList = new ArrayList<>(vector.length);
-        for (float v : vector) {
-            vectorList.add(v);
-        }
-
-        List<InsertParam.Field> fields = new ArrayList<>();
-        fields.add(new InsertParam.Field("id", Collections.singletonList(docId)));
-        fields.add(new InsertParam.Field("vector", Collections.singletonList(vectorList)));
-        fields.add(new InsertParam.Field("name", Collections.singletonList(a.getName())));
-        fields.add(new InsertParam.Field("city", Collections.singletonList(a.getCity())));
-        fields.add(new InsertParam.Field("type", Collections.singletonList(a.getType())));
-        fields.add(new InsertParam.Field("tags", Collections.singletonList(a.getTags())));
-        // F32：Milvus attraction_vectors 中 rating/ticketPrice 为 FLOAT，
-        // SDK 客户端校验要求 java.lang.Float；传 Double 会抛
-        // ParamException "Float field value type must be Float"（被重试掩盖，但刷 ERROR 堆栈）。
-        fields.add(new InsertParam.Field("rating",
-                Collections.singletonList(a.getRating() != null ? a.getRating().floatValue() : 0.0f)));
-        fields.add(new InsertParam.Field("ticketPrice",
-                Collections.singletonList(a.getTicketPrice() != null ? a.getTicketPrice().floatValue() : 0.0f)));
-        // F44/P3：free_entry 入 Milvus（INT64），供检索侧 freeOnly 过滤。
-        fields.add(new InsertParam.Field("free_entry",
-                Collections.singletonList(a.getFreeEntry() != null ? a.getFreeEntry().longValue() : 0L)));
-        fields.add(new InsertParam.Field("createdAt",
-                Collections.singletonList(a.getCreatedAt() != null ? a.getCreatedAt().toString() : "")));
-        // F121/P1：图片 URL 入 Milvus（动态字段，供 KNN 路检索结果带图）
-        fields.add(new InsertParam.Field("imageUrl",
-                Collections.singletonList(a.getImageUrl() == null ? "" : a.getImageUrl())));
-
-        InsertParam insertParam = InsertParam.newBuilder()
-                .withCollectionName(MILVUS_COLLECTION)
-                .withFields(fields)
-                .build();
-
-        // F110-B：优先 Upsert（按主键幂等，避免同一景点重复实体累积，见 F37/F110-B）；
-        // 失败回退 insert 保持既有行为。
-        try {
-            UpsertParam upsertParam = UpsertParam.newBuilder()
-                    .withCollectionName(MILVUS_COLLECTION)
-                    .withFields(fields)
-                    .build();
-            milvusClient.upsert(upsertParam);
-        } catch (Exception e) {
-            log.warn("[ETL] Milvus upsert 失败，回退 insert: {}", e.getMessage());
-            milvusClient.insert(insertParam);
-        }
+        // M3-3：统一经 MilvusVectorStore 写入（装箱/upsert/回退语义封装）
+        Map<String, Object> meta = new LinkedHashMap<>();
+        meta.put("name", a.getName());
+        meta.put("city", a.getCity());
+        meta.put("type", a.getType());
+        meta.put("tags", a.getTags());
+        // F32 语义保持：rating/ticketPrice 为 Float；free_entry 为 Long
+        meta.put("rating", a.getRating() != null ? a.getRating().floatValue() : 0.0f);
+        meta.put("ticketPrice", a.getTicketPrice() != null ? a.getTicketPrice().floatValue() : 0.0f);
+        meta.put("free_entry", a.getFreeEntry() != null ? a.getFreeEntry().longValue() : 0L);
+        meta.put("createdAt", a.getCreatedAt() != null ? a.getCreatedAt().toString() : "");
+        meta.put("imageUrl", a.getImageUrl() == null ? "" : a.getImageUrl());
+        milvusStore.upsert(MILVUS_COLLECTION, docId, MilvusVectorStore.box(vector), meta);
         log.debug("Milvus 写入成功: id={}", docId);
     }
 
@@ -340,11 +300,8 @@ public class AttractionEtlService {
         // F121/P1：图片 URL 入 ES（供 BM25/Naive 路检索结果带图）
         doc.put("imageUrl", a.getImageUrl() == null ? "" : a.getImageUrl());
 
-        IndexRequest request = new IndexRequest(ES_INDEX)
-                .id(docId)
-                .source(JsonUtils.toJson(doc), XContentType.JSON);
-
-        esClient.index(request, org.elasticsearch.client.RequestOptions.DEFAULT);
+        // M3-3：统一经 EsDocumentStore 写入
+        esStore.index(ES_INDEX, docId, doc);
         log.debug("ES 写入成功: id={}", docId);
     }
 }

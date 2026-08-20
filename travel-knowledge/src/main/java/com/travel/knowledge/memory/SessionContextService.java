@@ -28,6 +28,7 @@ import org.elasticsearch.client.indices.GetIndexRequest;
 import org.elasticsearch.index.query.QueryBuilders;
 import org.elasticsearch.search.builder.SearchSourceBuilder;
 import org.elasticsearch.xcontent.XContentType;
+import com.travel.knowledge.store.MilvusVectorStore;
 import org.springframework.ai.embedding.EmbeddingModel;
 import org.springframework.stereotype.Service;
 
@@ -135,7 +136,7 @@ public class SessionContextService {
             });
             return fused;
         } catch (Exception e) {
-            log.warn("[SessionContext] 检索失败，降级空结果: sessionId={}, error={}, ex={}",
+            log.warn("[SessionContext] 检索失败，降级空结果: sessionId={}, error={}, type={}",
                     sessionId, e.getMessage(), e.getClass().getSimpleName(), e);
             return Collections.emptyList();
         }
@@ -144,10 +145,8 @@ public class SessionContextService {
     // ==================== 内部实现 ====================
 
     private void insertToMilvus(SessionContextChunk chunk, String content, float[] vector) {
-        List<Float> vectorList = new ArrayList<>(vector.length);
-        for (float v : vector) {
-            vectorList.add(v);
-        }
+        // M3-3：统一装箱（复用 MilvusVectorStore）
+        List<Float> vectorList = MilvusVectorStore.box(vector);
         // 幂等：先按主键删除再插入（Milvus insert 不去重，F37 教训）
         try {
             milvusClient.delete(DeleteParam.newBuilder()
@@ -213,7 +212,7 @@ public class SessionContextService {
             }
             return hits;
         } catch (Exception e) {
-            log.warn("[SessionContext] ES 检索失败: error={}, ex={}",
+            log.warn("[SessionContext] ES 检索失败: error={}, type={}",
                     e.getMessage(), e.getClass().getSimpleName(), e);
             return Collections.emptyList();
         }
@@ -222,10 +221,8 @@ public class SessionContextService {
     private List<Map<String, Object>> milvusSearch(String sessionId, String query, int size) {
         try {
             float[] queryVector = embed(query);
-            List<Float> queryVectorList = new ArrayList<>(queryVector.length);
-            for (float v : queryVector) {
-                queryVectorList.add(v);
-            }
+            // M3-3：统一装箱
+            List<Float> queryVectorList = MilvusVectorStore.box(queryVector);
             SearchParam searchParam = SearchParam.newBuilder()
                     .withCollectionName(MILVUS_COLLECTION)
                     .withVectorFieldName("vector")

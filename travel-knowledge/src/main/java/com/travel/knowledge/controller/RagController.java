@@ -1,10 +1,8 @@
 package com.travel.knowledge.controller;
 
 import com.travel.common.result.R;
-import com.travel.knowledge.rag.service.RagDispatcher;
-import com.travel.knowledge.rag.model.QueryIntent;
-import com.travel.knowledge.rag.service.QueryUnderstandingService;
 import com.travel.knowledge.rag.model.SearchResult;
+import com.travel.knowledge.service.AttractionService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.*;
@@ -25,8 +23,7 @@ import java.util.List;
 @RequiredArgsConstructor
 public class RagController {
 
-    private final RagDispatcher ragDispatcher;
-    private final QueryUnderstandingService queryUnderstandingService;
+    private final AttractionService attractionService;
 
     /**
      * RAG 检索
@@ -42,16 +39,8 @@ public class RagController {
             @RequestParam String query,
             @RequestParam(required = false, defaultValue = "10") int topK) {
         log.info("[RagController] ragType={}, query={}, topK={}", ragType, query, topK);
-        // F40/P1：前置查询理解。
-        QueryIntent intent = queryUnderstandingService.understand(query);
-        return R.ok(ragDispatcher.dispatch(ragType, intent, topK));
-    }
-
-    /**
-     * 获取已注册的 RAG 策略列表
-     */
-    @GetMapping("/strategies")
-    public R<Object> getStrategies() {
-        return R.ok(ragDispatcher.getStrategies().keySet());
+        // M3-2/P0-7：统一委托 AttractionService.search（保证追溯链路一致，不再双入口）
+        String type = (ragType == null || ragType.isBlank()) ? "hybrid" : ragType;
+        return R.ok(attractionService.search(query, type, topK));
     }
 }

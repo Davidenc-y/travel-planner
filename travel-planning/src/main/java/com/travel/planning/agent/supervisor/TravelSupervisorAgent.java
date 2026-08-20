@@ -525,10 +525,11 @@ public class TravelSupervisorAgent {
      */
     static String buildFinalResponse(OverAllState state) {
         List<String> parts = new ArrayList<>();
-        addSection(parts, "偏好分析", toText(state.value("preference")));
-        addSection(parts, "推荐景点", toText(state.value("attractions")));
-        addSection(parts, "每日行程", toText(state.value("routePlan")));
-        addSection(parts, "预算估算", toText(state.value("budgetEstimate")));
+        // M3-2/P2-10：排版按 state key 分派（不依赖中文标题）
+        addSection(parts, "preference", "偏好分析", toText(state.value("preference")));
+        addSection(parts, "attractions", "推荐景点", toText(state.value("attractions")));
+        addSection(parts, "routePlan", "每日行程", toText(state.value("routePlan")));
+        addSection(parts, "budgetEstimate", "预算估算", toText(state.value("budgetEstimate")));
         if (!parts.isEmpty()) {
             return String.join("\n\n", parts);
         }
@@ -536,10 +537,10 @@ public class TravelSupervisorAgent {
         return fallback.isBlank() ? "抱歉，未能生成行程规划，请稍后重试。" : fallback;
     }
 
-    private static void addSection(List<String> parts, String title, String text) {
+    private static void addSection(List<String> parts, String key, String title, String text) {
         if (text != null && !text.isBlank()) {
             String cleaned = stripCodeFence(text);
-            String formatted = SupervisorResponseFormatter.format(title, cleaned);
+            String formatted = SupervisorResponseFormatter.format(key, cleaned);
             parts.add("【" + title + "】\n" + (formatted != null ? formatted : cleaned));
         }
     }

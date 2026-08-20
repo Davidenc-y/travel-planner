@@ -14,11 +14,12 @@ import java.util.List;
 @ConfigurationProperties(prefix = "travel.minio")
 public class FileStorageProperties {
 
-    private String endpoint = "http://192.168.253.129:9000";
+    /** M3-1：默认值收敛为 localhost/空，强制环境或 yml 显式配置（防内网 IP 硬编码） */
+    private String endpoint = "http://localhost:9000";
 
-    private String accessKey = "minioadmin";
+    private String accessKey = "";
 
-    private String secretKey = "minioadmin";
+    private String secretKey = "";
 
     /** 景点图片桶（公开读） */
     private String attractionsBucket = "attractions";
