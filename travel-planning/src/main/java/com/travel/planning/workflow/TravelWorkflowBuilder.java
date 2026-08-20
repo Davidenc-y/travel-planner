@@ -64,6 +64,10 @@ public class TravelWorkflowBuilder {
     private final BudgetEstimationAgent budgetAgent;
     private final KnowledgeRetrievalService knowledgeRetrievalService;
 
+    /** M3-9：预编译 StateGraph 缓存（CompiledGraph 不可变、按调用注入 state，可安全复用） */
+    private volatile CompiledGraph cachedGraph;
+    private final Object graphLock = new Object();
+
     public TravelWorkflowBuilder(
             PreferenceAnalysisAgent prefAgent,
             AttractionFilterAgent attrAgent,
@@ -78,6 +82,19 @@ public class TravelWorkflowBuilder {
     }
 
     public CompiledGraph buildWorkflow() throws Exception {
+        CompiledGraph g = cachedGraph;
+        if (g != null) {
+            return g;
+        }
+        synchronized (graphLock) {
+            if (cachedGraph == null) {
+                cachedGraph = doBuild();
+            }
+            return cachedGraph;
+        }
+    }
+
+    private CompiledGraph doBuild() throws Exception {
         KeyStrategyFactory strategyFactory = () -> {
             Map<String, KeyStrategy> map = new HashMap<>();
             // messages 用 AppendStrategy —— 必须存 Message/List<Message>，不可存 String

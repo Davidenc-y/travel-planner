@@ -299,8 +299,7 @@ public class TravelSupervisorAgent {
                                 3) 仅当输入无相关信息时才可基于常识作答。
                                 """;
                     }
-                    ChatResponse direct = chatModel.call(new Prompt(
-                            List.of(new SystemMessage(system), new UserMessage(userInput))));
+                    ChatResponse direct = callDirect(system, userInput, false);
                     String text = direct.getResult() != null && direct.getResult().getOutput() != null
                             ? direct.getResult().getOutput().getText() : null;
                     if (text != null && !text.isBlank()) {
@@ -381,8 +380,7 @@ public class TravelSupervisorAgent {
                 2) 预算/目的地/天数等与画像不一致时，以会话内最近一次确认或修正为准；
                 3) 仅当输入无相关信息时才可基于常识作答。
                 """;
-        ChatResponse direct = circuitBreakerRegistry.of("chat").call("chat", () -> chatModel.call(
-                new Prompt(List.of(new SystemMessage(system), new UserMessage(userInput)))));
+        ChatResponse direct = callDirect(system, userInput, true);
         String text = direct.getResult() != null && direct.getResult().getOutput() != null
                 ? direct.getResult().getOutput().getText() : "";
         long tokens = direct.getMetadata() != null && direct.getMetadata().getUsage() != null
@@ -413,10 +411,7 @@ public class TravelSupervisorAgent {
                 你是行程回顾助手。以下骨架来自会话行程切片，请据此整理回答；
                 不得增删景点；信息不足时说明"未找到该行程记录"。
                 """;
-        ChatResponse direct = circuitBreakerRegistry.of("chat").call("chat", () -> chatModel.call(
-                new Prompt(List.of(
-                        new SystemMessage(system),
-                        new UserMessage(skeleton + "\n\n用户问题：" + question)))));
+        ChatResponse direct = callDirect(system, skeleton + "\n\n用户问题：" + question, true);
         String text = direct.getResult() != null && direct.getResult().getOutput() != null
                 ? direct.getResult().getOutput().getText() : "";
         long tokens = direct.getMetadata() != null && direct.getMetadata().getUsage() != null
@@ -428,6 +423,15 @@ public class TravelSupervisorAgent {
     }
 
     /** F89：直答/回顾路径的 token 写入追溯上下文 */
+    /** M3-7：直答调用收敛（System+User 消息构造 + 可选熔断） */
+    private ChatResponse callDirect(String system, String userText, boolean withBreaker) {
+        Prompt prompt = new Prompt(List.of(new SystemMessage(system), new UserMessage(userText)));
+        if (withBreaker) {
+            return circuitBreakerRegistry.of("chat").call("chat", () -> chatModel.call(prompt));
+        }
+        return chatModel.call(prompt);
+    }
+
     private static void applyDirectTokens(ChatResponse direct) {
         if (!TraceContext.active() || direct.getMetadata() == null
                 || direct.getMetadata().getUsage() == null) {
