@@ -30,7 +30,7 @@ import java.util.stream.Collectors;
 @Slf4j
 @Component("hybridRag")
 @SuppressWarnings("deprecation")
-public class HybridRagStrategy implements RagStrategy {
+public class HybridRagStrategy extends AbstractRagStrategy {
 
     private static final String ES_INDEX = "attraction_index";
     private static final String MILVUS_COLLECTION = "attraction_vectors";
@@ -49,18 +49,10 @@ public class HybridRagStrategy implements RagStrategy {
     }
 
     @Override
-    public List<SearchResult> retrieve(QueryIntent intent, int topK) {
-        log.info("[HybridRAG] query={}, intent={}, topK={}", intent.rawQuery(), intent, topK);
-        long start = System.currentTimeMillis();
-
+    protected List<SearchResult> doRetrieve(QueryIntent intent, int topK) throws Exception {
         List<RRFusion.ScoredItem> bm25Results = bm25Search(intent, topK);
         List<RRFusion.ScoredItem> knnResults = knnSearch(intent, topK);
         List<RRFusion.FusionResult> fused = RRFusion.fuse(bm25Results, knnResults, topK);
-
-        long cost = System.currentTimeMillis() - start;
-        log.info("[HybridRAG] 检索完成, 耗时={}ms, BM25={}条, KNN={}条, 融合={}条",
-                cost, bm25Results.size(), knnResults.size(), fused.size());
-
         return fused.stream()
                 .map(f -> SearchResult.builder()
                         .docId(f.docId())

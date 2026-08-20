@@ -122,12 +122,7 @@ public class SessionContextChunker {
     }
 
     private static boolean containsAny(String text, String... tokens) {
-        for (String t : tokens) {
-            if (text.contains(t)) {
-                return true;
-            }
-        }
-        return false;
+        return com.travel.common.util.AgentOutputUtils.containsAny(text, tokens);
     }
 
     /** F81：约束判定 = 确认性子串 或 数字预算/天数 正则 */

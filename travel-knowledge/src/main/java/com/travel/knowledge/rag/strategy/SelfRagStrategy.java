@@ -5,6 +5,7 @@ import com.travel.knowledge.rag.model.SearchResult;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Component;
 
 import java.util.List;
@@ -37,12 +38,12 @@ public class SelfRagStrategy implements RagStrategy {
      */
     private static final double SCORE_THRESHOLD = 0.02;
 
-    private final HybridRagStrategy hybridStrategy;
+    private final RagStrategy baseStrategy;
     private final ChatModel chatModel;
 
     @Autowired
-    public SelfRagStrategy(HybridRagStrategy hybridStrategy, ChatModel chatModel) {
-        this.hybridStrategy = hybridStrategy;
+    public SelfRagStrategy(@Qualifier("hybridRag") RagStrategy baseStrategy, ChatModel chatModel) {
+        this.baseStrategy = baseStrategy;
         this.chatModel = chatModel;
     }
 
@@ -57,7 +58,7 @@ public class SelfRagStrategy implements RagStrategy {
         }
 
         // Step 2: 执行混合检索
-        List<SearchResult> results = hybridStrategy.retrieve(intent, topK);
+        List<SearchResult> results = baseStrategy.retrieve(intent, topK);
 
         // Step 3: 过滤低质量结果
         List<SearchResult> filtered = results.stream()

@@ -95,12 +95,7 @@ public class PreferenceSaveService {
     }
 
     private static String extractJson(String response) {
-        if (response == null) {
-            return null;
-        }
-        int start = response.indexOf('{');
-        int end = response.lastIndexOf('}');
-        return (start >= 0 && end > start) ? response.substring(start, end + 1) : null;
+        return com.travel.common.util.AgentOutputUtils.extractJson(response);
     }
 
     @SuppressWarnings("unchecked")

@@ -132,25 +132,12 @@ public class ChatIntentClassifier {
     }
 
     private static boolean containsAny(String text, String... tokens) {
-        for (String t : tokens) {
-            if (text.contains(t)) {
-                return true;
-            }
-        }
-        return false;
+        return com.travel.common.util.AgentOutputUtils.containsAny(text, tokens);
     }
 
     /** 从 LLM 响应中提取 JSON（容忍 ```json 代码块与前后噪声） */
     private static String extractJson(String response) {
-        if (response == null) {
-            return null;
-        }
-        int start = response.indexOf('{');
-        int end = response.lastIndexOf('}');
-        if (start < 0 || end <= start) {
-            return null;
-        }
-        return response.substring(start, end + 1);
+        return com.travel.common.util.AgentOutputUtils.extractJson(response);
     }
 
     /** LLM JSON 反序列化中间对象 */

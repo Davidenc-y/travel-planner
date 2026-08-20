@@ -5,7 +5,7 @@ import com.travel.common.file.FileStoragePort;
 import com.travel.common.file.FileStorageProperties;
 import com.travel.common.file.ImageValidator;
 import com.travel.common.result.R;
-import com.travel.planning.repository.UserMapper;
+import com.travel.planning.service.UserService;
 import com.travel.planning.util.AuthUtils;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -32,7 +32,7 @@ public class AvatarController {
 
     private final FileStoragePort fileStoragePort;
     private final FileStorageProperties props;
-    private final UserMapper userMapper;
+    private final UserService userService;
 
     @PostMapping("/avatar")
     public R<String> uploadAvatar(@RequestParam("file") MultipartFile file) {
@@ -57,7 +57,7 @@ public class AvatarController {
                     file.getContentType(), props.getAvatarsBucket(), object);
 
             // F121/P1：更新前清理旧头像对象（best-effort，仅删除 avatars 桶内对象）
-            User old = userMapper.selectById(userId);
+            User old = userService.getById(userId);
             if (old != null && old.getAvatar() != null && !old.getAvatar().isBlank()) {
                 String oldUrl = old.getAvatar().trim();
                 if (oldUrl.contains("/" + props.getAvatarsBucket() + "/")) {
@@ -67,10 +67,7 @@ public class AvatarController {
                 }
             }
 
-            User user = new User();
-            user.setId(userId);
-            user.setAvatar(url);
-            userMapper.updateById(user);
+            userService.updateAvatar(userId, url);
             log.info("[Avatar] 头像更新成功: userId={}", userId);
             return R.ok(url);
         } catch (IllegalArgumentException e) {

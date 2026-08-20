@@ -26,7 +26,7 @@ import java.util.List;
 @Slf4j
 @Component("naiveRag")
 @SuppressWarnings("deprecation")
-public class NaiveRagStrategy implements RagStrategy {
+public class NaiveRagStrategy extends AbstractRagStrategy {
 
     private static final String INDEX_NAME = "attraction_index";
 
@@ -38,34 +38,22 @@ public class NaiveRagStrategy implements RagStrategy {
     }
 
     @Override
-    public List<SearchResult> retrieve(QueryIntent intent, int topK) {
-        log.info("[NaiveRAG] query={}, intent={}, topK={}", intent.rawQuery(), intent, topK);
-        long start = System.currentTimeMillis();
-
-        try {
-            List<SearchResult> results = new ArrayList<>();
-            // M3-3：统一经 EsDocumentStore 检索
-            for (SearchHit hit : esStore.search(INDEX_NAME,
-                    RagFilterBuilder.esQuery(intent, intent.rawQuery()), topK)) {
-                var sourceMap = hit.getSourceAsMap();
-                results.add(SearchResult.builder()
-                        .docId(hit.getId())
-                        .title((String) sourceMap.get("name"))
-                        .snippet((String) sourceMap.get("description"))
-                        .score(hit.getScore())
-                        .imageUrl((String) sourceMap.getOrDefault("imageUrl", ""))
-                        .source("es")
-                        .build());
-            }
-
-            long cost = System.currentTimeMillis() - start;
-            log.info("[NaiveRAG] 检索完成, 耗时={}ms, 结果数={}", cost, results.size());
-            return results;
-
-        } catch (Exception e) {
-            log.error("[NaiveRAG] 检索失败", e);
-            return Collections.emptyList();
+    protected List<SearchResult> doRetrieve(QueryIntent intent, int topK) throws Exception {
+        List<SearchResult> results = new ArrayList<>();
+        // M3-3：统一经 EsDocumentStore 检索
+        for (SearchHit hit : esStore.search(INDEX_NAME,
+                RagFilterBuilder.esQuery(intent, intent.rawQuery()), topK)) {
+            var sourceMap = hit.getSourceAsMap();
+            results.add(SearchResult.builder()
+                    .docId(hit.getId())
+                    .title((String) sourceMap.get("name"))
+                    .snippet((String) sourceMap.get("description"))
+                    .score(hit.getScore())
+                    .imageUrl((String) sourceMap.getOrDefault("imageUrl", ""))
+                    .source("es")
+                    .build());
         }
+        return results;
     }
 
     @Override

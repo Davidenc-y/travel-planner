@@ -5,6 +5,7 @@ import com.travel.knowledge.rag.model.SearchResult;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
@@ -41,12 +42,12 @@ public class CorrectiveRagStrategy implements RagStrategy {
      */
     private static final int MIN_AVG_LENGTH = 15;
 
-    private final HybridRagStrategy hybridStrategy;
+    private final RagStrategy baseStrategy;
     private final ChatModel chatModel;
 
     @Autowired
-    public CorrectiveRagStrategy(HybridRagStrategy hybridStrategy, ChatModel chatModel) {
-        this.hybridStrategy = hybridStrategy;
+    public CorrectiveRagStrategy(@Qualifier("hybridRag") RagStrategy baseStrategy, ChatModel chatModel) {
+        this.baseStrategy = baseStrategy;
         this.chatModel = chatModel;
     }
 
@@ -55,7 +56,7 @@ public class CorrectiveRagStrategy implements RagStrategy {
         log.info("[CorrectiveRAG] query={}, intent={}", intent.rawQuery(), intent);
 
         // Step 1: 原始 query 检索
-        List<SearchResult> initialResults = hybridStrategy.retrieve(intent, topK);
+        List<SearchResult> initialResults = baseStrategy.retrieve(intent, topK);
         log.info("[CorrectiveRAG] 初始检索 {} 条", initialResults.size());
 
         // Step 2: 检查质量
@@ -72,7 +73,7 @@ public class CorrectiveRagStrategy implements RagStrategy {
         QueryIntent correctedIntent = intent.withRawQuery(reformulatedQuery);
 
         // Step 4: 重写后检索
-        List<SearchResult> correctedResults = hybridStrategy.retrieve(correctedIntent, topK);
+        List<SearchResult> correctedResults = baseStrategy.retrieve(correctedIntent, topK);
         log.info("[CorrectiveRAG] 重写后检索 {} 条", correctedResults.size());
 
         // Step 5: 合并去重

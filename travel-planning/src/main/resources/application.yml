@@ -92,6 +92,9 @@ travel:
   # 限流
   rate-limit:
     per-minute: 100
+  # M3-6：业务异常 HTTP 状态与业务码语义对齐
+  api:
+    http-status-aligned: true
   # knowledge 服务地址（Feign 调用）
   knowledge:
     base-url: ${KNOWLEDGE_BASE_URL:http://localhost:8082}

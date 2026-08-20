@@ -9,6 +9,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
@@ -16,7 +17,8 @@ import java.util.concurrent.TimeUnit;
 /**
  * 用户服务
  *
- * <p>M2-4-F18 增强：refreshToken 存入 Redis，支持 Token 刷新</p>
+ * <p>M2-4-F18 增强：refreshToken 存入 Redis，支持 Token 刷新；
+ * M3-7 收口：头像更新走本服务（AvatarController 不再直连 Mapper）。</p>
  *
  * @author david_ency
  * @since 1.0-SNAPSHOT
@@ -73,43 +75,45 @@ public class UserService {
         return user;
     }
 
+    /** M3-7：可空查询（头像清理等 best-effort 场景） */
+    public User getById(Long userId) {
+        return userMapper.selectById(userId);
+    }
+
+    /** M3-7：更新头像 URL（独立事务） */
+    @Transactional
+    public void updateAvatar(Long userId, String avatarUrl) {
+        User user = new User();
+        user.setId(userId);
+        user.setAvatar(avatarUrl);
+        userMapper.updateById(user);
+    }
+
     /**
      * 刷新 Token
-     *
-     * <p>验证 refreshToken 是否在 Redis 中有效，签发新的 accessToken + refreshToken</p>
-     *
-     * @param refreshToken 客户端传入的 refreshToken
-     * @return 新的 Token 对
      */
     public Map<String, Object> refreshToken(String refreshToken) {
-        // 1. 验证 JWT 格式
         if (!jwtUtil.validateToken(refreshToken)) {
             throw new BusinessException(40102, "refreshToken 无效或已过期");
         }
 
-        // 2. 提取 userId
         Long userId = jwtUtil.getUserIdFromToken(refreshToken);
         String username = jwtUtil.getUsernameFromToken(refreshToken);
 
-        // 3. 验证 Redis 中是否存在（防止已注销的 Token 被使用）
         String redisKey = REFRESH_TOKEN_KEY + userId;
         String storedToken = redisTemplate.opsForValue().get(redisKey);
         if (storedToken == null || !refreshToken.equals(storedToken)) {
             throw new BusinessException(40103, "refreshToken 已失效，请重新登录");
         }
 
-        // 4. 查询用户
         User user = findById(userId);
 
-        // 5. 签发新 Token 对
         log.info("Token 刷新成功: userId={}", userId);
         return generateTokenPair(user);
     }
 
     /**
      * 退出登录（注销 refreshToken）
-     *
-     * @param userId 用户 ID
      */
     public void logout(Long userId) {
         String redisKey = REFRESH_TOKEN_KEY + userId;
@@ -124,7 +128,6 @@ public class UserService {
         String accessToken = jwtUtil.generateAccessToken(user.getId(), user.getUsername());
         String refreshToken = jwtUtil.generateRefreshToken(user.getId(), user.getUsername());
 
-        // refreshToken 存入 Redis，TTL = 7 天
         String redisKey = REFRESH_TOKEN_KEY + user.getId();
         redisTemplate.opsForValue().set(redisKey, refreshToken, REFRESH_TOKEN_TTL_DAYS, TimeUnit.DAYS);
 

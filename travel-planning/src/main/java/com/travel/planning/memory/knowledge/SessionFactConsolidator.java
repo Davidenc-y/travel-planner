@@ -204,12 +204,7 @@ public class SessionFactConsolidator {
     }
 
     private static boolean containsAny(String text, String... tokens) {
-        for (String t : tokens) {
-            if (text.contains(t)) {
-                return true;
-            }
-        }
-        return false;
+        return com.travel.common.util.AgentOutputUtils.containsAny(text, tokens);
     }
 
     private static String typeOf(Map<String, Object> hit) {

@@ -112,6 +112,9 @@ travel:
   # F90：用户面端点限流（按 userId+接口，每分钟）
   rate-limit:
     per-minute: 100
+  # M3-6：业务异常 HTTP 状态与业务码语义对齐（40401→404、50001→500 等）
+  api:
+    http-status-aligned: true
   # F89：RAG 链路追溯开关
   trace:
     enabled: true
