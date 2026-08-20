@@ -277,19 +277,8 @@ public class ChatService {
      * 英文/数字约 4 字符 ≈ 1 token；最小返回 1。assistant 侧为真实用量。</p>
      */
     private static int estimateInputTokens(String text) {
-        if (text == null || text.isBlank()) {
-            return 0;
-        }
-        int han = 0;
-        int other = 0;
-        for (char c : text.toCharArray()) {
-            if (Character.UnicodeScript.of(c) == Character.UnicodeScript.HAN) {
-                han++;
-            } else {
-                other++;
-            }
-        }
-        return Math.max(1, (int) Math.ceil(han + other / 4.0));
+        // M3-5：统一 token 估算
+        return com.travel.common.util.TextTokens.estimate(text);
     }
 
     /**

@@ -2,6 +2,7 @@ package com.travel.knowledge.controller;
 
 import com.travel.common.file.FileStoragePort;
 import com.travel.common.file.FileStorageProperties;
+import com.travel.core.guard.RateLimiter;
 import com.travel.common.result.R;
 import com.travel.knowledge.file.FileAccessSupport;
 import io.minio.errors.ErrorResponseException;
@@ -39,11 +40,19 @@ public class FileAccessController {
     private final FileStoragePort fileStoragePort;
     private final FileStorageProperties props;
     private final FileAccessSupport support;
+    /** M3-10：图片网关访问频控（按客户端 IP，默认 1200 次/分钟） */
+    private final RateLimiter proxyLimiter =
+            new RateLimiter(1200);
 
     /** 图片代理：校验 → 流式读取 → 缓存头（对象名 UUID 不可变） */
     @GetMapping("/proxy")
     public void proxy(@RequestParam String bucket, @RequestParam String object,
-                      HttpServletResponse response) throws Exception {
+                      HttpServletResponse response, jakarta.servlet.http.HttpServletRequest request) throws Exception {
+        String ip = request.getRemoteAddr();
+        if (!proxyLimiter.tryAcquire("ip:" + ip)) {
+            response.sendError(429, "图片访问过于频繁");
+            return;
+        }
         if (!support.allowedBucket(bucket)) {
             response.sendError(HttpServletResponse.SC_BAD_REQUEST, "bucket 仅支持 attractions/avatars");
             return;

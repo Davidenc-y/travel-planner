@@ -1,6 +1,7 @@
 package com.travel.common.entity;
 
 import com.baomidou.mybatisplus.annotation.TableName;
+import com.baomidou.mybatisplus.annotation.Version;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
 
@@ -35,4 +36,8 @@ public class TravelProfile extends BaseEntity {
 
     /** 累计行程数 */
     private Integer totalTrips;
+
+    /** M3-8：乐观锁版本号（并发更新防 lost-update） */
+    @Version
+    private Integer version;
 }

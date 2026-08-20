@@ -126,19 +126,8 @@ public class SessionMemoryServiceImpl implements SessionMemoryPort {
 
     @Override
     public int estimateTokens(String text) {
-        if (text == null || text.isBlank()) {
-            return 0;
-        }
-        int han = 0;
-        int other = 0;
-        for (char c : text.toCharArray()) {
-            if (Character.UnicodeScript.of(c) == Character.UnicodeScript.HAN) {
-                han++;
-            } else {
-                other++;
-            }
-        }
-        return Math.max(1, (int) Math.ceil(han + other / 4.0));
+        // M3-5：统一 token 估算（TextTokens 与本地口径一致）
+        return com.travel.common.util.TextTokens.estimate(text);
     }
 
     @Override

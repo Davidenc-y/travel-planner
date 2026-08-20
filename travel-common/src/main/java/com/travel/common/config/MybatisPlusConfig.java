@@ -3,6 +3,7 @@ package com.travel.common.config;
 import com.baomidou.mybatisplus.core.handlers.MetaObjectHandler;
 import com.baomidou.mybatisplus.extension.plugins.MybatisPlusInterceptor;
 import com.baomidou.mybatisplus.extension.plugins.inner.PaginationInnerInterceptor;
+import com.baomidou.mybatisplus.extension.plugins.inner.OptimisticLockerInnerInterceptor;
 import org.apache.ibatis.reflection.MetaObject;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -30,6 +31,8 @@ public class MybatisPlusConfig {
         pageInterceptor.setMaxLimit(500L);  // 单页最大 500 条
         pageInterceptor.setOverflow(true);  // 页码超限自动回到最后一页
         interceptor.addInnerInterceptor(pageInterceptor);
+        // M3-8：乐观锁（@Version 字段更新时校验版本）
+        interceptor.addInnerInterceptor(new OptimisticLockerInnerInterceptor());
         return interceptor;
     }
 
