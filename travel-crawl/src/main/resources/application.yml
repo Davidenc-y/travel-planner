@@ -38,7 +38,9 @@ travel:
       # 每批（单次管道调用）最多补全条目数：控制慢网络下单轮时长（默认 10）
       max-items-per-batch: 10
       wikidata:
-        enabled: true
+        # F123：默认关闭（本网络 wikidata.org TLS 丢包，失败率高且慢）；
+        # 网络环境可稳定访问时改回 true 即可启用（配合 fetch-mode=curl）
+        enabled: false
         base-url: https://www.wikidata.org
         user-agent: "travel-planner-crawler/1.0 (contact: travel-planner@example.com)"
         min-interval-ms: 1200
@@ -52,8 +54,9 @@ travel:
         fallback-curl-enabled: true
         curl-path: "curl"
         curl-timeout-ms: 40000
-        # auto=JDK优先+curl降级；curl=直连curl（国内网络推荐，规避 Java TLS 指纹丢包）
-        fetch-mode: "auto"
+        # F122：默认 curl（本网络 Java TLS 指纹被 wikidata.org 丢包，F118 实证）；
+        # auto=JDK优先+curl降级；jdk=仅 JDK HttpClient
+        fetch-mode: "curl"
       html:
         enabled: false
         site-url: ""

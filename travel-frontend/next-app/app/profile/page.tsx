@@ -1,15 +1,19 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { User, LogOut, MapPin, Calendar, Route } from 'lucide-react';
-import { itineraryApi } from '@/lib/api';
+import { User, LogOut, MapPin, Calendar, Route, Camera } from 'lucide-react';
+import { toast } from 'sonner';
+import { itineraryApi, userApi, getErrorMessage } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
+import { UserAvatar } from '@/components/ui/user-avatar';
 
 function ProfileContent() {
-  const { username, userId, isAuthenticated, logout } = useAuth();
+  const { username, userId, isAuthenticated, logout, avatar, refreshUser } = useAuth();
   const router = useRouter();
   const [tripCount, setTripCount] = useState<number | null>(null);
+  const [email, setEmail] = useState<string | null>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (!isAuthenticated || userId == null) return;
@@ -17,7 +21,25 @@ function ProfileContent() {
     itineraryApi.list(userId, 1, 1)
       .then((res) => setTripCount(res.data.data.total))
       .catch(() => setTripCount(null));
+    // F121：展示邮箱（头像由 AuthContext 统一管理）
+    userApi.me()
+      .then((res) => setEmail(res.data.data.email || null))
+      .catch(() => {});
   }, [isAuthenticated, userId]);
+
+  const handleAvatarChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      await userApi.uploadAvatar(file);
+      toast.success('头像已更新');
+      await refreshUser();
+    } catch (err) {
+      toast.error('头像上传失败: ' + getErrorMessage(err));
+    } finally {
+      if (fileRef.current) fileRef.current.value = '';
+    }
+  };
 
   if (!isAuthenticated) {
     router.push('/login');
@@ -30,12 +52,29 @@ function ProfileContent() {
 
       <div className="glass rounded-2xl p-6 mb-4">
         <div className="flex items-center gap-4 mb-6">
-          <div className="w-16 h-16 rounded-full bg-brand-500 text-white flex items-center justify-center text-2xl font-bold">
-            {username?.charAt(0).toUpperCase() || 'U'}
-          </div>
+          {/* F121：真实头像 + 悬浮相机图标上传 */}
+          <button
+            type="button"
+            onClick={() => fileRef.current?.click()}
+            className="relative group"
+            aria-label="更换头像"
+          >
+            <UserAvatar name={username} src={avatar} size="lg" />
+            <span className="absolute inset-0 flex items-center justify-center rounded-full bg-black/40 text-white opacity-0 group-hover:opacity-100 transition-opacity">
+              <Camera className="h-5 w-5" />
+            </span>
+          </button>
+          <input
+            ref={fileRef}
+            type="file"
+            accept="image/jpeg,image/png"
+            className="hidden"
+            onChange={handleAvatarChange}
+          />
           <div>
             <h2 className="text-xl font-semibold">{username}</h2>
             <p className="text-sm text-slate-400">用户 ID: {userId}</p>
+            {email && <p className="text-sm text-slate-400">{email}</p>}
           </div>
         </div>
 

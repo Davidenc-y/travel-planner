@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>com.travel.planner</groupId>
+        <artifactId>travel-planner</artifactId>
+        <version>1.0-SNAPSHOT</version>
+    </parent>
+
+    <groupId>com.travel.core</groupId>
+    <artifactId>travel-core</artifactId>
+    <packaging>jar</packaging>
+
+    <name>travel-core</name>
+    <description>纯 Java 共享内核（F110-B）：熔断/限流/归一化/字段合并策略，无 Web/JDBC 自动配置</description>
+
+    <dependencies>
+        <!-- 仅日志 API + Lombok（父 pom 提供），不引入任何 Spring Boot Starter -->
+        <dependency>
+            <groupId>org.slf4j</groupId>
+            <artifactId>slf4j-api</artifactId>
+        </dependency>
+    </dependencies>
+</project>

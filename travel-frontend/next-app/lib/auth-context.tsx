@@ -3,6 +3,7 @@
 import { createContext, useContext, useEffect, useState, ReactNode } from 'react';
 import { useRouter } from 'next/navigation';
 import { authApi } from './api';
+import { userApi } from './api';
 import { toast } from 'sonner';
 import { isTokenExpired } from './token';
 
@@ -25,9 +26,11 @@ function clearLocalAuth() {
 interface AuthContextType {
   userId: number | null;
   username: string | null;
+  avatar: string | null;
   token: string | null;
   isAuthenticated: boolean;
   login: (token: string, refreshToken: string, userId: number, username: string) => void;
+  refreshUser: () => Promise<void>;
   logout: () => void;
 }
 
@@ -36,6 +39,7 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [userId, setUserId] = useState<number | null>(null);
   const [username, setUsername] = useState<string | null>(null);
+  const [avatar, setAvatar] = useState<string | null>(null);
   const [token, setToken] = useState<string | null>(null);
   const [mounted, setMounted] = useState(false);
   const router = useRouter();
@@ -58,6 +62,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setToken(savedToken);
         setUserId(Number(savedUserId));
         setUsername(savedUsername);
+        // F121：登录态下异步拉取用户资料（含头像），失败静默（保持首字占位）
+        userApi.me()
+          .then((res) => {
+            const d = res.data.data;
+            if (d) {
+              setAvatar(d.avatar || null);
+              if (d.username) setUsername(d.username);
+            }
+          })
+          .catch(() => {});
         // F93：老会话（cookie 双写前登录）只有 localStorage，无 accessToken cookie，
         // middleware 读不到 cookie 会把 /itinerary 等 307 到登录页；挂载时同步补写 cookie。
         setAuthCookie(savedToken);
@@ -74,6 +88,29 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setToken(token);
     setUserId(userId);
     setUsername(username);
+    setAvatar(null);
+    userApi.me()
+      .then((res) => {
+        const d = res.data.data;
+        if (d) {
+          setAvatar(d.avatar || null);
+          if (d.username) setUsername(d.username);
+        }
+      })
+      .catch(() => {});
+  };
+
+  const refreshUser = async () => {
+    try {
+      const res = await userApi.me();
+      const d = res.data.data;
+      if (d) {
+        setAvatar(d.avatar || null);
+        if (d.username) setUsername(d.username);
+      }
+    } catch {
+      // 静默：刷新失败保持现状
+    }
   };
 
   const logout = () => {
@@ -86,6 +123,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setToken(null);
     setUserId(null);
     setUsername(null);
+    setAvatar(null);
     router.push('/login');
   };
 
@@ -97,9 +135,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     <AuthContext.Provider value={{
       userId,
       username,
+      avatar,
       token,
       isAuthenticated: !!token,
       login,
+      refreshUser,
       logout,
     }}>
       {children}

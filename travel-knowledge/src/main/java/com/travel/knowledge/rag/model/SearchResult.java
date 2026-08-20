@@ -37,6 +37,9 @@ public class SearchResult {
     /** 来源日期 */
     private String sourceDate;
 
+    /** F121/P1：景点图片 URL（ES/Milvus 检索结果带图；无图为空） */
+    private String imageUrl;
+
     /** 检索来源：milvus / es / hybrid / self_rag / corrective_rag */
     private String source;
 }

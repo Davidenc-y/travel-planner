@@ -61,6 +61,7 @@ public class NaiveRagStrategy implements RagStrategy {
                         .title((String) sourceMap.get("name"))
                         .snippet((String) sourceMap.get("description"))
                         .score(hit.getScore())
+                        .imageUrl((String) sourceMap.getOrDefault("imageUrl", ""))
                         .source("es")
                         .build());
             }

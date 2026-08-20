@@ -107,6 +107,8 @@ export interface SearchResult {
   snippet: string;
   score: number;
   keywords?: string[];
+  /** F121/P1：检索结果带图（ES/Milvus 返回；无图为空） */
+  imageUrl?: string;
   source: string;
 }
 
@@ -116,6 +118,15 @@ export interface AuthResponse {
   refreshToken: string;
   userId: number;
   username: string;
+}
+
+/** F121：当前用户资料（/api/v1/users/me） */
+export interface UserInfo {
+  id: number;
+  username: string;
+  avatar?: string | null;
+  email?: string | null;
+  phone?: string | null;
 }
 
 // 统一响应

@@ -65,7 +65,8 @@ public class RRFusion {
                             item.snippet(),
                             Math.round(entry.getValue() * 10000.0) / 10000.0,
                             item.keywords(),
-                            item.sourceDate());
+                            item.sourceDate(),
+                            item.imageUrl());
                 })
                 .collect(Collectors.toList());
     }
@@ -77,7 +78,8 @@ public class RRFusion {
             String snippet,
             double rawScore,
             List<String> keywords,
-            String sourceDate
+            String sourceDate,
+            String imageUrl
     ) {}
 
     /** RRF 融合结果 */
@@ -87,6 +89,7 @@ public class RRFusion {
             String snippet,
             double fusedScore,
             List<String> keywords,
-            String sourceDate
+            String sourceDate,
+            String imageUrl
     ) {}
 }

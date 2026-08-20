@@ -73,6 +73,7 @@ public class HybridRagStrategy implements RagStrategy {
                         .score(f.fusedScore())
                         .keywords(f.keywords())
                         .sourceDate(f.sourceDate())
+                        .imageUrl(f.imageUrl())
                         .source("hybrid")
                         .build())
                 .collect(Collectors.toList());
@@ -102,7 +103,8 @@ public class HybridRagStrategy implements RagStrategy {
                         (String) sourceMap.get("description"),
                         hit.getScore(),
                         parseTags(sourceMap.get("tags")),
-                        (String) sourceMap.getOrDefault("createdAt", "")
+                        (String) sourceMap.getOrDefault("createdAt", ""),
+                        (String) sourceMap.getOrDefault("imageUrl", "")
                 ));
             }
             return results;
@@ -140,7 +142,8 @@ public class HybridRagStrategy implements RagStrategy {
                     .withVectors(List.of(queryVectorList))
                     .withTopK(topK)
                     .withMetricType(MetricType.L2)
-                    .withOutFields(List.of("name", "description", "city", "type", "tags", "rating", "ticketPrice", "createdAt"));
+                    .withOutFields(List.of("name", "description", "city", "type", "tags",
+                            "rating", "ticketPrice", "createdAt", "imageUrl"));
             if (expr != null) {
                 searchBuilder.withExpr(expr);
             }
@@ -176,7 +179,8 @@ public class HybridRagStrategy implements RagStrategy {
                         fieldValue(score, "description"),
                         similarity,
                         parseTags(safeGet(score, "tags")),
-                        fieldValue(score, "createdAt")
+                        fieldValue(score, "createdAt"),
+                        fieldValue(score, "imageUrl")
                 ));
             }
             return results;

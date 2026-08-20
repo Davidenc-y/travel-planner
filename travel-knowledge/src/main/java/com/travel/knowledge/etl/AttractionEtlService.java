@@ -297,6 +297,9 @@ public class AttractionEtlService {
                 Collections.singletonList(a.getFreeEntry() != null ? a.getFreeEntry().longValue() : 0L)));
         fields.add(new InsertParam.Field("createdAt",
                 Collections.singletonList(a.getCreatedAt() != null ? a.getCreatedAt().toString() : "")));
+        // F121/P1：图片 URL 入 Milvus（动态字段，供 KNN 路检索结果带图）
+        fields.add(new InsertParam.Field("imageUrl",
+                Collections.singletonList(a.getImageUrl() == null ? "" : a.getImageUrl())));
 
         InsertParam insertParam = InsertParam.newBuilder()
                 .withCollectionName(MILVUS_COLLECTION)
@@ -334,6 +337,8 @@ public class AttractionEtlService {
         // F44/P3：free_entry 入 ES（integer），供检索侧 freeOnly 过滤。
         doc.put("free_entry", a.getFreeEntry() != null ? a.getFreeEntry() : 0);
         doc.put("createdAt", a.getCreatedAt() != null ? a.getCreatedAt().toString() : "");
+        // F121/P1：图片 URL 入 ES（供 BM25/Naive 路检索结果带图）
+        doc.put("imageUrl", a.getImageUrl() == null ? "" : a.getImageUrl());
 
         IndexRequest request = new IndexRequest(ES_INDEX)
                 .id(docId)

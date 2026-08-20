@@ -34,6 +34,13 @@ public class WebConfig implements WebMvcConfigurer {
                 .allowedHeaders("*")
                 .allowCredentials(true)
                 .maxAge(3600);
+        // F121：对象访问网关（图片 <img>/fetch 跨域）
+        registry.addMapping("/api/v1/files/**")
+                .allowedOriginPatterns(mergeOrigins())
+                .allowedMethods("GET", "POST", "OPTIONS")
+                .allowedHeaders("*")
+                .allowCredentials(true)
+                .maxAge(3600);
     }
 
     private String[] mergeOrigins() {

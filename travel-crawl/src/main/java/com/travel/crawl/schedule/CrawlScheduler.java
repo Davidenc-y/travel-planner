@@ -30,6 +30,9 @@ public class CrawlScheduler {
         try {
             Map<String, Object> result = crawlService.runRound(null);
             log.info("[Crawl] 定时轮完成: {}", result);
+            if ("busy".equals(result.get("state"))) {
+                log.warn("[Crawl] 定时轮跳过：上一轮仍在运行（round 过长会推迟导入，F122 已改每页发布）");
+            }
         } catch (Exception e) {
             log.warn("[Crawl] 定时轮执行异常（下一轮自动重试）: {}", e.getMessage());
         }

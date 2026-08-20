@@ -57,6 +57,17 @@ public class AvatarController {
             String url = fileStoragePort.upload(file.getInputStream(), file.getSize(),
                     file.getContentType(), props.getAvatarsBucket(), object);
 
+            // F121/P1：更新前清理旧头像对象（best-effort，仅删除 avatars 桶内对象）
+            User old = userMapper.selectById(userId);
+            if (old != null && old.getAvatar() != null && !old.getAvatar().isBlank()) {
+                String oldUrl = old.getAvatar().trim();
+                if (oldUrl.contains("/" + props.getAvatarsBucket() + "/")) {
+                    String oldObject = oldUrl.substring(oldUrl.lastIndexOf('/') + 1);
+                    fileStoragePort.delete(props.getAvatarsBucket(), oldObject);
+                    log.info("[Avatar] 已清理旧头像: userId={}, object={}", userId, oldObject);
+                }
+            }
+
             User user = new User();
             user.setId(userId);
             user.setAvatar(url);

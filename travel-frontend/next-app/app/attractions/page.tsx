@@ -10,6 +10,7 @@ import { CardGridSkeleton } from '@/components/ui/skeleton';
 import { EmptyState } from '@/components/ui/empty-state';
 import { PagedSelect } from '@/components/ui/paged-options';
 import { takePrefetch } from '@/lib/prefetch';
+import { SmartImage } from '@/components/ui/smart-image';
 
 const typeLabels: Record<string, string> = {
   CULTURE: '文化', NATURE: '自然', FOOD: '美食',
@@ -160,6 +161,15 @@ export default function AttractionsPage() {
           <div className="space-y-3">
             {results.map((r, idx) => (
               <div key={idx} className="glass rounded-xl p-4">
+                {/* F121/P1：检索结果带图（ES/Milvus 返回 imageUrl；无图不渲染） */}
+                {r.imageUrl ? (
+                  <SmartImage
+                    src={r.imageUrl}
+                    alt={r.title}
+                    fallbackText={r.title}
+                    className="h-32 w-full rounded-lg mb-3"
+                  />
+                ) : null}
                 <div className="flex items-start justify-between mb-1">
                   <h3 className="font-semibold">{r.title}</h3>
                   <span className="text-xs px-2 py-0.5 rounded-full bg-brand-50 dark:bg-brand-900/30 text-brand-600">
@@ -195,6 +205,14 @@ export default function AttractionsPage() {
           <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
             {list.map((a) => (
               <div key={a.id} className="glass rounded-xl p-4 magnetic">
+                {/* F121：景点封面（懒加载 + 失败首字占位） */}
+                <SmartImage
+                  src={a.imageUrl}
+                  alt={a.name}
+                  fallbackText={a.name}
+                  className="h-36 w-full rounded-lg mb-3"
+                  zoomable
+                />
                 <h3 className="font-semibold mb-1">{a.name}</h3>
                 <div className="flex items-center gap-2 text-xs text-slate-400 mb-2">
                   <MapPin className="h-3 w-3" /> {a.city}

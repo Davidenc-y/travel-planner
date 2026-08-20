@@ -88,7 +88,9 @@ public class CrawlPipeline {
                     log.warn("[Pipeline] 补充源 {} 异常: {}", source.name(), e.getMessage());
                     continue;
                 }
-                if (needsNetwork && de != null && de.hasAny()) {
+                // F122：预算统计所有真实网络尝试（失败/无结果同样消耗预算），
+                // 避免“多数失败 → 预算永不填满 → 整批全部尝试”导致单轮无限拉长
+                if (needsNetwork) {
                     used++;
                 }
                 AttractionRaw merged = merge(current, de);

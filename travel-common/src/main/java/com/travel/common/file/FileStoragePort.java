@@ -13,5 +13,8 @@ public interface FileStoragePort {
 
     String presignedGetUrl(String bucket, String object);
 
+    /** 流式读取对象（不存在抛 NoSuchKey 异常；调用方负责关闭流） */
+    InputStream read(String bucket, String object);
+
     void delete(String bucket, String object);
 }

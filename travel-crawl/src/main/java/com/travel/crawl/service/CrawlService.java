@@ -139,24 +139,12 @@ public class CrawlService {
         }
         try {
             queue.enqueue(List.of(item));
-            int imported = 0;
-            int updated = 0;
-            int skipped = 0;
             List<String> done = new ArrayList<>();
-            for (CrawlQueue.CrawlBatch batch : queue.drain(100)) {
-                PipelinePublisher.PipelineResult result = pipelinePublisher.publish(Path.of(batch.ref()));
-                if (result.ok()) {
-                    queue.ack(batch.ref());
-                    imported += batch.items().size();
-                    updated += result.updated();
-                    skipped += result.skipped();
-                    done.add(Path.of(batch.ref()).getFileName().toString());
-                }
-            }
+            int[] st = publishPending(done);
             Map<String, Object> m = new LinkedHashMap<>();
-            m.put("imported", imported);
-            m.put("updated", updated);
-            m.put("skipped", skipped);
+            m.put("imported", st[0]);
+            m.put("updated", st[1]);
+            m.put("skipped", st[2]);
             m.put("importedFiles", done);
             return m;
         } finally {
@@ -171,6 +159,10 @@ public class CrawlService {
         int descFilled = 0;
         int descTotal = 0;
         int descRate = 0;
+        int imported = 0;
+        int updated = 0;
+        int skipped = 0;
+        List<String> done = new ArrayList<>();
         boolean quotaExhausted = false;
         int maxRequests = Math.max(1, props.getMaxRequestsPerRound());
         outer:
@@ -202,6 +194,11 @@ public class CrawlService {
                 if (pageItems.isEmpty()) {
                     break;
                 }
+                // F122：每页完成后立即发布导入（drain→publish→ack），避免整轮结束后才入库/ETL
+                int[] st = publishPending(done);
+                imported += st[0];
+                updated += st[1];
+                skipped += st[2];
             }
             if (quotaExhausted) {
                 break;
@@ -212,25 +209,11 @@ public class CrawlService {
             log.info("[Crawl] 本轮描述填充率: {}/{} = {}%", descFilled, descTotal, descRate);
         }
 
-        // 发布导入联动：drain → 发布（upsert）→ 成功 ack（local=0→1 / redis=XACK）
-        int imported = 0;
-        int updated = 0;
-        int skipped = 0;
-        List<String> done = new ArrayList<>();
-        try {
-            for (CrawlQueue.CrawlBatch batch : queue.drain(100)) {
-                PipelinePublisher.PipelineResult result = pipelinePublisher.publish(Path.of(batch.ref()));
-                if (result.ok()) {
-                    queue.ack(batch.ref());
-                    imported += batch.items().size();
-                    updated += result.updated();
-                    skipped += result.skipped();
-                    done.add(Path.of(batch.ref()).getFileName().toString());
-                }
-            }
-        } catch (Exception e) {
-            log.warn("[Crawl] 导入联动失败: {}", e.getMessage());
-        }
+        // F122：轮末兜底发布（处理预置 0_ 种子文件 / 上轮失败重试，幂等）
+        int[] st = publishPending(done);
+        imported += st[0];
+        updated += st[1];
+        skipped += st[2];
 
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("cities", cities);
@@ -247,6 +230,32 @@ public class CrawlService {
         m.put("queuePending", queue.pendingCount());
         m.put("importedFiles", done);
         return m;
+    }
+
+    /** 发布导入联动：drain → 发布（upsert）→ 成功 ack（local=0→1 / redis=XACK）；失败保 0 下轮重试 */
+    private int[] publishPending(List<String> done) {
+        int imported = 0;
+        int updated = 0;
+        int skipped = 0;
+        try {
+            for (CrawlQueue.CrawlBatch batch : queue.drain(100)) {
+                PipelinePublisher.PipelineResult result = pipelinePublisher.publish(Path.of(batch.ref()));
+                if (result.ok()) {
+                    queue.ack(batch.ref());
+                    imported += batch.items().size();
+                    updated += result.updated();
+                    skipped += result.skipped();
+                    done.add(Path.of(batch.ref()).getFileName().toString());
+                }
+            }
+        } catch (Exception e) {
+            log.warn("[Crawl] 导入联动失败: {}", e.getMessage());
+        }
+        if (imported > 0 || updated > 0 || skipped > 0) {
+            log.info("[Crawl] 页面导入完成: imported={}, updated={}, skipped={}",
+                    imported, updated, skipped);
+        }
+        return new int[]{imported, updated, skipped};
     }
 
     /** 多源抓取：优先 amap-text（adcode 优先），空结果依次回退其余启用源 */

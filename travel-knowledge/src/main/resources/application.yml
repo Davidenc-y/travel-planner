@@ -78,6 +78,13 @@ travel:
     secret-key: minioadmin
     attractions-bucket: attractions
     avatars-bucket: avatars
+    # F121：对象访问模式（proxy=应用代理（默认）；presign=签名 URL；direct=公网直连）
+    access-mode: proxy
+    # direct 模式时 MinIO 公网端点；为空则回退 endpoint
+    public-endpoint: ""
+    # 创建新桶时允许公开读的桶（仅景点图；avatars 保持私有）
+    public-buckets:
+      - attractions
   # RAG 默认策略
   rag:
     default-type: hybrid

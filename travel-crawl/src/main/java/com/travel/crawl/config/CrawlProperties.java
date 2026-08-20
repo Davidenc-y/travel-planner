@@ -187,8 +187,11 @@ public class CrawlProperties {
 
     @Data
     public static class Wikidata {
-        /** 补充源开关（F115，默认开） */
-        private boolean enabled = true;
+        /**
+         * 补充源开关（F115 设计/F123 默认关）：本网络对 wikidata.org TLS 丢包，
+         * 默认关闭保持“纯高德 POI”行为；网络环境可访问时改回 true 即可启用。
+         */
+        private boolean enabled = false;
 
         /** Wikidata 服务基址（API 与实体数据均在此域名） */
         private String baseUrl = "https://www.wikidata.org";
@@ -230,10 +233,10 @@ public class CrawlProperties {
         private int curlTimeoutMs = 40_000;
 
         /**
-         * 抓取模式：auto=JDK HttpClient 优先失败后 curl（默认）；curl=直接 curl（CN 网络推荐，
-         * 规避 Java TLS 指纹丢包）；jdk=仅 JDK HttpClient（不降级）。
+         * 抓取模式：curl=直接 curl（默认；本网络 Java TLS 指纹被 wikidata.org 丢包，实证见 F118）；
+         * auto=JDK HttpClient 优先失败后 curl；jdk=仅 JDK HttpClient（不降级）。
          */
-        private String fetchMode = "auto";
+        private String fetchMode = "curl";
     }
 
     @Data

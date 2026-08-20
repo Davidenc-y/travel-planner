@@ -133,6 +133,18 @@ export const authApi = {
   logout: () => planningApi.post<R<void>>('/api/v1/auth/logout'),
 };
 
+// ==================== User（F121：个人资料/头像） ====================
+export const userApi = {
+  me: () =>
+    planningApi.get<R<import('@/types').UserInfo>>('/api/v1/users/me'),
+  uploadAvatar: (file: File) => {
+    const fd = new FormData();
+    fd.append('file', file);
+    // 不手动设 Content-Type（axios 自动带 boundary）
+    return planningApi.post<R<string>>('/api/v1/users/avatar', fd);
+  },
+};
+
 // ==================== Itinerary ====================
 export const itineraryApi = {
   generate: (data: import('@/types').ItineraryGenerateRequest) =>

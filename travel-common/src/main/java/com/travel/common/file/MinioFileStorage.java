@@ -2,6 +2,7 @@ package com.travel.common.file;
 
 import io.minio.BucketExistsArgs;
 import io.minio.GetPresignedObjectUrlArgs;
+import io.minio.GetObjectArgs;
 import io.minio.MakeBucketArgs;
 import io.minio.MinioClient;
 import io.minio.PutObjectArgs;
@@ -52,6 +53,16 @@ public class MinioFileStorage implements FileStoragePort {
     }
 
     @Override
+    public InputStream read(String bucket, String object) {
+        try {
+            return client.getObject(GetObjectArgs.builder()
+                    .bucket(bucket).object(object).build());
+        } catch (Exception e) {
+            throw new IllegalStateException("MinIO 读取失败: " + e.getMessage(), e);
+        }
+    }
+
+    @Override
     public void delete(String bucket, String object) {
         try {
             client.removeObject(RemoveObjectArgs.builder().bucket(bucket).object(object).build());
@@ -60,19 +71,23 @@ public class MinioFileStorage implements FileStoragePort {
         }
     }
 
-    /** 桶不存在则创建并设公开读（景点图片需公开访问） */
+    /** 桶不存在则创建；仅对 publicBuckets 配置内的桶设公开读（F121：avatars 保持私有） */
     private void ensureBucket(String bucket) throws Exception {
         boolean exists = client.bucketExists(BucketExistsArgs.builder().bucket(bucket).build());
         if (!exists) {
             client.makeBucket(MakeBucketArgs.builder().bucket(bucket).build());
-            String policy = """
-                    {"Version":"2012-10-17","Statement":[
-                      {"Effect":"Allow","Principal":{"AWS":["*"]},
-                       "Action":["s3:GetObject"],
-                       "Resource":["arn:aws:s3:::%s/*"]}]}
-                    """.formatted(bucket);
-            client.setBucketPolicy(SetBucketPolicyArgs.builder().bucket(bucket).config(policy).build());
-            log.info("[MinIO] 已创建桶并设公开读: {}", bucket);
+            if (props.getPublicBuckets() != null && props.getPublicBuckets().contains(bucket)) {
+                String policy = """
+                        {"Version":"2012-10-17","Statement":[
+                          {"Effect":"Allow","Principal":{"AWS":["*"]},
+                           "Action":["s3:GetObject"],
+                           "Resource":["arn:aws:s3:::%s/*"]}]}
+                        """.formatted(bucket);
+                client.setBucketPolicy(SetBucketPolicyArgs.builder().bucket(bucket).config(policy).build());
+                log.info("[MinIO] 已创建桶并设公开读: {}", bucket);
+            } else {
+                log.info("[MinIO] 已创建私有桶: {}", bucket);
+            }
         }
     }
 }
