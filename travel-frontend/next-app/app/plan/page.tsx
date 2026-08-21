@@ -12,6 +12,7 @@ import { useAuth } from '@/lib/auth-context';
 import { generateUUID } from '@/lib/utils';
 import { buildItineraryUrl } from '@/lib/url-guard';
 import { PagedMultiSelect, PagedSingleSelect } from '@/components/ui/paged-options';
+import { FormShell } from '@/components/ui/form-shell';
 
 const schema = z.object({
   destination: z.string().min(1, '目的地不能为空'),
@@ -94,8 +95,28 @@ function PlanPageContent() {
         <p className="text-slate-500 dark:text-slate-400">输入偏好，AI 为你生成个性化行程</p>
       </div>
 
-      <form onSubmit={handleSubmit(onSubmit)} className="space-y-5 glass rounded-2xl p-6 animate-slide-up">
-        <div>
+      <form onSubmit={handleSubmit(onSubmit)}>
+        <FormShell
+          footer={
+            <button
+              type="submit"
+              disabled={loading}
+              className="w-full py-3 rounded-lg bg-brand-500 text-white font-medium hover:bg-brand-600 disabled:opacity-50 transition-all magnetic flex items-center justify-center gap-2"
+            >
+              {loading ? (
+                <>
+                  <Loader2 className="h-5 w-5 animate-spin" /> AI 正在规划中...
+                </>
+              ) : (
+                <>
+                  <Sparkles className="h-5 w-5" /> 生成行程
+                </>
+              )}
+            </button>
+          }
+        >
+        <div className="space-y-5">
+          <div>
           <label className="flex items-center gap-2 text-sm font-medium mb-1.5">
             <MapPin className="h-4 w-4 text-brand-500" /> 目的地
           </label>
@@ -169,21 +190,8 @@ function PlanPageContent() {
           />
         </div>
 
-        <button
-          type="submit"
-          disabled={loading}
-          className="w-full py-3 rounded-lg bg-brand-500 text-white font-medium hover:bg-brand-600 disabled:opacity-50 transition-all magnetic flex items-center justify-center gap-2"
-        >
-          {loading ? (
-            <>
-              <Loader2 className="h-5 w-5 animate-spin" /> AI 正在规划中...
-            </>
-          ) : (
-            <>
-              <Sparkles className="h-5 w-5" /> 生成行程
-            </>
-          )}
-        </button>
+        </div>
+        </FormShell>
       </form>
     </div>
   );

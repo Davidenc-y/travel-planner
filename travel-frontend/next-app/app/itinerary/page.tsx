@@ -9,8 +9,7 @@ import { itineraryApi, getErrorMessage } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 import type { ItineraryResponse, PageResult } from '@/types';
 import { formatCurrency, formatDate } from '@/lib/utils';
-import { CardGridSkeleton } from '@/components/ui/skeleton';
-import { EmptyState } from '@/components/ui/empty-state';
+import { ListState } from '@/components/ui/list-state';
 import { takePrefetch } from '@/lib/prefetch';
 import { ItineraryCardModal } from '@/components/feature/itinerary-card-modal';
 
@@ -19,6 +18,7 @@ function ItineraryListContent() {
   const { userId, isAuthenticated } = useAuth();
   const [data, setData] = useState<PageResult<ItineraryResponse> | null>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [page, setPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
   const [pageSize, setPageSize] = useState(8);
@@ -40,6 +40,7 @@ const loadData = async (targetPage = 1, size = pageSize) => {
     // F102：命中预取缓存则直接展示（取走即删），避免切换卡顿
     const cached = takePrefetch<PageResult<ItineraryResponse>>(`itinerary:${targetPage}:${size}`);
     if (cached) {
+      setError(null);
       setData(cached);
       setPage(targetPage);
       setPageSize(size);
@@ -47,6 +48,7 @@ const loadData = async (targetPage = 1, size = pageSize) => {
       setLoading(false);
       return;
     }
+    setError(null);
     try {
       const res = await itineraryApi.list(userId!, targetPage, size);
       const d = res.data.data;
@@ -55,7 +57,9 @@ const loadData = async (targetPage = 1, size = pageSize) => {
       setPageSize(size);
       setTotalPages(Math.max(1, d?.totalPages || 1));
     } catch (err: any) {
-      toast.error('加载失败: ' + getErrorMessage(err));
+      const message = getErrorMessage(err);
+      setError(message);
+      toast.error('加载失败: ' + message);
     } finally {
       setLoading(false);
     }
@@ -72,10 +76,6 @@ const loadData = async (targetPage = 1, size = pageSize) => {
     }
   };
 
-  if (loading) {
-    return <CardGridSkeleton count={4} />;
-  }
-
   return (
     <div>
       <div className="flex items-center justify-between mb-6">
@@ -88,9 +88,19 @@ const loadData = async (targetPage = 1, size = pageSize) => {
         </Link>
       </div>
 
-      {data && data.list.length > 0 ? (
+      <ListState
+        loading={loading}
+        error={error}
+        empty={!data || data.list.length === 0}
+        emptyMessage="还没有行程，开始规划你的第一次旅行吧！"
+        onRetry={() => {
+          setError(null);
+          loadData();
+        }}
+        skeletonCount={4}
+      >
         <div className="grid gap-4 md:grid-cols-2">
-          {data.list.map((item) => (
+          {(data?.list ?? []).map((item) => (
             <div
               key={item.id}
               className="glass rounded-xl p-5 hover:shadow-lg transition-all magnetic cursor-pointer"
@@ -122,9 +132,7 @@ const loadData = async (targetPage = 1, size = pageSize) => {
             </div>
           ))}
         </div>
-      ) : (
-        <EmptyState message="还没有行程，开始规划你的第一次旅行吧！" />
-      )}
+      </ListState>
 
       {/* F99：分页 + 每页条数可选（默认 8） */}
       {totalPages > 1 && (

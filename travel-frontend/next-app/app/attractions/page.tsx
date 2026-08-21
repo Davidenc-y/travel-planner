@@ -6,8 +6,7 @@ import { Loader2, Search, MapPin, Star, Ticket } from 'lucide-react';
 import { attractionApi, getErrorMessage } from '@/lib/api';
 import type { Attraction, PageResult, SearchResult } from '@/types';
 import { formatCurrency } from '@/lib/utils';
-import { CardGridSkeleton } from '@/components/ui/skeleton';
-import { EmptyState } from '@/components/ui/empty-state';
+import { ListState } from '@/components/ui/list-state';
 import { PagedSelect } from '@/components/ui/paged-options';
 import { takePrefetch } from '@/lib/prefetch';
 import { SmartImage } from '@/components/ui/smart-image';
@@ -38,6 +37,7 @@ export default function AttractionsPage() {
   const [page, setPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [mode, setMode] = useState<'search' | 'browse'>('search');
 
   const handleSearch = async () => {
@@ -58,12 +58,14 @@ export default function AttractionsPage() {
     // F102：命中预取缓存则直接展示
     const cached = takePrefetch<PageResult<Attraction>>(`attractions:${targetPage}:${PAGE_SIZE}`);
     if (cached) {
+      setError(null);
       setList(cached.list || []);
       setTotalPages(Math.max(1, cached.totalPages || 1));
       setPage(targetPage);
       setLoading(false);
       return;
     }
+    setError(null);
     setLoading(true);
     try {
       // F101：多城市逗号分隔传给后端（空数组=全部）
@@ -74,7 +76,9 @@ export default function AttractionsPage() {
       setTotalPages(Math.max(1, data?.totalPages || 1));
       setPage(targetPage);
     } catch (err) {
-      toast.error('加载失败: ' + getErrorMessage(err));
+      const message = getErrorMessage(err);
+      setError(message);
+      toast.error('加载失败: ' + message);
     } finally {
       setLoading(false);
     }
@@ -161,15 +165,13 @@ export default function AttractionsPage() {
           <div className="space-y-3">
             {results.map((r, idx) => (
               <div key={idx} className="glass rounded-xl p-4">
-                {/* F121/P1：检索结果带图（ES/Milvus 返回 imageUrl；无图不渲染） */}
-                {r.imageUrl ? (
-                  <SmartImage
-                    src={r.imageUrl}
-                    alt={r.title}
-                    fallbackText={r.title}
-                    className="h-32 w-full rounded-lg mb-3"
-                  />
-                ) : null}
+                {/* M3-21：检索图无图占位一致（统一 SmartImage 首字兜底） */}
+                <SmartImage
+                  src={r.imageUrl}
+                  alt={r.title}
+                  fallbackText={r.title}
+                  className="h-32 w-full rounded-lg mb-3"
+                />
                 <div className="flex items-start justify-between mb-1">
                   <h3 className="font-semibold">{r.title}</h3>
                   <span className="text-xs px-2 py-0.5 rounded-full bg-brand-50 dark:bg-brand-900/30 text-brand-600">
@@ -201,42 +203,48 @@ export default function AttractionsPage() {
             />
           </div>
 
-          {loading && <CardGridSkeleton count={6} />}
-          <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-            {list.map((a) => (
-              <div key={a.id} className="glass rounded-xl p-4 magnetic">
-                {/* F121：景点封面（懒加载 + 失败首字占位） */}
-                <SmartImage
-                  src={a.imageUrl}
-                  alt={a.name}
-                  fallbackText={a.name}
-                  className="h-36 w-full rounded-lg mb-3"
-                  zoomable
-                />
-                <h3 className="font-semibold mb-1">{a.name}</h3>
-                <div className="flex items-center gap-2 text-xs text-slate-400 mb-2">
-                  <MapPin className="h-3 w-3" /> {a.city}
-                  <span className="px-1.5 py-0.5 rounded bg-slate-100 dark:bg-slate-800">
-                    {typeLabels[a.type] || a.type}
-                  </span>
+          <ListState
+            loading={loading}
+            error={error}
+            empty={list.length === 0}
+            emptyMessage="暂无数据"
+            onRetry={() => {
+              setError(null);
+              loadAll();
+            }}
+            skeletonCount={6}
+          >
+            <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+              {list.map((a) => (
+                <div key={a.id} className="glass rounded-xl p-4 magnetic">
+                  {/* F121：景点封面（懒加载 + 失败首字占位） */}
+                  <SmartImage
+                    src={a.imageUrl}
+                    alt={a.name}
+                    fallbackText={a.name}
+                    className="h-36 w-full rounded-lg mb-3"
+                    zoomable
+                  />
+                  <h3 className="font-semibold mb-1">{a.name}</h3>
+                  <div className="flex items-center gap-2 text-xs text-slate-400 mb-2">
+                    <MapPin className="h-3 w-3" /> {a.city}
+                    <span className="px-1.5 py-0.5 rounded bg-slate-100 dark:bg-slate-800">
+                      {typeLabels[a.type] || a.type}
+                    </span>
+                  </div>
+                  <p className="text-sm text-slate-500 dark:text-slate-400 line-clamp-2 mb-2">{a.description}</p>
+                  <div className="flex items-center gap-3 text-xs">
+                    <span className="flex items-center gap-0.5">
+                      <Star className="h-3 w-3 text-yellow-400" /> {a.rating}
+                    </span>
+                    <span className="flex items-center gap-0.5">
+                      <Ticket className="h-3 w-3" /> {a.freeEntry ? '免费' : formatCurrency(Number(a.ticketPrice))}
+                    </span>
+                  </div>
                 </div>
-                <p className="text-sm text-slate-500 dark:text-slate-400 line-clamp-2 mb-2">{a.description}</p>
-                <div className="flex items-center gap-3 text-xs">
-                  <span className="flex items-center gap-0.5">
-                    <Star className="h-3 w-3 text-yellow-400" /> {a.rating}
-                  </span>
-                  <span className="flex items-center gap-0.5">
-                    <Ticket className="h-3 w-3" /> {a.freeEntry ? '免费' : formatCurrency(Number(a.ticketPrice))}
-                  </span>
-                </div>
-              </div>
-            ))}
-            {list.length === 0 && !loading && (
-              <div className="col-span-full">
-                <EmptyState message="暂无数据" />
-              </div>
-            )}
-          </div>
+              ))}
+            </div>
+          </ListState>
 
           {/* 分页 */}
           {totalPages > 1 && (

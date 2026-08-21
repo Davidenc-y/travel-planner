@@ -13,6 +13,8 @@ function ProfileContent() {
   const router = useRouter();
   const [tripCount, setTripCount] = useState<number | null>(null);
   const [email, setEmail] = useState<string | null>(null);
+  // M3-21：头像上传本地预览（上传成功/失败后清除，回退服务端头像）
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -30,11 +32,14 @@ function ProfileContent() {
   const handleAvatarChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    setPreviewUrl(URL.createObjectURL(file));
     try {
       await userApi.uploadAvatar(file);
       toast.success('头像已更新');
       await refreshUser();
+      setPreviewUrl(null);
     } catch (err) {
+      setPreviewUrl(null);
       toast.error('头像上传失败: ' + getErrorMessage(err));
     } finally {
       if (fileRef.current) fileRef.current.value = '';
@@ -59,7 +64,7 @@ function ProfileContent() {
             className="relative group"
             aria-label="更换头像"
           >
-            <UserAvatar name={username} src={avatar} size="lg" />
+            <UserAvatar name={username} src={previewUrl || avatar} size="lg" />
             <span className="absolute inset-0 flex items-center justify-center rounded-full bg-black/40 text-white opacity-0 group-hover:opacity-100 transition-opacity">
               <Camera className="h-5 w-5" />
             </span>

@@ -7,6 +7,7 @@ import { Loader2, LogIn } from 'lucide-react';
 import { useEffect } from 'react';
 import { authApi, getErrorMessage } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
+import { FormShell } from '@/components/ui/form-shell';
 
 function LoginContent() {
   const router = useRouter();
@@ -48,16 +49,28 @@ function LoginContent() {
 
   return (
     <div className="min-h-screen flex items-center justify-center px-4">
-      <div className="w-full max-w-sm glass rounded-2xl p-8 animate-slide-up">
-        <div className="text-center mb-6">
-          <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-brand-500 text-white mb-3">
-            <LogIn className="h-7 w-7" />
-          </div>
-          <h1 className="text-2xl font-bold">登录</h1>
-          <p className="text-sm text-slate-400 mt-1">旅游行程智能规划助手</p>
-        </div>
-
-        <div className="space-y-4">
+      <div className="w-full max-w-sm">
+        <FormShell
+          icon={<LogIn className="h-7 w-7" />}
+          title="登录"
+          description="旅游行程智能规划助手"
+          footer={
+            <>
+              <button
+                onClick={handleLogin}
+                disabled={loading}
+                className="w-full py-2.5 rounded-lg bg-brand-500 text-white font-medium hover:bg-brand-600 disabled:opacity-50 magnetic flex items-center justify-center gap-2"
+              >
+                {loading ? <Loader2 className="h-5 w-5 animate-spin" /> : '登录'}
+              </button>
+              <p className="text-center text-sm text-slate-400 mt-4">
+                没有账号？{' '}
+                <a href="/register" className="text-brand-500 hover:underline">注册</a>
+              </p>
+            </>
+          }
+        >
+          <div className="space-y-4">
           <div>
             <label className="text-sm font-medium mb-1 block">用户名</label>
             <input
@@ -79,18 +92,8 @@ function LoginContent() {
               placeholder="输入密码"
             />
           </div>
-          <button
-            onClick={handleLogin}
-            disabled={loading}
-            className="w-full py-2.5 rounded-lg bg-brand-500 text-white font-medium hover:bg-brand-600 disabled:opacity-50 magnetic flex items-center justify-center gap-2"
-          >
-            {loading ? <Loader2 className="h-5 w-5 animate-spin" /> : '登录'}
-          </button>
-          <p className="text-center text-sm text-slate-400">
-            没有账号？{' '}
-            <a href="/register" className="text-brand-500 hover:underline">注册</a>
-          </p>
-        </div>
+          </div>
+        </FormShell>
       </div>
     </div>
   );
