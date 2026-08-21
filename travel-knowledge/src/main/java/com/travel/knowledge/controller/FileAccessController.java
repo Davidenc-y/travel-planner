@@ -14,6 +14,8 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.stereotype.Component;
 import org.springframework.web.servlet.support.ServletUriComponentsBuilder;
 
 import java.io.InputStream;
@@ -32,7 +34,6 @@ import java.util.Map;
 @Slf4j
 @RestController
 @RequestMapping("/api/v1/files")
-@RequiredArgsConstructor
 public class FileAccessController {
 
     private static final String CACHE_CONTROL = "public, max-age=86400, immutable";
@@ -40,9 +41,17 @@ public class FileAccessController {
     private final FileStoragePort fileStoragePort;
     private final FileStorageProperties props;
     private final FileAccessSupport support;
-    /** M3-10：图片网关访问频控（按客户端 IP，默认 1200 次/分钟） */
-    private final RateLimiter proxyLimiter =
-            new RateLimiter(1200);
+    /** M3-10：图片网关访问频控（按客户端 IP，可配置，默认 1200 次/分钟） */
+    private final RateLimiter proxyLimiter;
+
+    public FileAccessController(FileStoragePort fileStoragePort, FileStorageProperties props,
+                                FileAccessSupport support,
+                                @Value("${travel.minio.proxy-rate-limit-per-minute:1200}") int proxyRpm) {
+        this.fileStoragePort = fileStoragePort;
+        this.props = props;
+        this.support = support;
+        this.proxyLimiter = new RateLimiter(Math.max(1, proxyRpm));
+    }
 
     /** 图片代理：校验 → 流式读取 → 缓存头（对象名 UUID 不可变） */
     @GetMapping("/proxy")
