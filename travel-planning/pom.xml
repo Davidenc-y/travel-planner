@@ -85,6 +85,28 @@
             <scope>runtime</scope>
         </dependency>
 
+        <!-- Redis（F13/F67：refresh token、会话摘要 TTL 用 spring-data-redis） -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-data-redis</artifactId>
+        </dependency>
+
+        <!-- JJWT（JwtUtil 签发/校验，下沉自 travel-common） -->
+        <dependency>
+            <groupId>io.jsonwebtoken</groupId>
+            <artifactId>jjwt-api</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.jsonwebtoken</groupId>
+            <artifactId>jjwt-impl</artifactId>
+            <scope>runtime</scope>
+        </dependency>
+        <dependency>
+            <groupId>io.jsonwebtoken</groupId>
+            <artifactId>jjwt-jackson</artifactId>
+            <scope>runtime</scope>
+        </dependency>
+
         <!-- MinIO（图片存储） -->
         <dependency>
             <groupId>io.minio</groupId>
