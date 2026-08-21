@@ -17,7 +17,9 @@ public enum ErrorCode {
     SYSTEM_ERROR(50000, 500, "系统异常"),
     ITINERARY_ERROR(50001, 500, "行程生成失败"),
     RAG_ERROR(50002, 500, "检索失败"),
-    EXTERNAL_API(50301, 503, "外部服务异常");
+    EXTERNAL_API(50301, 503, "外部服务异常"),
+    /** M3-22：画像乐观锁冲突重试耗尽（跨实例写冲突） */
+    PROFILE_CONFLICT(40901, 409, "画像更新冲突，请稍后重试");
 
     private final int code;
     private final int httpStatus;

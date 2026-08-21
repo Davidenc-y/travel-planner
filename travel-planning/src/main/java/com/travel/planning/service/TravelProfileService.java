@@ -2,6 +2,7 @@ package com.travel.planning.service;
 
 import com.travel.common.entity.TravelProfile;
 import com.travel.common.exception.BusinessException;
+import com.travel.common.exception.ErrorCode;
 import com.travel.common.util.JsonUtils;
 import com.travel.planning.config.LlmGovernor;
 import com.travel.planning.memory.longterm.ProfilePort;
@@ -39,6 +40,8 @@ public class TravelProfileService implements ProfilePort {
     private static final int MAX_INTERESTS = 20;
     /** B3-4/F72：常去目的地上限（与 recordTrip 最近 10 个一致） */
     private static final int MAX_DESTINATIONS = 10;
+    /** M3-22：跨实例乐观锁冲突重试上限（单实例内条带锁已串行化，冲突主要来自多实例） */
+    private static final int OPTIMISTIC_RETRY_TIMES = 3;
 
     /** F69/B3-3：按 userId 串行化的条带锁（64 条，可重入；无需 schema 变更） */
     private static final int PROFILE_LOCK_STRIPES = 64;
@@ -101,33 +104,51 @@ public class TravelProfileService implements ProfilePort {
                                 String travelStyle) {
         // F69/B3-3：画像写入口 1（save_user_profile）按 userId 串行化
         synchronized (lockFor(userId)) {
+            for (int attempt = 0; ; attempt++) {
             TravelProfile profile = getByUserId(userId);
-            // F70：字面量 "null"/空串视为"未提及"，避免 LLM 输出字符串 "null" 覆盖原值；
-            //      列表字段改为"合并去重"而非整体替换（新增兴趣/目的地不丢失旧值）。
-            if (isPresent(preferredInterests)) {
-                profile.setPreferredInterests(
-                        mergeJsonList(profile.getPreferredInterests(), preferredInterests, MAX_INTERESTS));
-            }
-            if (isPresent(preferredDestinations)) {
-                profile.setPreferredDestinations(
-                        mergeJsonList(profile.getPreferredDestinations(), preferredDestinations, MAX_DESTINATIONS));
-            }
-            if (isPresent(budgetRange)) {
-                profile.setBudgetRange(budgetRange.trim());
-            }
-            if (isPresent(travelStyle)) {
-                String style = travelStyle.trim();
-                if (isValidTravelStyle(style)) {
-                    profile.setTravelStyle(style);
-                } else {
-                    log.warn("忽略非法 travelStyle: {}", style);
-                }
-            }
+            applyProfileUpdate(profile, preferredDestinations, preferredInterests,
+                    budgetRange, travelStyle);
             // F53：显式刷新 updated_at（updateById 会把实体旧值写回，覆盖 DB ON UPDATE）
             profile.setUpdatedAt(LocalDateTime.now());
-            profileMapper.updateById(profile);
-            log.info("更新用户旅游画像: userId={}", userId);
-            return profile;
+            if (profileMapper.updateById(profile) > 0) {
+                return profile;
+            }
+            if (attempt >= OPTIMISTIC_RETRY_TIMES) {
+                log.warn("画像更新乐观锁冲突重试耗尽: userId={}", userId);
+                throw new BusinessException(ErrorCode.PROFILE_CONFLICT.code(),
+                        ErrorCode.PROFILE_CONFLICT.message());
+            }
+            log.info("画像更新乐观锁冲突，重读重试: userId={}, attempt={}", userId, attempt + 1);
+            }
+        }
+    }
+
+    /**
+     * M3-22：update() 的读-改-写变更应用（幂等：列表合并去重、标量覆盖为同一值）。
+     */
+    private void applyProfileUpdate(TravelProfile profile, String preferredDestinations,
+                                    String preferredInterests, String budgetRange,
+                                    String travelStyle) {
+        // F70：字面量 "null"/空串视为"未提及"，避免 LLM 输出字符串 "null" 覆盖原值；
+        //      列表字段改为"合并去重"而非整体替换（新增兴趣/目的地不丢失旧值）。
+        if (isPresent(preferredInterests)) {
+            profile.setPreferredInterests(
+                    mergeJsonList(profile.getPreferredInterests(), preferredInterests, MAX_INTERESTS));
+        }
+        if (isPresent(preferredDestinations)) {
+            profile.setPreferredDestinations(
+                    mergeJsonList(profile.getPreferredDestinations(), preferredDestinations, MAX_DESTINATIONS));
+        }
+        if (isPresent(budgetRange)) {
+            profile.setBudgetRange(budgetRange.trim());
+        }
+        if (isPresent(travelStyle)) {
+            String style = travelStyle.trim();
+            if (isValidTravelStyle(style)) {
+                profile.setTravelStyle(style);
+            } else {
+                log.warn("忽略非法 travelStyle: {}", style);
+            }
         }
     }
 
@@ -145,6 +166,26 @@ public class TravelProfileService implements ProfilePort {
         // F69/B3-3：画像写入口 2（行程生成）按 userId 串行化
         synchronized (lockFor(userId)) {
         try {
+            int tripsSize = recordTripWithRetry(userId, destination, interests, title, budget, party);
+
+            // F64/B2：历史行程条目超阈值时异步 LLM 压缩（控体积）。
+            if (tripsSize > HISTORY_COMPACT_THRESHOLD) {
+                // F75/B3-5：压缩纳入统一后台 LLM 治理，超限降级跳过（不影响画像更新）
+                llmGovernor.runBackground("profile-compact", () -> compactHistory(userId));
+            }
+        } catch (Exception e) {
+            log.warn("画像自动更新失败（不影响主流程）: userId={}, error={}", userId, e.getMessage());
+        }
+        }
+    }
+
+    /**
+     * M3-22：recordTrip 读-改-写（每次重试重读最新行并重新应用变更，
+     * 目的地/兴趣/行程均去重，totalTrips 每次提交只 +1），返回行程条目数供压缩触发判断。
+     */
+    private int recordTripWithRetry(Long userId, String destination, String interests,
+                                    String title, BigDecimal budget, String party) {
+        for (int attempt = 0; ; attempt++) {
             TravelProfile profile = getByUserId(userId);
 
             // F53：预算区间与出行风格随行程更新（此前从未更新）。
@@ -189,18 +230,17 @@ public class TravelProfileService implements ProfilePort {
 
             // F53：显式刷新 updated_at。
             profile.setUpdatedAt(LocalDateTime.now());
-            profileMapper.updateById(profile);
-            log.info("画像自动更新: userId={}, destination={}, totalTrips={}",
-                    userId, destination, profile.getTotalTrips());
-
-            // F64/B2：历史行程条目超阈值时异步 LLM 压缩（控体积）。
-            if (trips.size() > HISTORY_COMPACT_THRESHOLD) {
-                // F75/B3-5：压缩纳入统一后台 LLM 治理，超限降级跳过（不影响画像更新）
-                llmGovernor.runBackground("profile-compact", () -> compactHistory(userId));
+            if (profileMapper.updateById(profile) > 0) {
+                log.info("画像自动更新: userId={}, destination={}, totalTrips={}",
+                        userId, destination, profile.getTotalTrips());
+                return trips.size();
             }
-        } catch (Exception e) {
-            log.warn("画像自动更新失败（不影响主流程）: userId={}, error={}", userId, e.getMessage());
-        }
+            if (attempt >= OPTIMISTIC_RETRY_TIMES) {
+                log.warn("画像自动更新乐观锁冲突重试耗尽: userId={}", userId);
+                throw new BusinessException(ErrorCode.PROFILE_CONFLICT.code(),
+                        ErrorCode.PROFILE_CONFLICT.message());
+            }
+            log.info("画像自动更新乐观锁冲突，重读重试: userId={}, attempt={}", userId, attempt + 1);
         }
     }
 
@@ -277,6 +317,7 @@ public class TravelProfileService implements ProfilePort {
         // F69/B3-3：画像写入口 3（异步压缩）按 userId 串行化
         synchronized (lockFor(userId)) {
         try {
+            for (int attempt = 0; ; attempt++) {
             TravelProfile p = getByUserId(userId);
             String trips = p.getHistoryTrips();
             if (trips == null || trips.isBlank()
@@ -291,9 +332,17 @@ public class TravelProfileService implements ProfilePort {
             }
             p.setHistoryTrips(summary.trim());
             p.setUpdatedAt(LocalDateTime.now());
-            profileMapper.updateById(p);
-            log.info("画像历史行程已压缩: userId={}, 长度 {} -> {}",
-                    userId, trips.length(), summary.trim().length());
+            if (profileMapper.updateById(p) > 0) {
+                log.info("画像历史行程已压缩: userId={}, 长度 {} -> {}",
+                        userId, trips.length(), summary.trim().length());
+                return;
+            }
+            if (attempt >= OPTIMISTIC_RETRY_TIMES) {
+                log.warn("画像压缩乐观锁冲突重试耗尽: userId={}", userId);
+                return;
+            }
+            log.info("画像压缩乐观锁冲突，重读重试: userId={}, attempt={}", userId, attempt + 1);
+            }
         } catch (Exception e) {
             log.warn("画像历史行程压缩失败（不影响主流程）: userId={}, error={}", userId, e.getMessage());
         }
