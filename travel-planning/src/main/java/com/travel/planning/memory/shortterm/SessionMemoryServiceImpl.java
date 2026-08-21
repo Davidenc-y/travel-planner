@@ -37,6 +37,24 @@ public class SessionMemoryServiceImpl implements SessionMemoryPort {
     // F75/B3-5：LLM 调用统一治理（后台摘要纳入并发许可）
     private final LlmGovernor llmGovernor;
 
+    /** M3-9：请求内消息快照（同一请求多次读取只查一次库；异步线程各自独立加载） */
+    private final ThreadLocal<Map<String, List<ChatMessage>>> requestMessages =
+            ThreadLocal.withInitial(LinkedHashMap::new);
+
+    @Override
+    public void beginRequest() {
+        requestMessages.get().clear();
+    }
+
+    @Override
+    public void endRequest() {
+        requestMessages.remove();
+    }
+
+    private List<ChatMessage> messagesOf(String sessionId) {
+        return requestMessages.get().computeIfAbsent(sessionId, sessionStorePort::listMessages);
+    }
+
     @Override
     public String composeHistoryContext(String sessionId, int maxTurns) {
         return buildLines(sessionId, maxTurns * 2, true, props.getHistoryMaxTokens());
@@ -95,7 +113,7 @@ public class SessionMemoryServiceImpl implements SessionMemoryPort {
         if (sessionId == null || sessionId.isBlank()) {
             return 0;
         }
-        List<ChatMessage> messages = sessionStorePort.listMessages(sessionId);
+        List<ChatMessage> messages = messagesOf(sessionId);
         if (messages == null || messages.isEmpty()) {
             return 0;
         }
@@ -113,7 +131,7 @@ public class SessionMemoryServiceImpl implements SessionMemoryPort {
         if (sessionId == null || sessionId.isBlank()) {
             return 0;
         }
-        List<ChatMessage> messages = sessionStorePort.listMessages(sessionId);
+        List<ChatMessage> messages = messagesOf(sessionId);
         if (messages == null || messages.isEmpty()) {
             return 0;
         }
@@ -154,7 +172,7 @@ public class SessionMemoryServiceImpl implements SessionMemoryPort {
 
     private void doSummarize(String sessionId) {
         try {
-            List<ChatMessage> messages = sessionStorePort.listMessages(sessionId);
+            List<ChatMessage> messages = messagesOf(sessionId);
             if (messages == null || messages.isEmpty()) {
                 return;
             }
@@ -342,7 +360,7 @@ public class SessionMemoryServiceImpl implements SessionMemoryPort {
         if (sessionId == null || sessionId.isBlank() || maxLines <= 0) {
             return "";
         }
-        List<ChatMessage> messages = sessionStorePort.listMessages(sessionId);
+        List<ChatMessage> messages = messagesOf(sessionId);
         if (messages == null || messages.isEmpty()) {
             return "";
         }

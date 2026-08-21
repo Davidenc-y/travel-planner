@@ -8,6 +8,14 @@ package com.travel.planning.memory.shortterm;
  */
 public interface SessionMemoryPort {
 
+    /** M3-9：请求开始（清空请求内消息快照；默认空实现，避免破坏其他实现） */
+    default void beginRequest() {
+    }
+
+    /** M3-9：请求结束（清理 ThreadLocal） */
+    default void endRequest() {
+    }
+
     /**
      * 组装最近 maxTurns 轮历史上下文（含 token 截断）；无历史返回空串。
      *
