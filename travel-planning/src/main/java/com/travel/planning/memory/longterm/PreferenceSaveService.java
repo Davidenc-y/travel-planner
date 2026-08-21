@@ -2,6 +2,7 @@ package com.travel.planning.memory.longterm;
 
 import com.travel.common.util.JsonUtils;
 import com.travel.planning.config.LlmGovernor;
+import com.travel.planning.prompt.PromptTemplates;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -23,28 +24,21 @@ import java.util.Map;
 @Service
 public class PreferenceSaveService {
 
-    private static final String EXTRACT_PROMPT = """
-            你是旅游偏好抽取器。只输出 JSON，不要任何其他内容：
-            {"interests":[...], "budgetRange":..., "travelStyle":...}
-            规则：
-            - interests 只能从 [文化,自然,美食,购物,亲子,休闲] 中选择；爬山/徒步归入"自然"；无则空数组
-            - budgetRange 输出"数字元"字符串（如"8000元"），未提及则 null
-            - travelStyle 只能是 ECONOMY/COMFORT/LUXURY 或 null
-            - 未提及的字段一律 null
-            用户消息：%s
-            """;
-
     private final ChatModel lightModel;
     private final ProfilePort profilePort;
     // F75/B3-5：LLM 调用统一治理（偏好抽取纳入并发许可，超限降级跳过保存）
     private final LlmGovernor llmGovernor;
+    // M3-20：Prompt 模板外置（P1-17）
+    private final PromptTemplates promptTemplates;
 
     public PreferenceSaveService(@Qualifier("lightModel") ChatModel lightModel,
                                  ProfilePort profilePort,
-                                 LlmGovernor llmGovernor) {
+                                 LlmGovernor llmGovernor,
+                                 PromptTemplates promptTemplates) {
         this.lightModel = lightModel;
         this.profilePort = profilePort;
         this.llmGovernor = llmGovernor;
+        this.promptTemplates = promptTemplates;
     }
 
     /**
@@ -85,7 +79,7 @@ public class PreferenceSaveService {
 
     private Map<String, Object> extract(String message) {
         String response = llmGovernor.callWithPermit("preference-extract",
-                () -> lightModel.call(String.format(EXTRACT_PROMPT, message)));
+                () -> lightModel.call(promptTemplates.preferenceExtract().formatted(message)));
         String json = extractJson(response);
         Map<String, Object> map = json == null ? null : JsonUtils.fromJson(json, Map.class);
         if (map == null) {

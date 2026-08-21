@@ -12,6 +12,7 @@ import com.travel.planning.agent.preference.PreferenceAnalysisAgent;
 import com.travel.planning.agent.route.RouteArrangementAgent;
 import com.travel.planning.config.AiModelConfig;
 import com.travel.planning.memory.longterm.ProfileToolProvider;
+import com.travel.planning.prompt.PromptTemplates;
 import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.messages.AssistantMessage;
@@ -72,6 +73,8 @@ public class TravelSupervisorAgent {
     private final BudgetEstimationAgent budgetAgent;
 
     private final TokenUsageInterceptor tokenUsageInterceptor;
+    // M3-20：Prompt 模板外置（P1-17）
+    private final PromptTemplates promptTemplates;
     // F91：熔断（LLM/Supervisor 调用保护）
     private final CircuitBreaker.Registry circuitBreakerRegistry;
 
@@ -101,7 +104,8 @@ public class TravelSupervisorAgent {
                                   RouteArrangementAgent routeAgent,
                                   BudgetEstimationAgent budgetAgent,
                                   TokenUsageInterceptor tokenUsageInterceptor,
-                                  CircuitBreaker.Registry circuitBreakerRegistry) {
+                                  CircuitBreaker.Registry circuitBreakerRegistry,
+                                  PromptTemplates promptTemplates) {
         this.chatModel = chatModel;
         this.prefAgent = prefAgent;
         this.attrAgent = attrAgent;
@@ -109,6 +113,7 @@ public class TravelSupervisorAgent {
         this.budgetAgent = budgetAgent;
         this.tokenUsageInterceptor = tokenUsageInterceptor;
         this.circuitBreakerRegistry = circuitBreakerRegistry;
+        this.promptTemplates = promptTemplates;
     }
 
     @PostConstruct
@@ -119,29 +124,7 @@ public class TravelSupervisorAgent {
                     .name("travel_supervisor_main")
                     .model(chatModel)
                     .description("旅游行程规划总协调器,负责路由决策")
-                    .systemPrompt("""
-                            你是一个智能的旅游行程规划监督者。
-                            可用的子Agent:
-                            - preference_analysis(偏好分析): 从用户输入中提取目的地、天数、预算、兴趣等结构化数据
-                            - attraction_filter(景点筛选): 根据偏好筛选匹配的景点
-                            - route_arrangement(路线编排): 编排每日行程路线
-                            - budget_estimation(预算估算): 估算总费用
-
-                            ## 路由决策输出格式
-                            当需要做出路由决策时,请以 JSON 数组格式输出:
-                            - 选择单个子Agent 时输出: ["preference_analysis"]
-                            - 选择多个子Agent 并行时输出: ["preference_analysis", "attraction_filter"]
-                            - 任务全部完成时输出: [] 或 ["FINISH"]
-
-                            正常流程为顺序执行 preference_analysis → attraction_filter → route_arrangement → budget_estimation。
-                            若预算估算超出用户预算 1.2 倍,回到 attraction_filter 重新筛选(最多重试 2 次)。
-                            ## 硬性路由规则（F82）
-                            行程规划、景点查询、预算/路线/住宿类请求，必须输出子 Agent 的 JSON 数组
-                            （先 preference_analysis，如 ["preference_analysis","attraction_filter",...]）；
-                            严禁直接输出 FINISH 或空数组。仅当请求为闲聊、画像查询、功能咨询等
-                            非规划类问题时才允许输出 FINISH。
-                            合法元素仅限: preference_analysis、attraction_filter、route_arrangement、budget_estimation、FINISH。
-                            """)
+                    .systemPrompt(promptTemplates.supervisorSystem())
                     .instruction("用户的请求是: {input}")
                     .outputKey("final_output")
                     // F27：注册 token 用量采集拦截器（与 4 个子 Agent 共用同一实例，
@@ -286,18 +269,9 @@ public class TravelSupervisorAgent {
                     // （会话 feedback/最新确认 > constraint > 画像）。
                     String system;
                     if (isRecallQuery(userInput)) {
-                        system = """
-                                你是行程回顾助手。仅依据组合输入中【会话最新确认】【会话知识参考】的
-                                itinerary_day 切片与最近对话回答；逐天列出景点；信息不足时明确说明
-                                "未找到该行程记录"，不得编造景点。
-                                """;
+                        system = promptTemplates.directRecallSystem();
                     } else {
-                        system = """
-                                你正在基于组合输入回答用户的旅行问题。信息优先级：
-                                1) 【会话最新确认】与【会话知识参考】中的 feedback/最新修正 > constraint > 用户画像；
-                                2) 预算/目的地/天数等与画像不一致时，以会话内最近一次确认或修正为准；
-                                3) 仅当输入无相关信息时才可基于常识作答。
-                                """;
+                        system = promptTemplates.directAnswerSystem();
                     }
                     ChatResponse direct = callDirect(system, userInput, false);
                     String text = direct.getResult() != null && direct.getResult().getOutput() != null
@@ -374,12 +348,7 @@ public class TravelSupervisorAgent {
         if (TraceContext.active()) {
             TraceContext.current().addPath("direct");
         }
-        String system = """
-                你正在基于组合输入回答用户的旅行问题。信息优先级：
-                1) 【会话最新确认】与【会话知识参考】中的 feedback/最新修正 > constraint > 用户画像；
-                2) 预算/目的地/天数等与画像不一致时，以会话内最近一次确认或修正为准；
-                3) 仅当输入无相关信息时才可基于常识作答。
-                """;
+        String system = promptTemplates.directAnswerSystem();
         ChatResponse direct = callDirect(system, userInput, true);
         String text = direct.getResult() != null && direct.getResult().getOutput() != null
                 ? direct.getResult().getOutput().getText() : "";
@@ -407,10 +376,7 @@ public class TravelSupervisorAgent {
             log.info("[Recall] 无行程切片，直接返回: {}", fallback);
             return new PlanningResult(fallback, 0);
         }
-        String system = """
-                你是行程回顾助手。以下骨架来自会话行程切片，请据此整理回答；
-                不得增删景点；信息不足时说明"未找到该行程记录"。
-                """;
+        String system = promptTemplates.recallSystem();
         ChatResponse direct = callDirect(system, skeleton + "\n\n用户问题：" + question, true);
         String text = direct.getResult() != null && direct.getResult().getOutput() != null
                 ? direct.getResult().getOutput().getText() : "";

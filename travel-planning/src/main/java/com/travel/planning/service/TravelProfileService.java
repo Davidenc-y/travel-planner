@@ -5,6 +5,7 @@ import com.travel.common.exception.BusinessException;
 import com.travel.common.util.JsonUtils;
 import com.travel.planning.config.LlmGovernor;
 import com.travel.planning.memory.longterm.ProfilePort;
+import com.travel.planning.prompt.PromptTemplates;
 import com.travel.planning.repository.TravelProfileMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -53,6 +54,8 @@ public class TravelProfileService implements ProfilePort {
     private final ChatModel chatModel;
     // F75/B3-5：LLM 调用统一治理（画像压缩纳入并发许可）
     private final LlmGovernor llmGovernor;
+    // M3-20：Prompt 模板外置（P1-17）
+    private final PromptTemplates promptTemplates;
 
     /**
      * 获取用户画像（不存在则创建空画像）
@@ -280,13 +283,8 @@ public class TravelProfileService implements ProfilePort {
                     || (trips.startsWith("[") && trips.length() <= HISTORY_COMPACT_MAX_CHARS)) {
                 return;
             }
-            String prompt = String.format("""
-                    把以下旅游行程列表压缩为一行简洁中文摘要，例如："北京3日游×2、上海5日游×1"。
-                    合并同类目的地与天数，只输出摘要文本，不超过 %d 字，不要任何前缀。
-
-                    行程列表：
-                    %s
-                    """, HISTORY_COMPACT_MAX_CHARS, trips);
+            String prompt = promptTemplates.profileHistoryCompact()
+                    .formatted(HISTORY_COMPACT_MAX_CHARS, trips);
             String summary = chatModel.call(prompt);
             if (summary == null || summary.isBlank()) {
                 return;

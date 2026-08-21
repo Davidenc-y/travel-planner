@@ -18,6 +18,7 @@ import com.travel.planning.memory.longterm.ProfileToolProvider;
 import com.travel.planning.memory.knowledge.SessionContextChunker;
 import com.travel.planning.memory.knowledge.SessionKnowledgeWriter;
 import com.travel.planning.guard.GuardService;
+import com.travel.planning.prompt.PromptTemplates;
 import com.travel.planning.trace.TraceContext;
 import com.travel.planning.repository.ItineraryMapper;
 import com.travel.planning.workflow.TravelWorkflowBuilder;
@@ -81,6 +82,8 @@ public class ItineraryService {
     private final SessionKnowledgeWriter sessionKnowledgeWriter;
     // F90：Agent 调用前安全防护（Prompt 注入等）
     private final GuardService guardService;
+    // M3-20：Prompt 模板外置（P1-17）
+    private final PromptTemplates promptTemplates;
 
     /**
      * 生成行程（调用 StateGraph 工作流 + 持久化 + 画像更新）
@@ -293,14 +296,7 @@ public class ItineraryService {
      * 构建用户输入文本
      */
     private String buildUserInput(ItineraryGenerateRequestDTO req) {
-        return String.format("""
-                目的地：%s
-                天数：%d
-                预算：%s
-                兴趣：%s
-                出行人员：%s
-                开始日期：%s
-                """,
+        return promptTemplates.itineraryUserInput().formatted(
                 req.getDestination(),
                 req.getDays(),
                 req.getBudget() != null ? req.getBudget() + "元" : "不限",

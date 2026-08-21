@@ -4,6 +4,7 @@ import com.travel.common.entity.ChatMessage;
 import com.travel.common.util.JsonUtils;
 import com.travel.planning.config.LlmGovernor;
 import com.travel.planning.memory.sessionstore.SessionStorePort;
+import com.travel.planning.prompt.PromptTemplates;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.model.ChatModel;
@@ -36,6 +37,8 @@ public class SessionMemoryServiceImpl implements SessionMemoryPort {
     private final ShortTermMemoryProperties props;
     // F75/B3-5：LLM 调用统一治理（后台摘要纳入并发许可）
     private final LlmGovernor llmGovernor;
+    // M3-20：Prompt 模板外置（P1-17）
+    private final PromptTemplates promptTemplates;
 
     /** M3-9：请求内消息快照（同一请求多次读取只查一次库；异步线程各自独立加载） */
     private final ThreadLocal<Map<String, List<ChatMessage>>> requestMessages =
@@ -249,15 +252,7 @@ public class SessionMemoryServiceImpl implements SessionMemoryPort {
     }
 
     private String callSummarize(String input, int maxTokens) {
-        String prompt = String.format("""
-                你是会话摘要器。把以下对话压缩为一段中文摘要，必须保留：
-                目的地、天数、预算、兴趣偏好、出行人员、已确认计划、待办事项。
-                检索引用类内容可选择性保留或概括，其原始数据由知识库/会话知识承载，不必逐条保留。
-                不要输出任何前缀、标题或解释，只输出摘要文本（不超过 %d tokens）。
-
-                对话：
-                %s
-                """, maxTokens, input);
+        String prompt = promptTemplates.sessionSummary().formatted(maxTokens, input);
         String result = chatModel.call(prompt);
         return result == null ? "" : result.trim();
     }
@@ -268,19 +263,7 @@ public class SessionMemoryServiceImpl implements SessionMemoryPort {
     @SuppressWarnings("unchecked")
     private List<String> validateSummary(String original, String summary) {
         try {
-            String prompt = String.format("""
-                    对比"原对话"与"摘要"，判断摘要是否遗漏关键旅游信息
-                    （目的地、天数、预算、兴趣、出行人员、已确认计划、待办）。
-                    注意：检索引用类内容允许省略或概括（其来源可为知识库/会话知识参考），
-                    仅当上述关键信息缺失时才算遗漏。
-                    只输出 JSON：{"ok": true或false, "missing": ["遗漏点1", ...]}
-
-                    原对话：
-                    %s
-
-                    摘要：
-                    %s
-                    """, original, summary);
+            String prompt = promptTemplates.sessionSummaryValidate().formatted(original, summary);
             String response = chatModel.call(prompt);
             String json = extractJson(response);
             if (json == null) {
