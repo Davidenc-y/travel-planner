@@ -27,7 +27,9 @@ import org.elasticsearch.client.indices.CreateIndexRequest;
 import org.elasticsearch.client.indices.GetIndexRequest;
 import org.elasticsearch.index.query.QueryBuilders;
 import org.elasticsearch.search.builder.SearchSourceBuilder;
+import org.elasticsearch.search.sort.SortOrder;
 import org.elasticsearch.xcontent.XContentType;
+import com.travel.knowledge.rag.support.RRFusion;
 import com.travel.knowledge.store.MilvusVectorStore;
 import org.springframework.ai.embedding.EmbeddingModel;
 import org.springframework.stereotype.Service;
@@ -38,7 +40,6 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
-import java.util.stream.Collectors;
 
 /**
  * 会话级知识服务（Phase C/F78，C2）。
@@ -143,6 +144,53 @@ public class SessionContextService {
     }
 
     // ==================== 内部实现 ====================
+
+    /**
+     * M4-5b：按 seq 前缀取回会话切片（二次取父）。
+     *
+     * <p>ES 按 sessionId(term，与 {@link #search} 同口径隔离) + seq 前缀（seq 为 keyword，
+     * {@code prefixQuery} 直接命中原始值）过滤，按 seq 升序取 limit 条；content 完整返回
+     * （与写入一致的原文，不做 300 字截断），供 planning 侧拼出 itinerary_day 完整父视图。
+     * 任何失败降级空列表 + WARN（调用方保留原命中，回归零风险）。</p>
+     *
+     * @param sessionId 会话 id（隔离键）
+     * @param seqPrefix seq 前缀（如 {@code "itin:123:"}）
+     * @param limit     返回条数上限（1~100 夹逼，默认调用方传 30）
+     * @return 按 seq 升序的切片列表（结构同 {@link #search} 的返回，不含 score）
+     */
+    public List<Map<String, Object>> findBySeqPrefix(String sessionId, String seqPrefix, int limit) {
+        if (sessionId == null || sessionId.isBlank() || seqPrefix == null || seqPrefix.isBlank()) {
+            return Collections.emptyList();
+        }
+        try {
+            SearchSourceBuilder source = new SearchSourceBuilder()
+                    .query(QueryBuilders.boolQuery()
+                            .filter(QueryBuilders.termQuery("sessionId", sessionId))
+                            .filter(QueryBuilders.prefixQuery("seq", seqPrefix)))
+                    .size(Math.max(1, Math.min(limit, 100)))
+                    .sort("seq", SortOrder.ASC);
+            SearchRequest request = new SearchRequest(ES_INDEX).source(source);
+            SearchResponse response = esClient.search(request, RequestOptions.DEFAULT);
+            List<Map<String, Object>> hits = new ArrayList<>();
+            if (response == null || response.getHits() == null) {
+                return hits;
+            }
+            for (var hit : response.getHits().getHits()) {
+                if (hit == null) {
+                    continue;
+                }
+                Map<String, Object> src = hit.getSourceAsMap();
+                if (src != null) {
+                    hits.add(src);
+                }
+            }
+            return hits;
+        } catch (Exception e) {
+            log.warn("[SessionContext] 按前缀取回失败，降级空列表: sessionId={}, seqPrefix={}, error={}, type={}",
+                    sessionId, seqPrefix, e.getMessage(), e.getClass().getSimpleName(), e);
+            return Collections.emptyList();
+        }
+    }
 
     private void insertToMilvus(SessionContextChunk chunk, String content, float[] vector) {
         // M3-3：统一装箱（复用 MilvusVectorStore）
@@ -280,45 +328,31 @@ public class SessionContextService {
     }
 
     /**
-     * 简易 RRF 融合（k=60，rank 从 1 起），按 docId 去重合并。
+     * RRF 融合（k=60，rank 从 1 起）+ 300 字截断。
+     *
+     * <p>M4-1b：算法收敛到 {@link RRFusion#fuseGeneric}（消除与 rag/support 的双实现）；
+     * 本方法仅保留表现层职责（content 截断、score 回填 Map）。</p>
      */
     private List<Map<String, Object>> fuse(List<Map<String, Object>> bm25,
                                            List<Map<String, Object>> knn, int topK) {
-        Map<String, Double> scores = new LinkedHashMap<>();
-        Map<String, Map<String, Object>> byId = new LinkedHashMap<>();
-        addRanks(bm25, scores, byId);
-        addRanks(knn, scores, byId);
-        return scores.entrySet().stream()
-                .sorted(Map.Entry.<String, Double>comparingByValue().reversed())
-                .limit(topK)
-                .map(e -> {
-                    Map<String, Object> hit = byId.get(e.getKey());
-                    if (hit == null) {
-                        return null;
-                    }
-                    Map<String, Object> m = new LinkedHashMap<>(hit);
-                    String content = String.valueOf(m.get("content"));
-                    if (content.length() > 300) {
-                        m.put("content", content.substring(0, 300) + "…");
-                    }
-                    m.put("score", e.getValue());
-                    return m;
-                })
-                .filter(Objects::nonNull)
-                // F80：Stream.toList() 返回不可变列表，search() 中 sort() 会抛
-                // UnsupportedOperationException（消息为 null，之前被误判为 NPE）；
-                // 改为收集到可变 ArrayList。
-                .collect(Collectors.toCollection(ArrayList::new));
-    }
-
-    private void addRanks(List<Map<String, Object>> hits, Map<String, Double> scores,
-                          Map<String, Map<String, Object>> byId) {
-        for (int i = 0; i < hits.size(); i++) {
-            Map<String, Object> hit = hits.get(i);
-            String id = String.valueOf(hit.getOrDefault("id", hit.get("chunkId")));
-            scores.merge(id, 1.0 / (60 + i + 1), Double::sum);
-            byId.putIfAbsent(id, hit);
+        List<RRFusion.RankedItem<Map<String, Object>>> ranked = RRFusion.fuseGeneric(
+                bm25, knn, topK,
+                hit -> String.valueOf(hit.getOrDefault("id", hit.get("chunkId"))));
+        List<Map<String, Object>> out = new ArrayList<>(ranked.size());
+        for (RRFusion.RankedItem<Map<String, Object>> r : ranked) {
+            Map<String, Object> hit = r.item();
+            if (hit == null) {
+                continue;
+            }
+            Map<String, Object> m = new LinkedHashMap<>(hit);
+            String content = String.valueOf(m.get("content"));
+            if (content.length() > 300) {
+                m.put("content", content.substring(0, 300) + "…");
+            }
+            m.put("score", r.score());
+            out.add(m);
         }
+        return out;
     }
 
     /** F83：相关性之上的类型小加分（保持 constraint/feedback 略优先，但不再硬排） */

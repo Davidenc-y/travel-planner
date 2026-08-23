@@ -3,7 +3,9 @@ package com.travel.planning.repository;
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
 import com.travel.common.entity.ChatSession;
 import org.apache.ibatis.annotations.Mapper;
+import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.annotations.Select;
+import org.apache.ibatis.annotations.Update;
 
 import java.util.List;
 
@@ -15,4 +17,19 @@ public interface ChatSessionMapper extends BaseMapper<ChatSession> {
 
     @Select("SELECT * FROM t_chat_session WHERE session_id = #{sessionId}")
     ChatSession findBySessionId(String sessionId);
+
+    /** M4-4：条件状态迁移（乐观：from 不匹配返回 0，防并发双关） */
+    @Update("UPDATE t_chat_session SET status = #{to}, updated_at = NOW() WHERE session_id = #{sessionId} AND status = #{from}")
+    int updateStatusConditional(@Param("sessionId") String sessionId,
+                                @Param("from") String from, @Param("to") String to);
+
+    /** M4-4：收口摘要持久化（幂等：仅首写，summary_final IS NULL 才更新） */
+    @Update("UPDATE t_chat_session SET summary_final = #{text}, updated_at = NOW() WHERE session_id = #{sessionId} AND summary_final IS NULL")
+    int updateSummaryFinal(@Param("sessionId") String sessionId, @Param("text") String text);
+
+    /** M4-4：启动补偿扫描——已归档但收口未完成（排除刚 close 在途的 updatedAt 下限） */
+    @Select("SELECT * FROM t_chat_session WHERE status = 'ARCHIVED' AND summary_final IS NULL "
+            + "AND updated_at < #{updatedBefore} ORDER BY updated_at ASC LIMIT #{limit}")
+    List<ChatSession> findArchivedWithoutFinal(@Param("updatedBefore") java.time.LocalDateTime updatedBefore,
+                                               @Param("limit") int limit);
 }

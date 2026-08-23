@@ -41,6 +41,18 @@ public interface SessionMemoryPort {
     void summarizeAsync(String sessionId);
 
     /**
+     * M4-4：会话收口摘要——绕过 refresh-turns 门控的全量重算（同步执行，
+     * 由调用方收口器负责并发治理与超时预算）。
+     *
+     * <p>全量输入=会话全部消息（受 summary-max-chars 截断），不叠加旧摘要
+     * （消除"压缩再压缩"误差累积）；meta 标记 summaryType=final；写入走
+     * Lua CAS（版本冲突放弃，滚动摘要胜出时不覆盖）。</p>
+     *
+     * @return true=已写入 final 摘要；false=空会话/CAS 冲突/生成失败（调用方保留旧摘要）
+     */
+    boolean finalizeSummary(String sessionId);
+
+    /**
      * 组装最近 turns 轮原文（无【历史对话】头，供摘要模式下滑动窗口使用）
      */
     String composeRecentWindow(String sessionId, int turns);

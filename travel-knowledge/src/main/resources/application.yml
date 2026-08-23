@@ -102,6 +102,11 @@ travel:
         SHOPPING: [购物, 逛街, 商场]
         FAMILY: [亲子, 家庭, 乐园, 儿童]
         LEISURE: [休闲, 度假, 放松]
+    # M4-6：Rerank SPI（none=直通默认；dashscope 启用 gte-rerank-v2，失败 fail-open）
+    rerank:
+      type: none
+      candidate-pool: 20
+      timeout-ms: 2000
   # ETL 配置
   etl:
     batch-size: 100

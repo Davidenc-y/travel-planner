@@ -19,5 +19,6 @@
 | profile_history_compact | F? 画像历史行程压缩（%d=%s 上限字符） | 1.0 |
 | session_summary | F55/B1 会话摘要（%d=%s tokens、%s=对话） | 1.0 |
 | session_summary_validate | F58/B1.2 摘要语义保真校验（%s=%s 原对话/摘要） | 1.0 |
+| rag_judge_relevance | M4-5a 注入相关性 Judge（%s/%s/%s=消息/会话知识段/候选景点段） | 1.0 |
 
 占位符模板由调用方 `.formatted(...)` 填充；非占位符模板原样注入。

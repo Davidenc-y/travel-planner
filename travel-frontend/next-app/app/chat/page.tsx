@@ -3,7 +3,7 @@
 import { useEffect, useState, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
-import { Loader2, Send, Plus, MessageSquare } from 'lucide-react';
+import { Loader2, Send, Plus, MessageSquare, Archive } from 'lucide-react';
 import { chatApi, getErrorMessage } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 import type { ChatMessage, ChatSession } from '@/types';
@@ -79,6 +79,36 @@ function ChatContent() {
     }
   };
 
+  /**
+   * M4-9：带幂等键的发送——40904（同键处理中）3s 退避同键重试，最多 4 次尝试。
+   * 兼容两种返回形态：HTTP 状态对齐（409 抛异常，err.response.data.code）与
+   * 业务码双轨（200 + body.code）。
+   */
+  const sendMessageWithIdempotency = async (sid: string, text: string, key: string): Promise<string> => {
+    const maxAttempts = 4;
+    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+      try {
+        const res = await chatApi.sendMessage(sid, text, key);
+        if (res.data.code === 40904 && attempt < maxAttempts - 1) {
+          await new Promise((r) => setTimeout(r, 3000));
+          continue;
+        }
+        if (res.data.code !== 200) {
+          throw new Error(res.data.message || `发送失败(${res.data.code})`);
+        }
+        return res.data.data.response;
+      } catch (err: any) {
+        const code = err?.response?.data?.code;
+        if (code === 40904 && attempt < maxAttempts - 1) {
+          await new Promise((r) => setTimeout(r, 3000));
+          continue;
+        }
+        throw err;
+      }
+    }
+    throw new Error('发送超时，请稍后重试');
+  };
+
   const handleSend = async () => {
     if (!input.trim() || sending) return;
     if (!currentSessionId) {
@@ -95,12 +125,15 @@ function ChatContent() {
     setInput('');
     setSending(true);
 
+    // M4-9：消息幂等键——超时/40904 重试携带同键，杜绝重复追加/双跑
+    const clientMessageId = crypto.randomUUID();
+    const messageText = input;
     try {
-      const res = await chatApi.sendMessage(currentSessionId, input);
+      const response = await sendMessageWithIdempotency(currentSessionId, messageText, clientMessageId);
       const aiMsg: ChatMessage = {
         sessionId: currentSessionId,
         role: 'assistant',
-        content: res.data.data.response,
+        content: response,
       };
       setMessages((prev) => [...prev, aiMsg]);
     } catch (err: any) {
@@ -112,6 +145,22 @@ function ChatContent() {
       }]);
     } finally {
       setSending(false);
+    }
+  };
+
+  /** M4-9：显式结束会话（归档+收口摘要；不挂 beforeunload——刷新会误归档） */
+  const handleCloseSession = async (sid: string) => {
+    if (!confirm('确定结束该会话？结束后将不再出现在列表中（历史仍可读）。')) return;
+    try {
+      await chatApi.closeSession(sid);
+      toast.success('会话已结束');
+      if (currentSessionId === sid) {
+        setCurrentSessionId(null);
+        setMessages([]);
+      }
+      loadSessions();
+    } catch (err: any) {
+      toast.error('结束会话失败: ' + getErrorMessage(err));
     }
   };
 
@@ -136,19 +185,28 @@ function ChatContent() {
         </button>
         <div className="space-y-1">
           {sessions.map((s) => (
-            <button
-              key={s.sessionId}
-              onClick={() => setCurrentSessionId(s.sessionId)}
-              className={cn(
-                'w-full flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-left transition-colors',
-                currentSessionId === s.sessionId
-                  ? 'bg-brand-50 dark:bg-brand-900/30 text-brand-600 dark:text-brand-300'
-                  : 'hover:bg-slate-100 dark:hover:bg-slate-800'
-              )}
-            >
-              <MessageSquare className="h-4 w-4 flex-shrink-0" />
-              <span className="truncate">{s.title}</span>
-            </button>
+            <div key={s.sessionId} className="group relative">
+              <button
+                onClick={() => setCurrentSessionId(s.sessionId)}
+                className={cn(
+                  'w-full flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-left transition-colors pr-8',
+                  currentSessionId === s.sessionId
+                    ? 'bg-brand-50 dark:bg-brand-900/30 text-brand-600 dark:text-brand-300'
+                    : 'hover:bg-slate-100 dark:hover:bg-slate-800'
+                )}
+              >
+                <MessageSquare className="h-4 w-4 flex-shrink-0" />
+                <span className="truncate">{s.title}</span>
+              </button>
+              {/* M4-9：显式结束会话（归档+收口；禁止 beforeunload 触发） */}
+              <button
+                title="结束会话"
+                onClick={() => handleCloseSession(s.sessionId)}
+                className="absolute right-1.5 top-1/2 -translate-y-1/2 p-1 rounded-md opacity-0 group-hover:opacity-100 hover:bg-red-50 dark:hover:bg-red-900/20 text-slate-400 hover:text-red-500 transition-all"
+              >
+                <Archive className="h-3.5 w-3.5" />
+              </button>
+            </div>
           ))}
           {sessions.length === 0 && (
             <p className="text-xs text-slate-400 text-center py-4">暂无会话</p>

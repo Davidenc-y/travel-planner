@@ -49,4 +49,18 @@ public class MemoryController {
                 sessionId, query, topK);
         return R.ok(sessionContextService.search(sessionId, query, topK));
     }
+
+    /**
+     * M4-5b：按 seq 前缀取回会话切片（二次取父，itinerary_day 完整天块视图）。
+     * sessionId 隔离与 search 同口径；失败降级空列表（调用方保留原命中）。
+     */
+    @GetMapping("/session-context/by-prefix")
+    public R<List<Map<String, Object>>> findSessionContextByPrefix(
+            @RequestParam String sessionId,
+            @RequestParam String seqPrefix,
+            @RequestParam(defaultValue = "30") int limit) {
+        log.info("[MemoryController] 按前缀取回会话切片: sessionId={}, seqPrefix={}, limit={}",
+                sessionId, seqPrefix, limit);
+        return R.ok(sessionContextService.findBySeqPrefix(sessionId, seqPrefix, limit));
+    }
 }

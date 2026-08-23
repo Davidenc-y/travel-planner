@@ -1,6 +1,7 @@
 package com.travel.knowledge.rag.support;
 
 import java.util.*;
+import java.util.function.Function;
 import java.util.stream.Collectors;
 
 /**
@@ -70,6 +71,46 @@ public class RRFusion {
                 })
                 .collect(Collectors.toList());
     }
+
+    /**
+     * M4-1b：通用 RRF 融合（Map/任意元素形态）。
+     *
+     * <p>收敛 {@code SessionContextService.fuse/addRanks} 内联实现（同一算法两份代码）。
+     * 行为与原内联版一致：同 id 分数累加、先出现者优先保留（first 列表在前）、
+     * 融合分降序、limit topK、<b>分数不四舍五入</b>（区别于 {@link #fuse} 的 4 位小数）。</p>
+     *
+     * @param firstRanked  第一路结果（按相关性排序，rank 从 1 起）
+     * @param secondRanked 第二路结果（按相似度排序，rank 从 1 起）
+     * @param topK         返回条数上限
+     * @param idOf         元素唯一标识提取器
+     * @param <T>          元素类型
+     * @return 融合排序后的 (元素, 融合分) 列表
+     */
+    public static <T> List<RankedItem<T>> fuseGeneric(
+            List<T> firstRanked, List<T> secondRanked, int topK, Function<T, String> idOf) {
+        Map<String, Double> scores = new LinkedHashMap<>();
+        Map<String, T> byId = new LinkedHashMap<>();
+        addRanks(firstRanked, scores, byId, idOf);
+        addRanks(secondRanked, scores, byId, idOf);
+        return scores.entrySet().stream()
+                .sorted(Map.Entry.<String, Double>comparingByValue().reversed())
+                .limit(Math.max(0, topK))
+                .map(e -> new RankedItem<>(byId.get(e.getKey()), e.getValue()))
+                .collect(Collectors.toCollection(ArrayList::new));
+    }
+
+    private static <T> void addRanks(List<T> hits, Map<String, Double> scores,
+                                     Map<String, T> byId, Function<T, String> idOf) {
+        for (int i = 0; i < hits.size(); i++) {
+            T hit = hits.get(i);
+            String id = idOf.apply(hit);
+            scores.merge(id, 1.0 / (K + i + 1), Double::sum);
+            byId.putIfAbsent(id, hit);
+        }
+    }
+
+    /** M4-1b：泛型融合结果（元素 + 未舍入融合分） */
+    public record RankedItem<T>(T item, double score) {}
 
     /** 单条检索评分项 */
     public record ScoredItem(

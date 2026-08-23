@@ -11,6 +11,12 @@ public enum ItineraryStatus {
     /** 草稿 */
     DRAFT,
 
+    /** M4-8：生成中（占位行已插入，工作流执行中；僵尸判定后可 resume） */
+    GENERATING,
+
+    /** M4-8：生成失败/超时（快照存在时可 resume 断点续跑） */
+    FAILED,
+
     /** 已生成 */
     GENERATED,
 

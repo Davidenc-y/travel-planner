@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { toast } from 'sonner';
-import { MapPin, Calendar, DollarSign, Trash2, Plus } from 'lucide-react';
+import { MapPin, Calendar, DollarSign, Trash2, Plus, RotateCcw, Loader2 } from 'lucide-react';
 import { itineraryApi, getErrorMessage } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 import type { ItineraryResponse, PageResult } from '@/types';
@@ -76,6 +76,35 @@ const loadData = async (targetPage = 1, size = pageSize) => {
     }
   };
 
+  const [resumingId, setResumingId] = useState<number | null>(null);
+
+  /** M4-9：断点续跑（仅 FAILED/僵尸 GENERATING；同步等待同 generate 交互形态） */
+  const handleResume = async (id: number) => {
+    if (resumingId) return;
+    if (!confirm('从上次中断的位置继续生成？')) return;
+    setResumingId(id);
+    try {
+      await itineraryApi.resume(id);
+      toast.success('续跑完成');
+      loadData();
+    } catch (err) {
+      toast.error('续跑失败: ' + getErrorMessage(err));
+    } finally {
+      setResumingId(null);
+    }
+  };
+
+  /** M4-9：状态徽标（GENERATING 生成中/FAILED 失败可续） */
+  const statusBadge = (status?: string) => {
+    if (status === 'GENERATING') {
+      return <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300"><Loader2 className="h-3 w-3 animate-spin" />生成中</span>;
+    }
+    if (status === 'FAILED') {
+      return <span className="text-xs px-2 py-0.5 rounded-full bg-red-100 text-red-600 dark:bg-red-900/30 dark:text-red-300">失败·可续跑</span>;
+    }
+    return null;
+  };
+
   return (
     <div>
       <div className="flex items-center justify-between mb-6">
@@ -108,7 +137,10 @@ const loadData = async (targetPage = 1, size = pageSize) => {
             >
               <div className="flex items-start justify-between">
                 <div className="flex-1">
-                  <h3 className="font-semibold text-lg mb-2">{item.title}</h3>
+                  <div className="flex items-center gap-2 mb-2">
+                    <h3 className="font-semibold text-lg">{item.title}</h3>
+                    {statusBadge(item.status)}
+                  </div>
                   <div className="space-y-1 text-sm text-slate-500 dark:text-slate-400">
                     <p className="flex items-center gap-1.5">
                       <MapPin className="h-3.5 w-3.5" /> {item.destination}
@@ -121,6 +153,17 @@ const loadData = async (targetPage = 1, size = pageSize) => {
                     </p>
                     <p className="text-xs">{formatDate(item.generatedAt)}</p>
                   </div>
+                  {/* M4-9：失败/僵尸生成行提供断点续跑入口 */}
+                  {(item.status === 'FAILED' || item.status === 'GENERATING') && (
+                    <button
+                      onClick={(e) => { e.stopPropagation(); handleResume(item.id); }}
+                      disabled={resumingId === item.id}
+                      className="mt-2 inline-flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-medium bg-brand-500 text-white hover:bg-brand-600 disabled:opacity-50"
+                    >
+                      {resumingId === item.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RotateCcw className="h-3.5 w-3.5" />}
+                      {resumingId === item.id ? '续跑中…' : '继续生成'}
+                    </button>
+                  )}
                 </div>
                 <button
                   onClick={(e) => { e.stopPropagation(); handleDelete(item.id); }}

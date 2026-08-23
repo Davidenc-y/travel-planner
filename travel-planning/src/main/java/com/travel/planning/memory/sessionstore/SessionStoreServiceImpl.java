@@ -54,12 +54,34 @@ public class SessionStoreServiceImpl implements SessionStorePort {
     }
 
     @Override
-    public void appendMessage(String sessionId, ChatRole role, String content, Integer tokens) {
+    public Long appendMessage(String sessionId, ChatRole role, String content, Integer tokens) {
         ChatMessage msg = new ChatMessage();
         msg.setSessionId(sessionId);
         msg.setRole(role.name().toLowerCase());
         msg.setContent(content);
         msg.setTokens(tokens);
         messageMapper.insert(msg);
+        // M4-3：MyBatis-Plus 插入后回填自增 id，幂等登记需要
+        return msg.getId();
+    }
+
+    @Override
+    public ChatMessage findMessageById(Long id) {
+        return id == null ? null : messageMapper.selectById(id);
+    }
+
+    @Override
+    public int updateStatus(String sessionId, String from, String to) {
+        return sessionMapper.updateStatusConditional(sessionId, from, to);
+    }
+
+    @Override
+    public int updateSummaryFinal(String sessionId, String text) {
+        return sessionMapper.updateSummaryFinal(sessionId, text);
+    }
+
+    @Override
+    public List<ChatSession> findArchivedWithoutFinal(java.time.LocalDateTime updatedBefore, int limit) {
+        return sessionMapper.findArchivedWithoutFinal(updatedBefore, limit);
     }
 }

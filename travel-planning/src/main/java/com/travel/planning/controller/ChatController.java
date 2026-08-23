@@ -56,13 +56,26 @@ public class ChatController {
     }
 
     /**
-     * 发送消息
+     * M4-4：关闭会话（显式触发：前端"结束会话"按钮；禁止 beforeunload 调用——刷新会误归档）。
+     * 归档后同步尽力收口摘要，超时/失败由后台补偿兜底。
+     */
+    @PostMapping("/sessions/{sessionId}/close")
+    public R<ChatService.CloseSessionResult> closeSession(@PathVariable String sessionId,
+                                                           @RequestHeader(value = "X-User-Id", required = false) Long userId) {
+        return R.ok(chatService.closeSession(AuthUtils.resolveUserId(userId), sessionId));
+    }
+
+    /**
+     * 发送消息（M4-3：body 可携带 clientMessageId 幂等键——超时重试携带同键可重放/防重复；
+     * 不携带则走原路径）
      */
     @PostMapping("/sessions/{sessionId}/messages")
     public R<ChatResponseDTO> sendMessage(@PathVariable String sessionId,
                                            @RequestBody Map<String, String> body,
                                            @RequestHeader(value = "X-User-Id", required = false) Long userId) {
         String message = body.get("message");
-        return R.ok(chatService.sendMessage(sessionId, message, AuthUtils.resolveUserId(userId)));
+        String clientMessageId = body.get("clientMessageId");
+        return R.ok(chatService.sendMessage(sessionId, message,
+                AuthUtils.resolveUserId(userId), clientMessageId));
     }
 }

@@ -20,8 +20,10 @@ public class ChatRoutingStep {
 
     /**
      * 路由结果：应答文本与本次全部 LLM 调用的真实 token 总量（F27 口径）。
+     *
+     * @param fallback M4-3：true=异常兜底文案（幂等登记 FAILED，重试不重放兜底）
      */
-    public record RouteResult(String response, long aiTokens) {
+    public record RouteResult(String response, long aiTokens, boolean fallback) {
     }
 
     private final TravelSupervisorAgent supervisorAgent;
@@ -35,6 +37,7 @@ public class ChatRoutingStep {
         long routeStart = System.currentTimeMillis();
         String response;
         long aiTokens = 0;
+        boolean fallback = false;
         try {
             switch (intent) {
                 case RECALL -> {
@@ -62,11 +65,12 @@ public class ChatRoutingStep {
         } catch (Exception e) {
             log.error("Agent 调用失败", e);
             response = "抱歉，处理您的请求时出现错误，请稍后重试。";
+            fallback = true;
         }
         long routeElapsed = System.currentTimeMillis() - routeStart;
-        log.info("[ChatRouting] intent={}, router={}, elapsedMs={}",
-                intent, routerOf(intent), routeElapsed);
-        return new RouteResult(response, aiTokens);
+        log.info("[ChatRouting] intent={}, router={}, elapsedMs={}, fallback={}",
+                intent, routerOf(intent), routeElapsed, fallback);
+        return new RouteResult(response, aiTokens, fallback);
     }
 
     private static String routerOf(ChatIntent intent) {

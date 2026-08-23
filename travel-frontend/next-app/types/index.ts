@@ -50,6 +50,8 @@ export interface ItineraryResponse {
   estimatedCost?: number;
   mindmap?: MindmapData;
   generatedAt?: string;
+  /** M4-9：行程状态（GENERATING/FAILED/GENERATED…） */
+  status?: string;
 }
 
 export interface PageResult<T> {

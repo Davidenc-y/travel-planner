@@ -24,8 +24,8 @@ import com.travel.planning.repository.ItineraryMapper;
 import com.travel.planning.workflow.TravelWorkflowBuilder;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.reactive.function.client.WebClientResponseException;
 
 import java.math.BigDecimal;
@@ -63,6 +63,9 @@ public class ItineraryService {
      */
     private static final long MAX_EXECUTION_SECONDS = 300;
 
+    /** M4-7（修复 4）：mindmap 兜底 LLM 调用超时（秒） */
+    private static final long MINDMAP_TIMEOUT_SECONDS = 60;
+
     /**
      * 工作流执行专用线程池：使用虚拟线程（Java 21）。
      *
@@ -84,6 +87,11 @@ public class ItineraryService {
     private final GuardService guardService;
     // M3-20：Prompt 模板外置（P1-17）
     private final PromptTemplates promptTemplates;
+    // M4-7（前置修复 3）：持久化拆独立 Service，修 @Transactional 自调用失效
+    private final ItineraryPersistenceService persistenceService;
+    // M4-8：节点快照读取（resume 断点判定）与状态机配置
+    private final com.travel.planning.workflow.ItineraryTaskSnapshotPort snapshotPort;
+    private final com.travel.planning.workflow.ItineraryStateMachineProperties stateMachineProps;
 
     /**
      * 生成行程（调用 StateGraph 工作流 + 持久化 + 画像更新）
@@ -108,10 +116,32 @@ public class ItineraryService {
             h.trace.setSessionId(req.getSessionId());
             h.addPath("itinerary");
         }
-        // 1. 幂等检查
-        Itinerary existing = itineraryMapper.findByClientRequestId(req.getClientRequestId());
+        // 1. 幂等检查（M4-7 修复 1：补 userId 条件，防跨用户命中）
+        Itinerary existing = itineraryMapper.findByClientRequestIdAndUser(
+                req.getClientRequestId(), userId);
         if (existing != null) {
-            log.info("幂等命中: clientRequestId={}", req.getClientRequestId());
+            log.info("幂等命中: clientRequestId={}, status={}", req.getClientRequestId(), existing.getStatus());
+            // M4-8：状态机分派——FAILED/僵尸 GENERATING 走断点续跑；进行中拒绝；
+            // 已完成（或状态机关闭时的 GENERATED）直接重放
+            if (stateMachineProps.isEnabled()) {
+                switch (String.valueOf(existing.getStatus())) {
+                    case "GENERATED", "CONFIRMED" -> {
+                        return toResponseDTO(existing);
+                    }
+                    case "GENERATING" -> {
+                        if (isZombie(existing)) {
+                            return resumeInternal(existing);
+                        }
+                        throw new BusinessException(40905, "行程正在生成中，请稍后重试或使用继续生成");
+                    }
+                    case "FAILED" -> {
+                        return resumeInternal(existing);
+                    }
+                    default -> {
+                        return toResponseDTO(existing);
+                    }
+                }
+            }
             return toResponseDTO(existing);
         }
 
@@ -133,45 +163,33 @@ public class ItineraryService {
         // city+type 过滤后 0 命中（23:08 实测）。
         initialState.put("retrievalQuery", buildRetrievalQuery(req));
 
+        // M4-8：状态机开启——入口即插 GENERATING 占位（taskId 供快照包装器回填），
+        // 幂等前移到占位之前；失败/超时进程内也可见（可 resume）
+        Long taskId = null;
+        Itinerary entity = buildEntity(req, userId, ItineraryStatus.GENERATED.name(), null, null, null);
+        if (stateMachineProps.isEnabled()) {
+            entity.setStatus(ItineraryStatus.GENERATING.name());
+            try {
+                persistenceService.insertGenerating(entity);
+                taskId = entity.getId();
+            } catch (DuplicateKeyException dke) {
+                // 并发双发同 clientRequestId：转幂等重读（M4-7 修复 2）
+                log.warn("行程并发双发幂等转重读: clientRequestId={}", req.getClientRequestId());
+                Itinerary winner = itineraryMapper.findByClientRequestIdAndUser(
+                        req.getClientRequestId(), userId);
+                if (winner != null && "GENERATED".equals(winner.getStatus())) {
+                    return toResponseDTO(winner);
+                }
+                throw new BusinessException(40905, "行程正在生成中，请稍后重试或使用继续生成");
+            }
+            initialState.put(com.travel.planning.workflow.SnapshotNodeWrapper.TASK_ID_KEY, taskId);
+        }
+
         // 3. 执行工作流
         long start = System.currentTimeMillis();
         try {
             CompiledGraph graph = workflowBuilder.buildWorkflow();
-            OverAllState finalState;
-            CompletableFuture<Optional<OverAllState>> future = null;
-            try {
-                // graph.invoke 为阻塞调用且无超时参数，用 CompletableFuture 提供硬性执行时间边界
-                // （F23 修复：防止预算回退死循环/LLM 卡死时请求无限悬挂）
-                // F64/B2：把 userId 写入 RunnableConfig.metadata，供画像工具从 ToolContext 读取
-                RunnableConfig config = RunnableConfig.builder()
-                        .addMetadata(ProfileToolProvider.USER_ID_METADATA_KEY, userId)
-                        .build();
-                future = CompletableFuture.supplyAsync(() -> graph.invoke(initialState, config), WORKFLOW_EXECUTOR);
-                finalState = future.orTimeout(MAX_EXECUTION_SECONDS, TimeUnit.SECONDS)
-                        .get()
-                        .orElseThrow(() -> new ItineraryGenerationException("工作流未返回最终状态"));
-            } catch (ExecutionException ee) {
-                Throwable cause = ee.getCause();
-                if (cause instanceof TimeoutException) {
-                    // F24 补强：超时后立即 cancel(true) 中断后台 graph.invoke（虚拟线程 + Mono.block()
-                    // 均可响应中断），避免 orTimeout 只让调用方返回、底层任务继续空转消耗 DashScope 额度。
-                    if (future != null) {
-                        future.cancel(true);
-                    }
-                    log.error("行程生成超时（>{}s）: destination={}, days={}", MAX_EXECUTION_SECONDS,
-                            req.getDestination(), req.getDays());
-                    throw new ItineraryGenerationException(
-                            "行程生成超时（超过 " + MAX_EXECUTION_SECONDS + " 秒），请稍后重试", ee);
-                }
-                if (cause instanceof RuntimeException re) {
-                    throw re; // 保留原始异常（含 DashScope 上游错误），由外层统一包装
-                }
-                throw new ItineraryGenerationException(
-                        cause != null ? cause.getMessage() : "行程生成失败", ee);
-            } catch (InterruptedException ie) {
-                Thread.currentThread().interrupt();
-                throw new ItineraryGenerationException("行程生成被中断", ie);
-            }
+            OverAllState finalState = executeGraph(graph, initialState);
 
             String itineraryJson = finalState.value("itinerary", "").toString();
             String mindmapJson = finalState.value("mindmap", "").toString();
@@ -184,33 +202,45 @@ public class ItineraryService {
             BigDecimal estimatedCost = extractEstimatedCost(itineraryJson);
 
             // 5. 生成思维导图（如果工作流未生成）
+            // M4-7（修复 4）：mindmap 兜底纳入统一超时治理——原实现是 300s orTimeout 之外
+            // 的又一次同步 LLM 调用，超时保护有缺口
             String finalMindmap = mindmapJson;
             if (finalMindmap == null || finalMindmap.isBlank()) {
-                MindmapData mindmap = mindmapGenerator.generate(
-                        req.getDestination() + req.getDays() + "日游",
-                        req.getDestination(), req.getDays(),
-                        req.getBudget() != null ? req.getBudget().toString() : null,
-                        itineraryJson);
-                finalMindmap = JsonUtils.toJson(mindmap);
+                finalMindmap = withTimeout(() -> {
+                    MindmapData mindmap = mindmapGenerator.generate(
+                            req.getDestination() + req.getDays() + "日游",
+                            req.getDestination(), req.getDays(),
+                            req.getBudget() != null ? req.getBudget().toString() : null,
+                            itineraryJson);
+                    return JsonUtils.toJson(mindmap);
+                }, MINDMAP_TIMEOUT_SECONDS, "思维导图生成");
             }
 
-            // 6. 持久化
-            Itinerary entity = new Itinerary();
-            entity.setUserId(userId);
-            entity.setDestination(req.getDestination());
-            entity.setDays(req.getDays());
-            entity.setBudget(req.getBudget());
-            entity.setInterests(JsonUtils.toJson(req.getInterests()));
-            entity.setParty(req.getParty());
-            entity.setStartDate(req.getStartDate());
-            entity.setStatus(ItineraryStatus.GENERATED.name());
-            entity.setTitle(req.getDestination() + req.getDays() + "日游");
+            // 6. 持久化：状态机=终态更新占位行；关闭=一次性插入（M4-7 修复 2/3 语义保留）
             entity.setContent(itineraryJson);
             entity.setMindmapData(finalMindmap);
             entity.setEstimatedCost(estimatedCost);
-            entity.setClientRequestId(req.getClientRequestId());
-            persistItinerary(entity);
+            if (stateMachineProps.isEnabled()) {
+                persistenceService.updateCompleted(taskId, ItineraryStatus.GENERATED.name(),
+                        itineraryJson, finalMindmap, estimatedCost);
+            } else {
+                try {
+                    persistenceService.insert(entity);
+                } catch (DuplicateKeyException dke) {
+                    // 并发双发同 clientRequestId：先到者已 persist，后者转幂等重读返回
+                    log.warn("行程并发双发幂等转重读: clientRequestId={}", req.getClientRequestId());
+                    Itinerary winner = itineraryMapper.findByClientRequestIdAndUser(
+                            req.getClientRequestId(), userId);
+                    if (winner != null) {
+                        return toResponseDTO(winner);
+                    }
+                    throw dke;
+                }
+            }
 
+            // M4-8（运行时回归 D1 修复）：占位行终态更新后同步回写内存实体，
+            // 响应 DTO 的 status 才是 GENERATED（此前透出 GENERATING）
+            entity.setStatus(ItineraryStatus.GENERATED.name());
             log.info("行程生成成功: id={}, destination={}, cost={}", entity.getId(), req.getDestination(), estimatedCost);
 
             // Phase C/F78（C1）：行程知识按天切片异步写入会话知识库（req.sessionId 存在时）
@@ -227,19 +257,261 @@ public class ItineraryService {
 
             return toResponseDTO(entity);
 
-        } catch (ItineraryGenerationException e) {
-            throw e;
         } catch (Exception e) {
+            // M4-8：失败/超时 → 占位行置 FAILED（保留快照供 resume）；置态失败不吞原异常
+            if (stateMachineProps.isEnabled() && taskId != null) {
+                try {
+                    persistenceService.updateStatus(taskId, ItineraryStatus.FAILED.name());
+                } catch (Exception markEx) {
+                    log.warn("行程失败状态标记异常: taskId={}, {}", taskId, markEx.getMessage());
+                }
+            }
+            if (e instanceof ItineraryGenerationException ige) {
+                throw ige;
+            }
             log.error("行程生成失败: {}", e.getMessage(), e);
             throw new ItineraryGenerationException(buildUpstreamMessage(e), e);
         }
     }
 
-    /** M3-2/P0-5：行程持久化独立事务（避免 LLM 长耗时占用事务连接，同时保证插入原子性） */
-    @Transactional
-    private Itinerary persistItinerary(Itinerary entity) {
-        itineraryMapper.insert(entity);
+    /**
+     * M4-9/P1-5：断点续跑——按最新快照集确定断点，共用前缀子图缓存续跑剩余节点。
+     *
+     * <p>守卫：仅 FAILED 或僵尸 GENERATING 可续（已 GENERATED 返回 40903、
+     * 进行中返回 40905）；快照缺失回退整图重跑（不抛错、幂等键沿用）。</p>
+     */
+    public ItineraryResponseDTO resume(Long id, Long userId) {
+        if (userId == null || userId <= 0) {
+            throw new BusinessException(40101, "用户未登录");
+        }
+        Itinerary task = itineraryMapper.selectById(id);
+        if (task == null) {
+            throw new BusinessException(40401, "行程不存在: " + id);
+        }
+        if (!userId.equals(task.getUserId())) {
+            throw new BusinessException(40302, "无权访问该行程");
+        }
+        String status = String.valueOf(task.getStatus());
+        boolean resumable = "FAILED".equals(status)
+                || ("GENERATING".equals(status) && isZombie(task));
+        if (!resumable) {
+            if ("GENERATING".equals(status)) {
+                throw new BusinessException(40905, "行程正在生成中，请稍后重试");
+            }
+            throw new BusinessException(40903, "行程当前状态不支持继续生成: " + status);
+        }
+        return resumeInternal(task);
+    }
+
+    /** 幂等命中/显式 resume 共用：快照断点判定 + 子图续跑 + 终态更新 */
+    private ItineraryResponseDTO resumeInternal(Itinerary task) {
+        Map<String, String> snapshots = snapshotPort.loadLatestByTask(task.getId());
+        String resumeFrom = resolveResumeFrom(snapshots);
+        log.info("行程断点续跑: taskId={}, resumeFrom={}, 快照节点={}",
+                task.getId(), resumeFrom, snapshots.keySet());
+
+        // 从占位行重建请求上下文（clientRequestId/目的地/天数/预算等已落库）
+        ItineraryGenerateRequestDTO req = rebuildRequest(task);
+        String profileContext = profileContextAssembler.assemble(profilePort.getOrCreate(task.getUserId()));
+        String userInput = buildUserInput(req);
+        if (!profileContext.isBlank()) {
+            userInput = profileContext + "\n\n" + userInput;
+        }
+        Map<String, Object> initialState = new HashMap<>();
+        initialState.put("userInput", userInput);
+        initialState.put("userId", task.getUserId());
+        initialState.put("retryCount", 0);
+        initialState.put("retrievalQuery", buildRetrievalQuery(req));
+        initialState.put(com.travel.planning.workflow.SnapshotNodeWrapper.TASK_ID_KEY, task.getId());
+        // 快照产物注入（String 形态——下游 toText 兼容；被跳过节点不再执行）
+        injectSnapshot(initialState, "preference_analysis", "preference", snapshots);
+        injectSnapshot(initialState, "attraction_filter", "attractions", snapshots);
+        injectSnapshot(initialState, "route_arrangement", "routePlan", snapshots);
+        injectSnapshot(initialState, "budget_estimation", "budgetEstimate", snapshots);
+
+        long start = System.currentTimeMillis();
+        try {
+            CompiledGraph graph = workflowBuilder.buildWorkflow(resumeFrom);
+            OverAllState finalState = executeGraph(graph, initialState);
+            String itineraryJson = finalState.value("itinerary", "").toString();
+            String mindmapJson = finalState.value("mindmap", "").toString();
+            BigDecimal estimatedCost = extractEstimatedCost(itineraryJson);
+            String finalMindmap = mindmapJson;
+            if (finalMindmap == null || finalMindmap.isBlank()) {
+                finalMindmap = withTimeout(() -> {
+                    MindmapData mindmap = mindmapGenerator.generate(
+                            task.getDestination() + task.getDays() + "日游",
+                            task.getDestination(), task.getDays(),
+                            task.getBudget() != null ? task.getBudget().toString() : null,
+                            itineraryJson);
+                    return JsonUtils.toJson(mindmap);
+                }, MINDMAP_TIMEOUT_SECONDS, "思维导图生成");
+            }
+            persistenceService.updateCompleted(task.getId(), ItineraryStatus.GENERATED.name(),
+                    itineraryJson, finalMindmap, estimatedCost);
+            task.setStatus(ItineraryStatus.GENERATED.name());
+            task.setContent(itineraryJson);
+            task.setMindmapData(finalMindmap);
+            task.setEstimatedCost(estimatedCost);
+            log.info("行程续跑成功: taskId={}, resumeFrom={}, 耗时={}ms",
+                    task.getId(), resumeFrom, System.currentTimeMillis() - start);
+            // 续跑成功同样更新画像（与 generate 成功路径一致；sessionId 未落行程表，
+            // 会话知识切片由下次同会话生成补写，此处不阻塞）
+            try {
+                ItineraryGenerateRequestDTO rebuilt = rebuildRequest(task);
+                profilePort.recordTrip(task.getUserId(), task.getDestination(),
+                        JsonUtils.toJson(rebuilt.getInterests()), task.getTitle(),
+                        task.getBudget(), task.getParty());
+            } catch (Exception pe) {
+                log.warn("续跑后画像更新失败（不影响主流程）: {}", pe.getMessage());
+            }
+            return toResponseDTO(task);
+        } catch (Exception e) {
+            try {
+                persistenceService.updateStatus(task.getId(), ItineraryStatus.FAILED.name());
+            } catch (Exception markEx) {
+                log.warn("续跑失败状态标记异常: taskId={}, {}", task.getId(), markEx.getMessage());
+            }
+            if (e instanceof ItineraryGenerationException ige) {
+                throw ige;
+            }
+            log.error("行程续跑失败: taskId={}, resumeFrom={}", task.getId(), resumeFrom, e);
+            throw new ItineraryGenerationException(buildUpstreamMessage(e), e);
+        }
+    }
+
+    /** 断点=最新完成节点的下一个执行单元（无快照→整图重跑） */
+    static String resolveResumeFrom(Map<String, String> snapshots) {
+        if (snapshots.containsKey("budget_estimation")) {
+            return "itinerary_optimize";
+        }
+        if (snapshots.containsKey("route_arrangement")) {
+            return "budget_estimation";
+        }
+        if (snapshots.containsKey("attraction_filter")) {
+            return "route_arrangement";
+        }
+        if (snapshots.containsKey("preference_analysis")) {
+            return "attraction_filter";
+        }
+        return com.travel.planning.workflow.TravelWorkflowBuilder.RESUME_FULL;
+    }
+
+    private static void injectSnapshot(Map<String, Object> initialState, String nodeKey,
+                                       String stateKey, Map<String, String> snapshots) {
+        String payload = snapshots.get(nodeKey);
+        if (payload != null && !payload.isBlank()) {
+            initialState.put(stateKey, payload);
+        }
+    }
+
+    /** GENERATING 僵尸判定：updated_at 距今超过 zombie-minutes 视为死任务 */
+    private boolean isZombie(Itinerary task) {
+        if (task.getUpdatedAt() == null) {
+            return true; // 无时间戳保守视为僵尸（可 resume）
+        }
+        return task.getUpdatedAt().isBefore(
+                java.time.LocalDateTime.now().minusMinutes(Math.max(1, stateMachineProps.getZombieMinutes())));
+    }
+
+    private static ItineraryGenerateRequestDTO rebuildRequest(Itinerary task) {
+        ItineraryGenerateRequestDTO req = new ItineraryGenerateRequestDTO();
+        req.setDestination(task.getDestination());
+        req.setDays(task.getDays());
+        req.setBudget(task.getBudget());
+        req.setParty(task.getParty());
+        req.setStartDate(task.getStartDate());
+        try {
+            if (task.getInterests() != null && !task.getInterests().isBlank()) {
+                req.setInterests(com.travel.common.util.JsonUtils.getMapper()
+                        .readValue(task.getInterests(), new com.fasterxml.jackson.core.type.TypeReference<List<String>>() {}));
+            }
+        } catch (Exception ignore) {
+            // interests 解析失败按缺省处理（断点续跑不因此阻断）
+        }
+        return req;
+    }
+
+    private static Itinerary buildEntity(ItineraryGenerateRequestDTO req, Long userId, String status,
+                                         String content, String mindmap, BigDecimal estimatedCost) {
+        Itinerary entity = new Itinerary();
+        entity.setUserId(userId);
+        entity.setDestination(req.getDestination());
+        entity.setDays(req.getDays());
+        entity.setBudget(req.getBudget());
+        entity.setInterests(JsonUtils.toJson(req.getInterests()));
+        entity.setParty(req.getParty());
+        entity.setStartDate(req.getStartDate());
+        entity.setStatus(status);
+        entity.setTitle(req.getDestination() + req.getDays() + "日游");
+        entity.setContent(content);
+        entity.setMindmapData(mindmap);
+        entity.setEstimatedCost(estimatedCost);
+        entity.setClientRequestId(req.getClientRequestId());
         return entity;
+    }
+
+    /**
+     * M4-8：图执行统一入口（orTimeout 300s + cancel 中断，F23/F24 语义不变）。
+     */
+    private OverAllState executeGraph(CompiledGraph graph, Map<String, Object> initialState) {
+        CompletableFuture<Optional<OverAllState>> future = null;
+        try {
+            // F64/B2：把 userId 写入 RunnableConfig.metadata，供画像工具从 ToolContext 读取
+            Object uid = initialState.get("userId");
+            RunnableConfig config = RunnableConfig.builder()
+                    .addMetadata(com.travel.planning.memory.longterm.ProfileToolProvider.USER_ID_METADATA_KEY,
+                            uid == null ? 0L : uid)
+                    .build();
+            future = CompletableFuture.supplyAsync(() -> graph.invoke(initialState, config), WORKFLOW_EXECUTOR);
+            return future.orTimeout(MAX_EXECUTION_SECONDS, TimeUnit.SECONDS)
+                    .get()
+                    .orElseThrow(() -> new ItineraryGenerationException("工作流未返回最终状态"));
+        } catch (ExecutionException ee) {
+            Throwable cause = ee.getCause();
+            if (cause instanceof TimeoutException) {
+                // F24 补强：超时后立即 cancel(true) 中断后台 graph.invoke
+                if (future != null) {
+                    future.cancel(true);
+                }
+                log.error("工作流执行超时（>{}s）", MAX_EXECUTION_SECONDS);
+                throw new ItineraryGenerationException(
+                        "行程生成超时（超过 " + MAX_EXECUTION_SECONDS + " 秒），请稍后重试", ee);
+            }
+            if (cause instanceof RuntimeException re) {
+                throw re; // 保留原始异常（含 DashScope 上游错误）
+            }
+            throw new ItineraryGenerationException(
+                    cause != null ? cause.getMessage() : "行程生成失败", ee);
+        } catch (InterruptedException ie) {
+            Thread.currentThread().interrupt();
+            throw new ItineraryGenerationException("行程生成被中断", ie);
+        }
+    }
+
+    /**
+     * M4-7（修复 4）：带硬超时执行辅助 LLM 调用（虚拟线程 + orTimeout + cancel）。
+     * 与主工作流同样的超时语义（F23/F24），供 mindmap 兜底等图外 LLM 调用复用。
+     */
+    private <T> T withTimeout(java.util.function.Supplier<T> task, long seconds, String what) {
+        CompletableFuture<T> future = CompletableFuture.supplyAsync(task, WORKFLOW_EXECUTOR);
+        try {
+            return future.orTimeout(seconds, TimeUnit.SECONDS).get();
+        } catch (ExecutionException ee) {
+            Throwable cause = ee.getCause();
+            if (cause instanceof TimeoutException) {
+                future.cancel(true);
+                throw new ItineraryGenerationException(what + "超时（超过 " + seconds + " 秒）", ee);
+            }
+            if (cause instanceof RuntimeException re) {
+                throw re;
+            }
+            throw new ItineraryGenerationException(
+                    what + "失败: " + (cause != null ? cause.getMessage() : "unknown"), ee);
+        } catch (InterruptedException ie) {
+            Thread.currentThread().interrupt();
+            throw new ItineraryGenerationException(what + "被中断", ie);
+        }
     }
 
     /**
@@ -349,6 +621,7 @@ public class ItineraryService {
                 .days(entity.getDays())
                 .estimatedCost(entity.getEstimatedCost())
                 .generatedAt(entity.getCreatedAt() != null ? entity.getCreatedAt().toString() : null)
+                .status(entity.getStatus())
                 .build();
 
         // 解析 content JSON → dayPlans

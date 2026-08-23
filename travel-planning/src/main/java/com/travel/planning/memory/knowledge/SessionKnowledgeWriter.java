@@ -31,6 +31,9 @@ public class SessionKnowledgeWriter {
     private static final ExecutorService WRITE_EXECUTOR = Executors.newVirtualThreadPerTaskExecutor();
     private static final DateTimeFormatter ISO = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss");
 
+    /** M4-5b：二次取父单次取回上限（覆盖超长多日行程；knowledge 侧另有夹逼） */
+    private static final int BY_PREFIX_LIMIT = 30;
+
     private final KnowledgeClient knowledgeClient;
 
     /**
@@ -95,6 +98,30 @@ public class SessionKnowledgeWriter {
         return sb.toString().trim();
     }
 
+    /**
+     * M4-5b：按 seq 前缀取回会话切片（二次取父）。
+     *
+     * <p>用于 itinerary_day 命中被 topK 截断丢天的场景：以 {@code "itin:{id}:"} 为前缀
+     * 取回该行程<b>全部</b>天块，拼出完整父视图。失败/空返回降级空列表（调用方保留原命中，
+     * 回归零风险）。取父数据来自 ES 原文（content 完整、未做 300 字截断）。</p>
+     */
+    public List<Map<String, Object>> fetchBySeqPrefix(String sessionId, String seqPrefix) {
+        if (sessionId == null || sessionId.isBlank() || seqPrefix == null || seqPrefix.isBlank()) {
+            return List.of();
+        }
+        try {
+            var resp = knowledgeClient.findSessionContextByPrefix(sessionId, seqPrefix, BY_PREFIX_LIMIT);
+            if (resp == null || resp.getData() == null) {
+                return List.of();
+            }
+            return resp.getData();
+        } catch (Exception e) {
+            log.warn("[SessionKnowledge] 按前缀取父失败，降级保留原命中: seqPrefix={}, error={}",
+                    seqPrefix, e.getMessage());
+            return List.of();
+        }
+    }
+
     /** F85：检索 + F83 最近一次行程过滤，返回结构化切片（不渲染文本）。 */
     private List<Map<String, Object>> retrieve(String sessionId, String query, int topK) {
         if (sessionId == null || sessionId.isBlank() || query == null || query.isBlank()) {
@@ -145,8 +172,11 @@ public class SessionKnowledgeWriter {
         }
     }
 
-    /** F83：从 seq（itin:{id}:{day}）解析行程计划 id */
-    private static String planIdOf(Map<String, Object> hit) {
+    /**
+     * F83：从 seq（itin:{id}:{day}）解析行程计划 id。
+     * M4-5b：改 public 供 ChatBudgetStep 二次取父（提取命中行程 id）复用。
+     */
+    public static String planIdOf(Map<String, Object> hit) {
         String seq = String.valueOf(hit.getOrDefault("seq", ""));
         int i = seq.indexOf("itin:");
         if (i < 0) {

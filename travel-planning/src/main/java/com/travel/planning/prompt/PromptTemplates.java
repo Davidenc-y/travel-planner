@@ -112,4 +112,10 @@ public class PromptTemplates {
     public String sessionSummaryValidate() {
         return load("session_summary_validate");
     }
+
+    // ---- M4-5a：在线相关性 Judge ----
+
+    public String ragJudgeRelevance() {
+        return load("rag_judge_relevance");
+    }
 }

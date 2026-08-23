@@ -19,6 +19,10 @@ public class RagRoutingMetrics {
     private final MeterRegistry registry;
     private final Counter total;
     private final Timer elapsed;
+    /** M4-6：Rerank 指标（total/elapsed/fallback，风格对齐 routing） */
+    private final Counter rerankTotal;
+    private final Timer rerankElapsed;
+    private final Counter rerankFallback;
 
     public RagRoutingMetrics(MeterRegistry registry) {
         this.registry = registry;
@@ -28,6 +32,16 @@ public class RagRoutingMetrics {
         this.elapsed = Timer.builder("rag.routing.elapsed")
                 .description("RAG 路由耗时")
                 .publishPercentileHistogram()
+                .register(registry);
+        this.rerankTotal = Counter.builder("rag.rerank.total")
+                .description("Rerank 调用总次数（含 noop 直通）")
+                .register(registry);
+        this.rerankElapsed = Timer.builder("rag.rerank.elapsed")
+                .description("Rerank 调用耗时")
+                .publishPercentileHistogram()
+                .register(registry);
+        this.rerankFallback = Counter.builder("rag.rerank.fallback")
+                .description("Rerank fail-open 次数（失败按原顺序截断）")
                 .register(registry);
     }
 
@@ -45,5 +59,20 @@ public class RagRoutingMetrics {
                 .register(registry)
                 .increment();
         elapsed.record(elapsedMs, TimeUnit.MILLISECONDS);
+    }
+
+    /**
+     * M4-6：记录一次 Rerank 调用（总数 + 耗时直方图）。
+     */
+    public void recordRerank(long elapsedMs) {
+        rerankTotal.increment();
+        rerankElapsed.record(elapsedMs, TimeUnit.MILLISECONDS);
+    }
+
+    /**
+     * M4-6：记录一次 Rerank fail-open（失败降级计数）。
+     */
+    public void recordRerankFallback() {
+        rerankFallback.increment();
     }
 }

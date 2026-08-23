@@ -58,4 +58,13 @@ public class ShortTermMemoryProperties {
 
     /** 摘要模式下滑动窗口保留的最近轮数 */
     private int recentWindowTurns = 2;
+
+    /**
+     * M4-1a/P0-1：摘要写入是否走 Lua CAS 原子路径（版本冲突放弃写入）。
+     * false 时回退旧的双 set 路径（回滚开关，行为与 F58 一致）。
+     */
+    private boolean casEnabled = true;
+
+    /** M4-4/P1-1：close 收口同步等待上限（秒）；超时转后台完成，未落盘由补偿兜底 */
+    private int finalizeSyncWaitSeconds = 15;
 }

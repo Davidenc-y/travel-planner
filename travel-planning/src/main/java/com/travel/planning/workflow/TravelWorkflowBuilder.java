@@ -58,14 +58,26 @@ public class TravelWorkflowBuilder {
     private static final int MAX_RETRY = 2;
     private static final double BUDGET_OVERRUN_RATIO = 1.2;
 
+    /** M4-8（R2 G2）：resume 断点集合（线性依赖，缓存键空间封闭） */
+    public static final String RESUME_FULL = "full";
+    private static final List<String> RESUME_KEYS = List.of(
+            RESUME_FULL, "preference_analysis", "attraction_filter",
+            "route_arrangement", "budget_estimation", "itinerary_optimize");
+
     private final PreferenceAnalysisAgent prefAgent;
     private final AttractionFilterAgent attrAgent;
     private final RouteArrangementAgent routeAgent;
     private final BudgetEstimationAgent budgetAgent;
     private final KnowledgeRetrievalService knowledgeRetrievalService;
+    // M4-8：关键产物节点快照（resume 断点依据）
+    private final ItineraryTaskSnapshotPort snapshotPort;
 
-    /** M3-9：预编译 StateGraph 缓存（CompiledGraph 不可变、按调用注入 state，可安全复用） */
-    private volatile CompiledGraph cachedGraph;
+    /**
+     * M3-9 → M4-8：预编译缓存从单例升级为<b>前缀子图缓存</b>。
+     * {@code full} 键构建代码与 M3-9 完全一致（正常路径零回归）；resume 断点子图
+     * 跳过断点之前节点（R2 G2：不污染主图结构，替代"边条件跳过"方案）。
+     */
+    private final Map<String, CompiledGraph> graphCache = new java.util.concurrent.ConcurrentHashMap<>();
     private final Object graphLock = new Object();
 
     public TravelWorkflowBuilder(
@@ -73,28 +85,49 @@ public class TravelWorkflowBuilder {
             AttractionFilterAgent attrAgent,
             RouteArrangementAgent routeAgent,
             BudgetEstimationAgent budgetAgent,
-            KnowledgeRetrievalService knowledgeRetrievalService) {
+            KnowledgeRetrievalService knowledgeRetrievalService,
+            ItineraryTaskSnapshotPort snapshotPort) {
         this.prefAgent = prefAgent;
         this.attrAgent = attrAgent;
         this.routeAgent = routeAgent;
         this.budgetAgent = budgetAgent;
         this.knowledgeRetrievalService = knowledgeRetrievalService;
+        this.snapshotPort = snapshotPort;
     }
 
+    /** 正常全图（M3-9 语义不变） */
     public CompiledGraph buildWorkflow() throws Exception {
-        CompiledGraph g = cachedGraph;
+        return buildWorkflow(RESUME_FULL);
+    }
+
+    /**
+     * M4-8：按断点构建/取缓存子图。
+     *
+     * @param resumeFrom 断点节点名（该节点起执行）：full / preference_analysis /
+     *                   attraction_filter / route_arrangement / budget_estimation /
+     *                   itinerary_optimize（非法值回退 full）
+     */
+    public CompiledGraph buildWorkflow(String resumeFrom) throws Exception {
+        String key = RESUME_KEYS.contains(resumeFrom) ? resumeFrom : RESUME_FULL;
+        CompiledGraph g = graphCache.get(key);
         if (g != null) {
             return g;
         }
         synchronized (graphLock) {
-            if (cachedGraph == null) {
-                cachedGraph = doBuild();
+            g = graphCache.get(key);
+            if (g == null) {
+                try {
+                    g = doBuild(key);
+                } catch (Exception e) {
+                    throw new RuntimeException("TravelWorkflow 构建失败: resumeFrom=" + key, e);
+                }
+                graphCache.put(key, g);
             }
-            return cachedGraph;
+            return g;
         }
     }
 
-    private CompiledGraph doBuild() throws Exception {
+    private CompiledGraph doBuild(String resumeFrom) throws Exception {
         KeyStrategyFactory strategyFactory = () -> {
             Map<String, KeyStrategy> map = new HashMap<>();
             // messages 用 AppendStrategy —— 必须存 Message/List<Message>，不可存 String
@@ -109,58 +142,111 @@ public class TravelWorkflowBuilder {
             map.put("retryCount", new ReplaceStrategy());
             map.put("userId", new ReplaceStrategy());
             map.put("retrievalQuery", new ReplaceStrategy());
+            // M4-8：快照包装器读取任务 id
+            map.put(SnapshotNodeWrapper.TASK_ID_KEY, new ReplaceStrategy());
             return map;
         };
 
         StateGraph workflow = new StateGraph(strategyFactory);
 
-        // 节点定义 — agent.asNode(true, false) 框架标准用法
+        // M4-8：断点包含集合——resumeFrom=X 表示 X 及之后执行，之前的跳过
+        boolean full = RESUME_FULL.equals(resumeFrom);
+        boolean hasPreference = full || "preference_analysis".equals(resumeFrom);
+        boolean hasAttraction = hasPreference || "attraction_filter".equals(resumeFrom);
+        boolean hasRoute = hasAttraction || "route_arrangement".equals(resumeFrom);
+        boolean hasBudget = hasRoute || "budget_estimation".equals(resumeFrom);
+        // budget_retry 回跳目标 attraction_filter 必须在子图内才保留重试语义；
+        // 断点在 route/budget/optimize 时退化为直边（resume 模式的行为差异，见 M4-8 记录）
+        boolean hasRetry = hasAttraction;
+
+        // 节点定义 — agent.asNode(true, false) 框架标准用法 + M4-8 快照包装
         //   includeContents=true:  传递父图 messages 给子 Agent（对话历史携带上下文）
         //   returnReasoningContents=false: 仅返回最终输出，不返回推理过程
-        workflow.addNode("user_input", AsyncNodeAction.node_async(new UserInputNode()));
-        workflow.addNode("rag_retrieval", AsyncNodeAction.node_async(new RagRetrievalNode()));
-        workflow.addNode("preference_analysis", prefAgent.getAgent().asNode(true, false));
-        workflow.addNode("attraction_filter", attrAgent.getAgent().asNode(true, false));
-        workflow.addNode("route_arrangement", routeAgent.getAgent().asNode(true, false));
-        workflow.addNode("budget_estimation", budgetAgent.getAgent().asNode(true, false));
-        workflow.addNode("budget_retry", AsyncNodeAction.node_async(new RetryCounterNode()));
+        //   SnapshotNodeWrapper: 执行后异步落业务 JSON 快照（透传输出，行为不变）
+        if (full) {
+            workflow.addNode("user_input", AsyncNodeAction.node_async(new UserInputNode()));
+            workflow.addNode("rag_retrieval", AsyncNodeAction.node_async(new RagRetrievalNode()));
+        }
+        if (hasPreference) {
+            workflow.addNode("preference_analysis", SnapshotNodeWrapper.wrap("preference_analysis",
+                    prefAgent.getAgent().asNode(true, false), snapshotPort));
+        }
+        if (hasAttraction) {
+            workflow.addNode("attraction_filter", SnapshotNodeWrapper.wrap("attraction_filter",
+                    attrAgent.getAgent().asNode(true, false), snapshotPort));
+        }
+        if (hasRoute) {
+            workflow.addNode("route_arrangement", SnapshotNodeWrapper.wrap("route_arrangement",
+                    routeAgent.getAgent().asNode(true, false), snapshotPort));
+        }
+        if (hasBudget) {
+            workflow.addNode("budget_estimation", SnapshotNodeWrapper.wrap("budget_estimation",
+                    budgetAgent.getAgent().asNode(true, false), snapshotPort));
+        }
+        if (hasRetry) {
+            workflow.addNode("budget_retry", AsyncNodeAction.node_async(new RetryCounterNode()));
+        }
         workflow.addNode("itinerary_optimize", AsyncNodeAction.node_async(new OptimizeNode()));
         workflow.addNode("mindmap_output", AsyncNodeAction.node_async(new MindmapNode()));
 
-        // 边定义
-        workflow.addEdge(START, "user_input");
-        workflow.addEdge("user_input", "rag_retrieval");
-        workflow.addEdge("rag_retrieval", "preference_analysis");
-        workflow.addEdge("preference_analysis", "attraction_filter");
-        workflow.addEdge("attraction_filter", "route_arrangement");
-        workflow.addEdge("route_arrangement", "budget_estimation");
+        // 边定义：从子图起点接到 START
+        String first = full ? "user_input"
+                : hasPreference ? "preference_analysis"
+                : hasAttraction ? "attraction_filter"
+                : hasRoute ? "route_arrangement"
+                : hasBudget ? "budget_estimation"
+                : "itinerary_optimize";
+        workflow.addEdge(START, first);
+        if (full) {
+            workflow.addEdge("user_input", "rag_retrieval");
+            workflow.addEdge("rag_retrieval", "preference_analysis");
+        }
+        if (hasPreference) {
+            workflow.addEdge("preference_analysis", "attraction_filter");
+        }
+        if (hasAttraction && hasRoute) {
+            workflow.addEdge("attraction_filter", "route_arrangement");
+        }
+        if (hasRoute && hasBudget) {
+            workflow.addEdge("route_arrangement", "budget_estimation");
+        }
 
-        // 条件边：预算超支（>1.2倍）且 retry<MAX_RETRY → 先经 budget_retry 递增 retryCount，
-        // 再回退到 attraction_filter 重新筛选（F23 修复：原实现直接回退导致 retryCount 永不递增 → 死循环）
-        workflow.addConditionalEdges(
-                "budget_estimation",
-                AsyncEdgeAction.edge_async(state -> {
-                    int retryCount = readRetryCount(state);
-                    double estimatedCost = extractTotalCost(toText(state.value("budgetEstimate")));
-                    double budget = parseBudgetFromPreference(toText(state.value("preference")));
-                    boolean overBudget = estimatedCost > budget * BUDGET_OVERRUN_RATIO;
-                    boolean canRetry = retryCount < MAX_RETRY;
-                    log.info("预算判定: estimated={}, budget={}, ratio={}, retry={}/{}, overBudget={}, canRetry={}",
-                            estimatedCost, budget, BUDGET_OVERRUN_RATIO, retryCount, MAX_RETRY, overBudget, canRetry);
-                    if (overBudget && canRetry) {
-                        log.info("预算超支，进入重试计数节点 (retry {} -> {})", retryCount, retryCount + 1);
-                        return "budget_retry";
-                    }
-                    log.info("预算正常或重试达上限，进入综合优化");
-                    return "itinerary_optimize";
-                }),
-                Map.of("budget_retry", "budget_retry", "itinerary_optimize", "itinerary_optimize"));
-
-        workflow.addEdge("budget_retry", "attraction_filter");
+        if (hasBudget) {
+            // 条件边：预算超支（>1.2倍）且 retry<MAX_RETRY → budget_retry 递增后回退
+            // attraction_filter 重新筛选（F23：回退必须经过计数节点防死循环）
+            if (hasRetry) {
+                workflow.addConditionalEdges(
+                        "budget_estimation",
+                        AsyncEdgeAction.edge_async(state -> {
+                            int retryCount = readRetryCount(state);
+                            double estimatedCost = extractTotalCost(toText(state.value("budgetEstimate")));
+                            double budget = parseBudgetFromPreference(toText(state.value("preference")));
+                            boolean overBudget = estimatedCost > budget * BUDGET_OVERRUN_RATIO;
+                            boolean canRetry = retryCount < MAX_RETRY;
+                            log.info("预算判定: estimated={}, budget={}, ratio={}, retry={}/{}, overBudget={}, canRetry={}",
+                                    estimatedCost, budget, BUDGET_OVERRUN_RATIO, retryCount, MAX_RETRY, overBudget, canRetry);
+                            if (overBudget && canRetry) {
+                                log.info("预算超支，进入重试计数节点 (retry {} -> {})", retryCount, retryCount + 1);
+                                return "budget_retry";
+                            }
+                            log.info("预算正常或重试达上限，进入综合优化");
+                            return "itinerary_optimize";
+                        }),
+                        Map.of("budget_retry", "budget_retry", "itinerary_optimize", "itinerary_optimize"));
+                workflow.addEdge("budget_retry", "attraction_filter");
+            } else {
+                // M4-8：断点子图不含 attraction_filter → 超支也不回退（快照兜底语义）
+                workflow.addEdge("budget_estimation", "itinerary_optimize");
+            }
+        }
         workflow.addEdge("itinerary_optimize", "mindmap_output");
         workflow.addEdge("mindmap_output", END);
 
-        log.info("TravelWorkflow 构建完成: 9 节点（agent.asNode 标准用法 + rag_retrieval 预检索 + budget_retry 重试计数）");
+        int nodeCount = 2 + (full ? 2 : 0) + (hasPreference ? 1 : 0) + (hasAttraction ? 1 : 0)
+                + (hasRoute ? 1 : 0) + (hasBudget ? 1 : 0) + (hasRetry ? 1 : 0);
+        log.info("TravelWorkflow 构建完成: {} 节点, resumeFrom={}（快照包装×{}）",
+                nodeCount, resumeFrom,
+                (hasPreference ? 1 : 0) + (hasAttraction ? 1 : 0) + (hasRoute ? 1 : 0) + (hasBudget ? 1 : 0));
         // recursionLimit=20：正常路径（含 2 次预算重试）约 14 次节点执行，
         // 20 次为硬性循环上限，作为防死循环兜底（默认值 100 在 LLM 调用下耗时过长）
         return workflow.compile(CompileConfig.builder().recursionLimit(20).build());

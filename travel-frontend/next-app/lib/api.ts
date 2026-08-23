@@ -155,6 +155,9 @@ export const itineraryApi = {
     planningApi.get<R<import('@/types').PageResult<import('@/types').ItineraryResponse>>>('/api/v1/itineraries', { params: { userId, page, size } }),
   delete: (id: number) =>
     planningApi.delete<R<void>>(`/api/v1/itineraries/${id}`),
+  /** M4-9：断点续跑（仅 FAILED/僵尸 GENERATING 可续；同步等待同 generate） */
+  resume: (id: number) =>
+    planningApi.post<R<import('@/types').ItineraryResponse>>(`/api/v1/itineraries/${id}/resume`),
 };
 
 // ==================== Chat ====================
@@ -165,8 +168,12 @@ export const chatApi = {
     planningApi.get<R<import('@/types').ChatSession[]>>('/api/v1/chat/sessions', { params: { userId } }),
   getHistory: (sessionId: string) =>
     planningApi.get<R<import('@/types').ChatMessage[]>>(`/api/v1/chat/sessions/${sessionId}/history`),
-  sendMessage: (sessionId: string, message: string) =>
-    planningApi.post<R<import('@/types').ChatResponse>>(`/api/v1/chat/sessions/${sessionId}/messages`, { message }),
+  /** M4-9：clientMessageId 为消息幂等键——超时/40904 退避重试须携带同键 */
+  sendMessage: (sessionId: string, message: string, clientMessageId?: string) =>
+    planningApi.post<R<import('@/types').ChatResponse>>(`/api/v1/chat/sessions/${sessionId}/messages`, { message, clientMessageId }),
+  /** M4-9：显式关闭会话（归档+收口摘要；禁止 beforeunload 触发） */
+  closeSession: (sessionId: string) =>
+    planningApi.post<R<{ archived: boolean; finalized: boolean }>>(`/api/v1/chat/sessions/${sessionId}/close`),
   /**
    * F92：流式聊天预留（SSE）。当前后端为一次性 JSON 响应，本方法返回原生 fetch Response；
    * 后端支持 SSE 后，消费 response.body 的 ReadableStream 即可实现打字机效果。

@@ -29,6 +29,8 @@ public class ItineraryResponseDTO {
     private BudgetBreakdown budgetBreakdown;
     private MindmapData mindmap;
     private String generatedAt;
+    /** M4-9：行程状态（GENERATING/FAILED/GENERATED/CONFIRMED/ARCHIVED，前端徽标用） */
+    private String status;
 
     /**
      * 每日计划

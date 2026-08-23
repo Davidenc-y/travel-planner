@@ -37,6 +37,17 @@ public class ItineraryController {
     }
 
     /**
+     * M4-9/P1-5：断点续跑（仅 FAILED / 僵尸 GENERATING 可续；归属校验在 Service）。
+     * 同步等待（交互形态与 generate 一致，无轮询）。
+     */
+    @PostMapping("/{id}/resume")
+    public R<ItineraryResponseDTO> resume(@PathVariable Long id,
+                                          @RequestHeader(value = "X-User-Id", required = false) Long userId) {
+        log.info("行程续跑: id={}", id);
+        return R.ok(itineraryService.resume(id, AuthUtils.resolveUserId(userId)));
+    }
+
+    /**
      * 查询行程详情
      */
     @GetMapping("/{id}")

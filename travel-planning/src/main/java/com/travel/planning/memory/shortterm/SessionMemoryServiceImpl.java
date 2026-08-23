@@ -8,7 +8,9 @@ import com.travel.planning.prompt.PromptTemplates;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.model.ChatModel;
+import org.springframework.core.io.ClassPathResource;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.script.DefaultRedisScript;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
@@ -43,6 +45,19 @@ public class SessionMemoryServiceImpl implements SessionMemoryPort {
     /** M3-9：请求内消息快照（同一请求多次读取只查一次库；异步线程各自独立加载） */
     private final ThreadLocal<Map<String, List<ChatMessage>>> requestMessages =
             ThreadLocal.withInitial(LinkedHashMap::new);
+
+    /**
+     * M4-1a/P0-1：摘要双 key CAS 原子写入脚本（版本冲突放弃，滚动/收口共用）。
+     * 语义见 resources/lua/save_summary_cas.lua。
+     */
+    private static final DefaultRedisScript<Long> SAVE_SUMMARY_CAS = buildCasScript();
+
+    private static DefaultRedisScript<Long> buildCasScript() {
+        DefaultRedisScript<Long> script = new DefaultRedisScript<>();
+        script.setLocation(new ClassPathResource("lua/save_summary_cas.lua"));
+        script.setResultType(Long.class);
+        return script;
+    }
 
     @Override
     public void beginRequest() {
@@ -104,6 +119,62 @@ public class SessionMemoryServiceImpl implements SessionMemoryPort {
         }
         // F75/B3-5：摘要生成纳入统一后台 LLM 治理，并发上限内执行，超限降级跳过
         llmGovernor.runBackground("session-summary", () -> doSummarize(sessionId));
+    }
+
+    /**
+     * M4-4/P1-1：会话收口摘要（全量重算，绕过滚动门控；同步执行）。
+     *
+     * <p>与 doSummarize 的差异：输入为全量消息原文（不拼旧摘要）；无 refresh-turns
+     * 门控；meta.summaryType=final；CAS 失败/生成失败返回 false 且不改动既有摘要
+     * （保留旧摘要，由收口器重试）。许可治理与超时预算由 SessionFinalizer 负责。</p>
+     */
+    @Override
+    public boolean finalizeSummary(String sessionId) {
+        if (sessionId == null || sessionId.isBlank()) {
+            return false;
+        }
+        try {
+            List<ChatMessage> messages = messagesOf(sessionId);
+            if (messages == null || messages.isEmpty()) {
+                return true; // 空会话：无需收口，视为成功（由调用方落空摘要标记）
+            }
+            SummaryInfo info = getSummaryInfo(sessionId);
+            String fullText = buildFullText(messages, props.getSummaryMaxChars());
+            String summary = callSummarize(fullText, props.getSummaryHardMaxTokens());
+            if (summary.isBlank()) {
+                log.warn("[SessionMemory] 收口摘要生成为空: sessionId={}", sessionId);
+                return false;
+            }
+            if (props.isSummaryValidate()) {
+                List<String> missing = validateSummary(fullText, summary);
+                int retry = 0;
+                while (!missing.isEmpty() && retry < props.getSummaryRetryTimes()) {
+                    summary = callSummarize(
+                            fullText + "\n\n【必须补充】" + String.join("、", missing),
+                            props.getSummaryHardMaxTokens());
+                    missing = validateSummary(fullText, summary);
+                    retry++;
+                }
+                if (!missing.isEmpty()) {
+                    log.warn("[SessionMemory] 收口摘要保真校验未通过，保留旧摘要: sessionId={}, missing={}",
+                            sessionId, missing);
+                    return false;
+                }
+            }
+            summary = enforceHardLimit(summary);
+            Long newestId = messages.get(messages.size() - 1).getId();
+            boolean saved = saveSummaryChecked(sessionId, info.version(), summary, newestId,
+                    info.version() + 1, "final");
+            if (saved) {
+                log.info("[SessionMemory] 收口摘要已保存: sessionId={}, version={}, lastMessageId={}",
+                        sessionId, info.version() + 1, newestId);
+            }
+            return saved;
+        } catch (Exception e) {
+            log.warn("[SessionMemory] 收口摘要失败（保留旧摘要）: sessionId={}, error={}",
+                    sessionId, e.getMessage());
+            return false;
+        }
     }
 
     @Override
@@ -242,9 +313,12 @@ public class SessionMemoryServiceImpl implements SessionMemoryPort {
             summary = enforceHardLimit(summary);
 
             Long newestId = messages.get(messages.size() - 1).getId();
-            saveSummary(sessionId, summary, newestId, info.version() + 1);
-            log.info("[SessionMemory] 会话摘要已保存: sessionId={}, version={}, lastMessageId={}, 长度={}",
-                    sessionId, info.version() + 1, newestId, summary.length());
+            boolean saved = saveSummaryChecked(sessionId, info.version(), summary, newestId,
+                    info.version() + 1, null);
+            if (saved) {
+                log.info("[SessionMemory] 会话摘要已保存: sessionId={}, version={}, lastMessageId={}, 长度={}",
+                        sessionId, info.version() + 1, newestId, summary.length());
+            }
         } catch (Exception e) {
             log.warn("[SessionMemory] 摘要生成失败（降级为原文窗口）: sessionId={}, error={}",
                     sessionId, e.getMessage());
@@ -311,6 +385,36 @@ public class SessionMemoryServiceImpl implements SessionMemoryPort {
             return truncated;
         }
         return recompressed;
+    }
+
+    /**
+     * M4-1a/P0-1：带 CAS 保护的摘要写入入口（滚动/收口共用）。
+     *
+     * <p>casEnabled=true 走 Lua CAS（expectedVersion 不匹配即放弃，版本较大者胜）；
+     * false 走旧的双 set 路径（回滚开关）。summaryType 供收口摘要标记 final（M4-4）。</p>
+     */
+    private boolean saveSummaryChecked(String sessionId, int expectedVersion, String text,
+                                        Long lastMessageId, int newVersion, String summaryType) {
+        if (!props.isCasEnabled()) {
+            saveSummary(sessionId, text, lastMessageId, newVersion);
+            return true;
+        }
+        Map<String, Object> meta = new LinkedHashMap<>();
+        meta.put("lastMessageId", lastMessageId);
+        meta.put("version", newVersion);
+        if (summaryType != null) {
+            meta.put("summaryType", summaryType);
+        }
+        long ttlSeconds = TimeUnit.DAYS.toSeconds(props.getSummaryTtlDays());
+        Long r = redisTemplate.execute(SAVE_SUMMARY_CAS,
+                List.of(summaryKey(sessionId), summaryMetaKey(sessionId)),
+                String.valueOf(expectedVersion), text, JsonUtils.toJson(meta), String.valueOf(ttlSeconds));
+        if (r == null || r != 1L) {
+            log.warn("[SessionMemory] 摘要版本冲突放弃写入: sessionId={}, expectedVersion={}",
+                    sessionId, expectedVersion);
+            return false;
+        }
+        return true;
     }
 
     private void saveSummary(String sessionId, String text, Long lastMessageId, int version) {

@@ -14,6 +14,8 @@ import com.travel.planning.memory.pipeline.ChatIntentStep;
 import com.travel.planning.memory.pipeline.ChatMemoryStep;
 import com.travel.planning.memory.pipeline.ChatBudgetStep;
 import com.travel.planning.memory.pipeline.ChatRoutingStep;
+import com.travel.planning.memory.pipeline.ChatSessionGuardProperties;
+import com.travel.planning.memory.shortterm.SessionFinalizer;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -51,6 +53,10 @@ public class ChatService {
     private final ChatBudgetStep chatBudgetStep;
     // M3-17：步骤 8 路由（意图分派 recall/direct/supervisor）收敛到 ChatRoutingStep
     private final ChatRoutingStep chatRoutingStep;
+    // M4-4：会话状态守卫（ARCHIVED 拒写开关）
+    private final ChatSessionGuardProperties sessionGuardProps;
+    // M4-4：会话收口器（close 后全量重算摘要，隐式待办+启动补偿）
+    private final SessionFinalizer sessionFinalizer;
 
     /**
      * 创建会话
@@ -67,9 +73,20 @@ public class ChatService {
     }
 
     /**
-     * 发送消息并获取响应
+     * 发送消息并获取响应（无幂等键重载，原路径）。
      */
     public ChatResponseDTO sendMessage(String sessionId, String message, Long userId) {
+        return sendMessage(sessionId, message, userId, null);
+    }
+
+    /**
+     * 发送消息并获取响应（M4-3：支持消息级幂等）。
+     *
+     * <p>幂等语义见 {@link ChatPersistenceStep#beginTurn}：COMPLETED 重放 /
+     * PENDING 40904 / FAILED 复用重跑 / 未命中同事务登记；兜底文案登记 FAILED
+     * （重试重新执行，不重放兜底，M4-0-R1 评审 D3-1/D3-2）。</p>
+     */
+    public ChatResponseDTO sendMessage(String sessionId, String message, Long userId, String clientMessageId) {
         // F52：防御脏 userId（兜底 0 会导致 user_id=0 画像/会话）。
         if (userId == null || userId <= 0) {
             throw new BusinessException(40101, "用户未登录");
@@ -78,50 +95,86 @@ public class ChatService {
         chatGuardStep.check(userId, message);
         // M3-11：步骤 2 持久化（会话校验 + 用户消息落库）
         ChatSession session = chatPersistenceStep.requireSession(sessionId);
-        chatPersistenceStep.appendUserMessage(sessionId, message);
-        // M3-12：步骤 3 偏好（确定性偏好保存；语义同 F71）
-        chatPreferenceStep.saveIfPreference(userId, message);
-        // M3-13：步骤 4 知识（切片+异步写入；语义同 Phase C/F78 C1）
-        chatKnowledgeStep.writeUserMessageAsync(sessionId, message);
-        // M3-14：步骤 5 意图（分类+追溯填充；语义同 F85/F89）
-        ChatIntent intent = chatIntentStep.classify(sessionId, userId, message);
+        // M4-3/H-2：会话归属校验（越权访问他人会话）
+        if (!userId.equals(session.getUserId())) {
+            throw new BusinessException(40302, "无权访问该会话");
+        }
+        // M4-3：幂等门禁（在用户消息落库之前；未命中时用户消息已在门禁事务内追加）
+        ChatPersistenceStep.TurnGate gate =
+                chatPersistenceStep.beginTurn(sessionId, userId, clientMessageId, message);
+        if (!gate.proceed()) {
+            // 命中 COMPLETED：直接重放，不落任何库（豁免会话状态校验——已归档会话也应可重放）
+            return ChatResponseDTO.builder()
+                    .sessionId(sessionId)
+                    .response(gate.replayResponse())
+                    .tokens(gate.replayTokens() == null ? 0 : gate.replayTokens())
+                    .build();
+        }
+        // M4-4：ARCHIVED 会话拒绝新消息（40902；replay 已在上面豁免）
+        if (sessionGuardProps.isRejectArchived() && "ARCHIVED".equals(session.getStatus())) {
+            throw new BusinessException(40902, "会话已关闭");
+        }
+        if (!gate.userMessageAppended() && !gate.reuseUserMessage()) {
+            // 无幂等键/开关关：原路径由服务端追加用户消息
+            chatPersistenceStep.appendUserMessage(sessionId, message);
+        }
+        try {
+            // M3-12：步骤 3 偏好（确定性偏好保存；语义同 F71）
+            chatPreferenceStep.saveIfPreference(userId, message);
+            // M3-13：步骤 4 知识（切片+异步写入；语义同 Phase C/F78 C1）
+            chatKnowledgeStep.writeUserMessageAsync(sessionId, message);
+            // M3-14：步骤 5 意图（分类+追溯填充；语义同 F85/F89）
+            ChatIntent intent = chatIntentStep.classify(sessionId, userId, message);
 
-        // M3-15：步骤 6 记忆（画像+历史/摘要组装；语义同 F50/F55/F57/F60）
-        ChatMemoryStep.MemoryContext memory = chatMemoryStep.assemble(userId, sessionId);
-        String profileContext = memory.profileContext();
-        String historySection = memory.historySection();
-        boolean summaryUsed = memory.summaryUsed();
-        boolean summaryTriggered = memory.summaryTriggered();
-        int turns = memory.turns();
-        int totalHistoryTokens = memory.totalHistoryTokens();
-        // M3-16：步骤 7 预算（检索注入+组装+四档预算兜底；语义同 F63/F66/F78/F83/F85）
-        ChatBudgetStep.BudgetContext budget = chatBudgetStep.compose(sessionId, userId, intent,
-                message, profileContext, historySection);
-        String composed = budget.composed();
-        int inputTokens = budget.inputTokens();
-        profileContext = budget.profileContext();
-        historySection = budget.historySection();
-        String candidates = budget.candidates();
-        List<Map<String, Object>> sessionHits = budget.sessionHits();
+            // M3-15：步骤 6 记忆（画像+历史/摘要组装；语义同 F50/F55/F57/F60）
+            ChatMemoryStep.MemoryContext memory = chatMemoryStep.assemble(userId, sessionId);
+            String profileContext = memory.profileContext();
+            String historySection = memory.historySection();
+            boolean summaryUsed = memory.summaryUsed();
+            boolean summaryTriggered = memory.summaryTriggered();
+            int turns = memory.turns();
+            int totalHistoryTokens = memory.totalHistoryTokens();
+            // M3-16：步骤 7 预算（检索注入+组装+四档预算兜底；语义同 F63/F66/F78/F83/F85）
+            ChatBudgetStep.BudgetContext budget = chatBudgetStep.compose(sessionId, userId, intent,
+                    message, profileContext, historySection);
+            String composed = budget.composed();
+            int inputTokens = budget.inputTokens();
+            profileContext = budget.profileContext();
+            historySection = budget.historySection();
+            String candidates = budget.candidates();
+            List<Map<String, Object>> sessionHits = budget.sessionHits();
 
-        log.info("聊天输入组装完成: 总长度={}, 含画像={}, 含历史={}, 含摘要={}, 摘要触发={}, 历史轮数={}, 全量历史token={}, 注入token={}, 含知识库候选={}",
-                composed.length(), !profileContext.isBlank(), !historySection.isBlank(),
-                summaryUsed, summaryTriggered, turns, totalHistoryTokens, inputTokens,
-                !"[]".equals(candidates));
+            log.info("聊天输入组装完成: 总长度={}, 含画像={}, 含历史={}, 含摘要={}, 摘要触发={}, 历史轮数={}, 全量历史token={}, 注入token={}, 含知识库候选={}",
+                    composed.length(), !profileContext.isBlank(), !historySection.isBlank(),
+                    summaryUsed, summaryTriggered, turns, totalHistoryTokens, inputTokens,
+                    !"[]".equals(candidates));
 
-        // M3-17：步骤 8 路由（意图分派 recall/direct/supervisor；语义同 F85/F64/F27）
-        ChatRoutingStep.RouteResult routed = chatRoutingStep.route(intent, composed, userId, sessionHits);
-        String response = routed.response();
-        long aiTokens = routed.aiTokens();
+            // M3-17：步骤 8 路由（意图分派 recall/direct/supervisor；语义同 F85/F64/F27）
+            ChatRoutingStep.RouteResult routed = chatRoutingStep.route(intent, composed, userId, sessionHits);
+            String response = routed.response();
+            long aiTokens = routed.aiTokens();
 
-        // M3-18：步骤 9 落库（AI 响应保存；语义同 F27）
-        chatPersistenceStep.appendAssistantMessage(sessionId, response, aiTokens);
+            // M3-18：步骤 9 落库（AI 响应保存；语义同 F27）
+            Long assistantMessageId = chatPersistenceStep.appendAssistantMessage(sessionId, response, aiTokens);
 
-        return ChatResponseDTO.builder()
-                .sessionId(sessionId)
-                .response(response)
-                .tokens((int) aiTokens)
-                .build();
+            // M4-3：按路由成败登记幂等终态（兜底文案→FAILED，真实回答→COMPLETED）
+            if (routed.fallback()) {
+                chatPersistenceStep.failTurn(clientMessageId);
+            } else {
+                chatPersistenceStep.completeTurn(clientMessageId, assistantMessageId);
+            }
+
+            return ChatResponseDTO.builder()
+                    .sessionId(sessionId)
+                    .response(response)
+                    .tokens((int) aiTokens)
+                    .build();
+        } catch (Exception e) {
+            // M4-3（复核观察项 2）：步骤 3~9 意外异常时幂等记录置 FAILED——
+            // 否则 PENDING 悬挂，同键重试永远 40904（failTurn 对空键/开关关为 no-op）
+            chatPersistenceStep.failTurn(clientMessageId);
+            throw e;
+        }
     }
 
     /**
@@ -129,5 +182,40 @@ public class ChatService {
      */
     public List<ChatSession> listSessions(Long userId) {
         return sessionStorePort.listActiveByUserId(userId);
+    }
+
+    /** M4-4：关闭会话结果（archived=已归档；finalized=收口摘要已完成） */
+    public record CloseSessionResult(boolean archived, boolean finalized) {
+    }
+
+    /**
+     * M4-4/P1-1：关闭会话（显式触发；禁止前端 beforeunload 调用——刷新会误归档）。
+     *
+     * <p>幂等：已 ARCHIVED 直接返回；条件更新 ACTIVE→ARCHIVED 防并发双关；
+     * 归档后同步尽力收口（超时/失败转隐式待办，启动补偿/空闲扫描兜底）。
+     * history 查询不受归档影响（只读）。</p>
+     */
+    public CloseSessionResult closeSession(Long userId, String sessionId) {
+        if (userId == null || userId <= 0) {
+            throw new BusinessException(40101, "用户未登录");
+        }
+        ChatSession session = chatPersistenceStep.requireSession(sessionId);
+        if (!userId.equals(session.getUserId())) {
+            throw new BusinessException(40302, "无权访问该会话");
+        }
+        if ("ARCHIVED".equals(session.getStatus())) {
+            return new CloseSessionResult(true, session.getSummaryFinal() != null);
+        }
+        int updated = sessionStorePort.updateStatus(sessionId, "ACTIVE", "ARCHIVED");
+        if (updated == 0) {
+            // 并发 close：重读判定幂等语义
+            ChatSession fresh = sessionStorePort.findBySessionId(sessionId);
+            if (fresh != null && "ARCHIVED".equals(fresh.getStatus())) {
+                return new CloseSessionResult(true, fresh.getSummaryFinal() != null);
+            }
+            throw new BusinessException(40902, "会话状态冲突，请稍后重试");
+        }
+        boolean finalized = sessionFinalizer.finalizeSession(sessionId);
+        return new CloseSessionResult(true, finalized);
     }
 }

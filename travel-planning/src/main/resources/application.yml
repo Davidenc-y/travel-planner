@@ -116,12 +116,43 @@ travel:
       profile-max-tokens: 800
       summary-ttl-days: 7
       recent-window-turns: 2
+      # M4-1a/P0-1：摘要写入走 Lua CAS 原子路径（回滚开关）
+      cas-enabled: true
+      # M4-4：close 收口同步等待上限（秒），超时转后台+补偿兜底
+      finalize-sync-wait-seconds: 15
+    # M4-4：ARCHIVED 会话拒绝新消息（COMPLETED 幂等重放豁免）
+    session:
+      reject-archived: true
+  # M4-8/P1-5：行程状态机（GENERATING/FAILED/快照/resume；false=回退一次性写入旧行为）
+  itinerary:
+    state-machine:
+      enabled: true
+      zombie-minutes: 10
+  # M4-2/P0-2：planning 侧检索注入 topK（默认值等于 F63/F83 硬编码，行为不变）
+  rag:
+    session-context:
+      top-k: 8
+    attraction-candidates:
+      top-k: 5
+    # M4-5a：在线相关性 Judge（默认关；fail-open：异常/超时/解析失败一律放行）
+    judge:
+      enabled: false
+      timeout-ms: 3000
+    # M4-5b：会话知识二次取父（默认开；取父失败降级保留原命中）
+    parent-context:
+      enabled: true
   # F75/B3-5：LLM 调用统一治理（后台摘要/压缩/偏好抽取并发上限）
   llm:
     background-max-concurrent: 2
     acquire-timeout-ms: 5000
   # F85 第二步：对话入口意图分类（PLANNING/REFINE/RECALL/PROFILE/CHAT/FUNCTIONAL）
   chat:
+    # M4-3/P0-3：消息级幂等（带 clientMessageId 的请求走幂等门禁；不带键走原路径）
+    idempotency:
+      enabled: true
+    # M4-4：ARCHIVED 会话拒绝新消息（COMPLETED 幂等重放豁免）
+    session:
+      reject-archived: true
     intent:
       enabled: true          # false → 全部走原 supervisor 流程（回滚开关）
       cache-size: 256

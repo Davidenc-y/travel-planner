@@ -10,6 +10,7 @@ import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
+import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 import jakarta.validation.ConstraintViolationException;
 
@@ -98,6 +99,16 @@ public class GlobalExceptionHandler {
     public R<Void> handleExternalApi(ExternalApiException e) {
         log.error("外部 API 异常: api={}, msg={}", e.getApiName(), e.getMessage(), e);
         return R.fail(e.getCode(), e.getMessage());
+    }
+
+    /**
+     * M4 联调轮：未映射端点统一 404（此前被兜底成 500）
+     */
+    @ExceptionHandler(NoResourceFoundException.class)
+    @ResponseStatus(HttpStatus.NOT_FOUND)
+    public R<Void> handleNoResource(NoResourceFoundException e) {
+        log.warn("资源不存在: {}", e.getResourcePath());
+        return R.fail(40401, "资源不存在");
     }
 
     /**

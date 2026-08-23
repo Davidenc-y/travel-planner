@@ -57,7 +57,7 @@ public class TraceAspect {
             collector.end(holder, "SUCCESS", null);
             return result;
         } catch (Throwable e) {
-            collector.end(holder, "FAILED", e.getMessage() == null
+            collector.end(holder, statusOf(e), e.getMessage() == null
                     ? e.getClass().getSimpleName() : e.getMessage().substring(0,
                     Math.min(500, e.getMessage().length())));
             throw e;
@@ -65,6 +65,23 @@ public class TraceAspect {
             sessionMemoryPort.endRequest();
             TraceContext.clear();
         }
+    }
+
+    /**
+     * M4-7（前置修复 5）：异常链含 TimeoutException 时记 TIMEOUT（该状态枚举
+     * 自 F89 定义以来无写入点，失败统计看板分母不准）。
+     */
+    public static String statusOf(Throwable e) {
+        Throwable cur = e;
+        int depth = 0;
+        while (cur != null && depth < 16) {
+            if (cur instanceof java.util.concurrent.TimeoutException) {
+                return "TIMEOUT";
+            }
+            cur = cur.getCause();
+            depth++;
+        }
+        return "FAILED";
     }
 
     private static int outputLengthOf(Object result) {

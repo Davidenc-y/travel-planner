@@ -51,4 +51,14 @@ public interface KnowledgeClient {
             @RequestParam("sessionId") String sessionId,
             @RequestParam("query") String query,
             @RequestParam("topK") int topK);
+
+    /**
+     * M4-5b：按 seq 前缀取回会话切片（二次取父，itinerary_day 完整天块视图）。
+     * sessionId 隔离与 search 同口径（knowledge 侧 term 过滤）。
+     */
+    @GetMapping("/api/v1/memory/session-context/by-prefix")
+    R<List<Map<String, Object>>> findSessionContextByPrefix(
+            @RequestParam("sessionId") String sessionId,
+            @RequestParam("seqPrefix") String seqPrefix,
+            @RequestParam("limit") int limit);
 }
