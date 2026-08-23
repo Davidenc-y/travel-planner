@@ -58,7 +58,7 @@ The system addresses these issues through an **agentic + RAG + workflow** design
 
 ### 1.3 Development Context
 
-This is a **graduate thesis project** developed iteratively under a milestone-driven workflow (M0 → M2-5), with **108+ recorded bug-fixes and feature iterations (F1–F108)**. Every milestone and fix is documented in `docs/business-records/` (157 markdown files), following a strict "design → implement → self-review" discipline.
+This is a **personal thesis project** developed iteratively under a milestone-driven workflow (M0 → M4), with **F1–F124 bug-fix series + M3 ten-phase optimization (MessagePipeline / dependency sinking / prompt externalization / etc.) + M4 three-direction optimization (agent session compression / RAG reliability / state recovery)**. Every milestone and fix is documented in `docs/business-records/` (170+ markdown files), following a strict "design → implement → self-review" discipline.
 
 ---
 
@@ -75,13 +75,14 @@ This is a **graduate thesis project** developed iteratively under a milestone-dr
 | **Spring AI Alibaba**                   | 1.1.2.0               | **Agent Framework** (supervisor agents) + **Graph Core** (StateGraph workflow) — the core AI orchestration backbone |
 | **Spring AI Alibaba Starter DashScope** | 1.1.2.0               | Connects to Alibaba Cloud DashScope (Qwen LLM series)                                                               |
 | **MyBatis-Plus**                        | 3.5.7                 | ORM with rich CRUD, pagination, and codegen support                                                                 |
-| **Redisson**                            | 3.28.0                | Distributed locks, rate limiting, Redis-backed cache                                                                |
+| **Redisson**                            | 3.28.0                | Reserved for distributed locks/rate limiting: version-managed only in the parent POM since M3-19; not enabled (P3 evolution item) |
+| **Spring Data Redis**                   | 3.5.0                 | Redis read/write for refresh tokens and session summaries (explicitly introduced in planning since M3-19)                 |
 | **Milvus SDK**                          | 2.3.4                 | Vector database client for semantic similarity search                                                               |
 | **MinIO**                               | 8.5.7                 | S3-compatible object storage for crawled data & avatars                                                             |
 | **Elasticsearch**                       | 7.17.18               | Full-text search over the attraction knowledge base                                                                 |
 | **POI / PDFBox**                        | 5.2.5 / 3.0.1         | Document parsing in the ETL pipeline (Excel, PDF)                                                                   |
 | **Hutool**                              | 5.8.28                | Utility library (HTTP, crypto, date, file)                                                                          |
-| **Knife4j**                             | 4.5.0                 | OpenAPI 3 UI for interactive API documentation                                                                      |
+| **Knife4j**                             | 4.5.0                 | Removed (M3-19 dependency sinking); API contract doc: `docs/test/backend-api-postman-testing-2026-08-23.md`                 |
 | **JJWT**                                | 0.12.6                | JWT-based stateless authentication                                                                                  |
 
 ### 2.2 Frontend
@@ -130,7 +131,7 @@ This is a **graduate thesis project** developed iteratively under a milestone-dr
 └───────────────┬────────────────────────────────────────────────────┘
                 │  HTTP / JSON (JWT Authorization)
 ┌───────────────▼────────────────────────────────────────────────────┐
-│                    travel-planning  (:8080)                        │
+│                    travel-planning  (:8081)                        │
 │  ┌───────────────┐  ┌─────────────────────────────────────────┐    │
 │  │ Controllers   │  │         Multi-Agent Framework           │    │
 │  │ Auth/Chat/    │  │  TravelSupervisorAgent (orchestrator)   │    │
@@ -139,14 +140,16 @@ This is a **graduate thesis project** developed iteratively under a milestone-dr
 │  └───────┬───────┘  │    ├─ BudgetAgent                        │    │
 │          │          │    └─ PreferenceAgent                    │    │
 │          │          │  StateGraph (TravelWorkflowBuilder)      │    │
-│          │          │  理解→检索→规划→预算→输出 (nodes/edges)    │    │
+│          │          │  Understand→Retrieve→Plan→Budget→Output    │    │
 │          │          └─────────────────────────────────────────┘    │
-│          │  3-Layer Memory · PromptGuard · RateLimiter · Trace     │
+│          │  9-Step MsgPipeline (Guard→…→Persist)                   │
+│          │  Idem · Session Close/Finalize · Resume                 │
+│          │  3-Layer Memory · Guard · Trace                         │
 └──────────┼──────────┬──────────────────────┬──────────────────────┘
            │          │                      │
 ┌──────────▼─────────┐│ ┌───────────────────▼──────────────────────┐
-│   travel-knowledge ││ │          travel-crawl  (:8082)           │
-│        (:8081)     ││ │  jsoup crawler · file queue · MinIO      │
+│   travel-knowledge ││ │          travel-crawl  (:8087)           │
+│        (:8082)     ││ │  jsoup crawler · file queue · MinIO      │
 │  ETL Pipeline      ││ │  schedule jobs · PipelinePublisher       │
 │  (POI/PDF/HTML→     ││ └───────────────────┬────────────────────┘
 │   chunks→embeddings)││                     │
@@ -155,7 +158,9 @@ This is a **graduate thesis project** developed iteratively under a milestone-dr
 │  ├ HybridRag       ││        Elasticsearch (full-text index)
 │  ├ SelfRag         ││        Milvus (vector index) ← MinIO
 │  └ CorrectiveRag   ││        MySQL (source data)
-│  QueryUnderstanding│└── travel-common (shared DTOs/entities/utils)
+│  QueryUnderstanding│└── travel-core/common (kernel + shared DTOs)
+│  RAG Eval/Judge/   │
+│  Rerank/ParentCtx  │
 └────────────────────┘
 ```
 
@@ -163,12 +168,13 @@ This is a **graduate thesis project** developed iteratively under a milestone-dr
 
 ## 4. Module Breakdown
 
-The backend is a **Maven multi-module** project (`pom.xml`, Java 21). Four modules + one frontend app:
+The backend is a **Maven multi-module** project (`pom.xml`, Java 21). Six modules + one frontend app:
 
 ```
 travel-planner/
 ├── pom.xml                 # Parent POM (dependency & version management)
 ├── docker-compose.yml      # All middleware services
+├── travel-core/            # Pure-Java shared kernel (circuit breaker/rate limiter/RRFusion/normalizers)
 ├── travel-common/          # Shared entities, DTOs, enums, utils, exceptions
 ├── travel-crawl/           # Web crawler for attraction data
 ├── travel-knowledge/       # ETL + RAG knowledge engine
@@ -186,7 +192,7 @@ Shared library, no business logic. Contains:
 - **Utils** — JSON, date, crypto (SM4/AES), string, geo-distance helpers.
 - **Common exceptions & response wrappers** — unified `Result<T>` envelope.
 
-### 4.2 travel-crawl (`:8082`)
+### 4.2 travel-crawl (`:8087`)
 
 Attraction data ingestion pipeline:
 
@@ -195,25 +201,27 @@ Attraction data ingestion pipeline:
 - **PipelinePublisher** — publishes crawl results downstream (to knowledge module).
 - **Scheduled jobs** — periodic re-crawl / incremental updates.
 
-### 4.3 travel-knowledge (`:8081`)
+### 4.3 travel-knowledge (`:8082`)
 
 The **knowledge engine** — makes the LLM grounded and factual:
 
 - **ETL Pipeline** (`etl/`) — extract from raw sources (HTML/Excel/PDF via POI & PDFBox), clean, chunk, embed, and index into **Elasticsearch** (full-text) + **Milvus** (vectors).
 - **RagDispatcher** — runtime dispatcher that selects a RAG strategy per query.
-- **RAG Strategies** (`rag/strategy/`):
+- **RAG Strategies** (`rag/strategy/`, template-method `AbstractRagStrategy` + decorators, M3-4):
   - `NaiveRagStrategy` — top-k vector similarity retrieval.
   - `HybridRagStrategy` — fused ES keyword + Milvus vector scores.
   - `SelfRagStrategy` — self-reflection loop: generate → critique → regenerate if needed.
   - `CorrectiveRagStrategy` — query rewriting / fallback retrieval when the first pass is poor.
 - **QueryUnderstanding** — classifies intent & entities, extracts constraints (budget, days, companions) before retrieval.
-- **Controllers** — `AttractionController` (POI CRUD/search), `EtlController` (pipeline trigger), `RagController` (retrieval debug), `FileController` (MinIO upload/download), `MemoryController` (knowledge memory ops).
+- **Quantified RAG evaluation** (M4-2) — 45 golden queries, Recall@5/MRR@5 hard gates + LLM soft gates, `run_rag_eval.ps1`;
+- **Rerank SPI / online Judge / parent-context fetch** (M4-5/6) — Rerank defaults to noop, Judge off by default, deterministic by-prefix parent fetch;
+- **Controllers** — `AttractionController` (POI CRUD/search), `EtlController` (pipeline trigger), `RagController` (retrieval debug), `FileController` (MinIO upload/download), `MemoryController` (session-context search/by-prefix), `FileAccessController` (proxy/presign/resolve + rate limit 429).
 
-### 4.4 travel-planning (`:8080`)
+### 4.4 travel-planning (`:8081`)
 
 The **core service** where agents collaborate:
 
-- **Controllers** — `AuthController` (register/login/JWT), `ChatController` (multi-turn dialogue), `ItineraryController` (create/view/list itineraries), `AvatarController` (user avatar upload via MinIO).
+- **Controllers** — `AuthController` (register/login/JWT), `ChatController` (multi-turn dialogue + close + idempotency clientMessageId), `ItineraryController` (generate/resume/view/list/delete), `MeController` (`/users/me`), `AvatarController` (user avatar upload via MinIO).
 - **Multi-Agent Framework** (`agent/`):
   - `TravelSupervisorAgent` — orchestrator that routes user intent to the right sub-agent.
   - `AttractionAgent` — attraction recommendation grounded in RAG.
@@ -221,6 +229,9 @@ The **core service** where agents collaborate:
   - `BudgetAgent` — cost estimation & breakdown.
   - `PreferenceAgent` — preference extraction & profile update.
 - **Workflow** (`workflow/`) — `TravelWorkflowBuilder` assembles a **StateGraph**: `[Query Understanding] → [Retrieval] → [Planning] → [Budget] → [Output]` with explicit state transitions.
+- **9-step message pipeline** (M3-8~18, `memory/pipeline/`) — Guard→Persistence→Preference→Knowledge→Intent→Memory→Budget→Routing→Reply persist, each step independently testable; ChatService reduced to pure orchestration.
+- **Message idempotency & session finalization** (M4-3/4) — `t_chat_message_idem` (PENDING/COMPLETED/FAILED), close state machine (ARCHIVED rejects writes 40902, summary finalize + Lua CAS atomic write).
+- **Itinerary state machine & resume** (M4-7/8/9) — GENERATING/GENERATED/FAILED + node snapshots + prefix-subgraph cache + `resume` endpoint.
 - **Memory System** (`memory/`) — three layers:
   - `shortterm` — session-scoped working memory (current trip context).
   - `longterm` — cross-session user preferences & facts.
@@ -230,7 +241,7 @@ The **core service** where agents collaborate:
 - **Guard Layer** (`guard/`) — `PromptGuard` (prompt injection detection), rate limiting, and circuit breaker protecting LLM calls.
 - **Trace** (`trace/`) — per-request agent trace: every node execution, tool call, and LLM exchange is recorded for explainability and debugging.
 
-### 4.5 travel-frontend (`next-app`, port 3000)
+### 4.5 travel-frontend (`next-app`, port 3100)
 
 Next.js 14 App Router application:
 
@@ -257,6 +268,10 @@ The `TravelSupervisorAgent` acts as a **router + coordinator**:
 4. Aggregates sub-agent outputs into a coherent response.
 
 Each sub-agent is a Spring AI **@Agent** with its own system prompt, tools (e.g. RAG search, map/distance tool), and guardrails.
+
+> **M3-7/M3-20 evolution**: four sub-agents unified under the `AbstractReactSubAgent` template
+> (abstract `name/model/systemPrompt/instruction/outputKey/tools` + `@PostConstruct` assembly);
+> all 18 prompts externalized to `resources/prompts/*.st` (`PromptTemplates` lazy loading + versioning).
 
 ### 5.2 StateGraph Workflow Orchestration
 
@@ -291,6 +306,11 @@ Benefits of the graph model:
 - **Observability** — every node's input/output is captured for tracing.
 - **Extensibility** — new nodes/edges can be added without rewriting the pipeline.
 
+> **M3-9/M4-8 evolution**: `TravelWorkflowBuilder` precompiles and caches the `CompiledGraph`
+> (immutable reuse); itinerary recovery uses **prefix-subgraph caching** (the `full` key is
+> line-for-line identical to the baseline; `from:preference/attraction/route/budget` resume
+> breakpoints), plus `SnapshotNodeWrapper` node-level snapshots and the `resume` endpoint.
+
 ### 5.3 RAG Pipeline (Four Strategies)
 
 `RagDispatcher` selects a strategy based on query type and retrieval confidence:
@@ -303,6 +323,13 @@ Benefits of the graph model:
 | **Corrective RAG** | Evaluate retrieval quality → rewrite query or switch source | Low-confidence retrievals                         |
 
 The retrieval context is **pinned to the prompt with source attribution**, and the agent is instructed to answer *only* from the provided context or explicitly say it does not know — reducing hallucination.
+
+> **M3-4/M4-1b/M4-2/M4-5/6 evolution**: strategy layer templated (`AbstractRagStrategy`) +
+> decorators; session-knowledge and attraction RRF merged into `RRFusion.fuseGeneric`; topK
+> configurable (`travel.rag.session-context.top-k=8` / `attraction-candidates.top-k=5`);
+> added RAG offline evaluation (Recall@5/MRR@5 hard gates), online relevance Judge (off by
+> default), Rerank SPI (noop default), and session-knowledge parent-context fetch (deterministic
+> by-prefix query).
 
 ### 5.4 ETL Pipeline
 
@@ -331,6 +358,39 @@ Triggered via `EtlController` (manual) or scheduled jobs, with idempotent re-run
 | **Chat memory** | Conversation history   | Redis/MySQL | Multi-turn dialogue coherence & follow-up questions                     |
 
 Memory is **explicitly injected** into the supervisor's context window, and updated by `PreferenceAgent` after each meaningful exchange.
+
+> **M4-1/M4-4 evolution**: session summary writes switched to **Lua CAS atomic writes**
+> (summary/meta dual keys + version compare, larger version wins on conflict); session close
+> triggers a **full finalize summary** (`summaryType=final`, without concatenating the old
+> summary), using the `summary_final` column as the implicit pending item with startup compensation.
+
+### 5.8 Message Idempotency & Session Lifecycle（M4-3/4）
+
+- Message idempotency: `t_chat_message_idem` (PENDING/COMPLETED/FAILED); the check point is
+  **before the user message is persisted** and shares a transaction with PENDING registration;
+  COMPLETED replays, PENDING returns 40904, FAILED re-runs reusing the original message,
+  fallback replies are marked FAILED;
+- Session close: `POST /api/v1/chat/sessions/{id}/close` (explicit button only, no beforeunload);
+  ARCHIVED rejects writes with 40902, history stays readable, COMPLETED replay is exempt;
+- Frontend: UUID idempotency key + 40904 dual-format backoff retry (3s × 4 attempts).
+
+### 5.9 Itinerary State Machine & Resume（M4-7/8/9）
+
+- Three-state machine: `GENERATING → GENERATED | FAILED` (PARTIAL dropped; the snapshot table
+  itself is the observable fact of partial completion);
+- Node snapshots: `t_itinerary_task_snapshot` + `SnapshotNodeWrapper`
+  (Optional/AssistantMessage normalization, GraphResponse rejection);
+- Recovery: `POST /api/v1/itineraries/{id}/resume` (guards 40302/40401/40903/40905; zombie
+  GENERATING older than 10 minutes is resumable); pre-fixes: idempotency scoped by userId,
+  DuplicateKey converted to re-read, transaction self-invocation split out.
+
+### 5.10 Quantified RAG Evaluation (M4-2)
+
+- 45 golden queries (docId = MySQL auto-increment primary key string; canonical seed ids
+  1=Forbidden City, 6=The Bund, 9=Terracotta Army Museum);
+- Hard gates Recall@5/MRR@5 ≥ baseline −2pp (LLM-free); soft gates report relevance/faithfulness;
+- `run_rag_eval.ps1` standalone orchestration, `--no-llm` resilience, data-drift RELABEL_HINT;
+- Post-integration baseline (2026-08-23): Recall@5≈0.80 / MRR@5≈0.80.
 
 ### 5.6 Security & Guardrails
 
@@ -368,6 +428,7 @@ Each planning request produces a **trace record**: node ID, agent invoked, tool 
 1. User logs in → JWT issued (AuthController)
 2. User chats: "Plan a 5-day trip to Chengdu on a 3000 CNY budget"
    └─▶ ChatController → SupervisorAgent
+        └─▶ 9-step MessagePipeline: Guard→Persist(idempotency key)→Preference→Knowledge→Intent→Memory→Budget→Route→Reply persist
         └─▶ PreferenceAgent extracts constraints (5 days, Chengdu, ¥3000)
         └─▶ QueryUnderstanding (in knowledge module) refines the query
         └─▶ RagDispatcher → HybridRag → ES + Milvus retrieval
@@ -375,6 +436,7 @@ Each planning request produces a **trace record**: node ID, agent invoked, tool 
         └─▶ Budget node estimates costs; replan loop if over budget
         └─▶ Output node produces structured JSON + markdown
         └─▶ Trace recorder writes the full audit trail
+   (recovery: FAILED/zombie-GENERATING itineraries can resume from breakpoints; sessions can be closed with summary finalize)
 3. Frontend renders: markdown itinerary card + mind map + budget chart
 4. User edits / follows up → chat memory + long-term memory updated
 ```
@@ -383,18 +445,19 @@ Each planning request produces a **trace record**: node ID, agent invoked, tool 
 
 ## 8. Database Design
 
-Core tables (initialized by `scripts/init_mysql.sql`):
+Core tables (initialized by `scripts/init_mysql.sql` + M4 migrations in `scripts/sql/m4_*.sql`):
 
 | Table                                  | Purpose                                             |
 | -------------------------------------- | --------------------------------------------------- |
-| `user`                                 | Account, hashed password, profile                   |
-| `user_profile`                         | Long-term preferences, budget habits, dietary needs |
-| `itinerary`                            | Generated plans (main entity)                       |
-| `itinerary_detail`                     | Day-by-day plan items                               |
-| `attraction`                           | POI knowledge base (source of truth for ES/Milvus)  |
-| `chat_message`                         | Dialogue history                                    |
-| `memory_shortterm` / `memory_longterm` | Memory layer persistence                            |
-| `agent_trace`                          | Audit trail of agent executions                     |
+| `t_user`                               | Accounts (BCrypt password, email)                    |
+| `t_travel_profile`                     | Long-term profile (preferences/budget/style/history, version optimistic lock) |
+| `t_itinerary`                          | Itinerary entity (GENERATING/GENERATED/CONFIRMED/FAILED) |
+| `t_itinerary_task_snapshot`            | Itinerary node snapshots (M4-8, for resume)          |
+| `t_attraction`                         | POI knowledge base (source of truth for the 40/40/40 baseline) |
+| `t_chat_session` / `t_chat_message`    | Sessions (ACTIVE/ARCHIVED + summary_final) and message history |
+| `t_chat_message_idem`                  | Message idempotency table (PENDING/COMPLETED/FAILED, M4-3) |
+| `t_agent_trace`                        | Agent trace (RUNNING/SUCCESS/FAILED/TIMEOUT)         |
+| `t_system_config`                      | System config (default RAG strategy, rate limits, etc.) |
 
 The MySQL data is the **source of truth**; Elasticsearch and Milvus are derived indexes rebuilt by the ETL pipeline.
 
@@ -434,30 +497,35 @@ bash init_minio.sh            # creates required buckets
 ```bash
 python crawl_attractions.py   # fetch attraction data
 # then trigger the ETL pipeline via EtlController:
-#   POST /api/knowledge/etl/run
+#   POST /api/v1/etl/import?filePath=<abs>/scripts/data/attractions_raw.json&mode=insert
+#   POST /api/v1/etl/all
+# Canonical baseline: MySQL/ES/Milvus = 40/40/40, with seed ids
+# 1=Forbidden City, 6=The Bund, 9=Terracotta Army Museum, 10=Big Wild Goose Pagoda
+# Check/rebuild: python scripts/regression/check_baseline.py --names
+#                python scripts/regression/reset_baseline.py --force (test env only, rebuilds from scratch)
 ```
 
 ### 9.5 Step 4 — Run Backend Services
 
 ```bash
-# terminal 1 — knowledge service (:8081)
+# terminal 1 — knowledge service (:8082)
 mvn -pl travel-knowledge spring-boot:run
 
-# terminal 2 — planning service (:8080)
+# terminal 2 — planning service (:8081)
 mvn -pl travel-planning spring-boot:run
 
-# terminal 3 — crawl service (:8082, optional)
+# terminal 3 — crawl service (:8087, optional)
 mvn -pl travel-crawl spring-boot:run
 ```
 
-API docs (Knife4j): `http://localhost:8080/doc.html`
+API contract doc: `docs/test/backend-api-postman-testing-2026-08-23.md` (Knife4j removed)
 
 ### 9.6 Step 5 — Run Frontend
 
 ```bash
 cd travel-frontend/next-app
 npm install
-npm run dev                  # http://localhost:3000
+npm run dev                  # http://localhost:3100
 # production: npm run build && npm start
 ```
 
@@ -512,6 +580,8 @@ Development followed milestone-driven records in `docs/business-records/`:
 | **M2-3**  | Next.js frontend implementation                                                                                                                                            |
 | **M2-4**  | F-series iterations: three-layer memory (F47/F49), query understanding & strategy routing (F40), frontend architecture & Agent trace & security (F88), and 100+ more fixes |
 | **M2-5**  | Itinerary budget breakdown output optimization                                                                                                                             |
+| **M3**    | Ten-phase optimization (M3-1~22): MessagePipeline 9-step chain, common dependency sinking, prompt externalization, frontend hardening, profile optimistic-lock retry |
+| **M4**    | Three-direction optimization (M4-1~11): session compression (Lua CAS/close finalize), RAG reliability (evaluation/Judge/Rerank/parent-context), state recovery (message idempotency/itinerary state machine+resume); integration round fully green (199 unit tests, F104 28/28, RAG evaluation baseline) |
 
 Each module also has a **business development record** markdown documenting design decisions, implementation details, and self-review results — a key academic artifact of the thesis.
 
@@ -531,6 +601,10 @@ Each module also has a **business development record** markdown documenting desi
 | `crawl_attractions.py`  | Seeds attraction data from public sources                                    |
 | `regression/`           | Regression test harness for the agent pipeline                               |
 | `data/`                 | Local data artifacts used by scripts                                         |
+| `sql/m4_*.sql`          | M4 migration scripts (idempotency/snapshot/summary_final, with rollback) |
+| `regression/run_full_regression.ps1` | Full-regression orchestrator (P1/P2/P3/F85/M4/F104/RAG eval; supports `-RepairBaseline`) |
+| `regression/run_rag_eval.ps1` | RAG offline evaluation (45 golden queries, hard/soft gates, `--write-baseline`) |
+| `regression/check_baseline.py` / `reset_baseline.py` | Three-end baseline check and canonical baseline rebuild |
 
 ---
 
@@ -553,6 +627,22 @@ Raise the limits in the `RateLimiter` configuration, or disable per-profile in l
 
 **Q: Where do I see agent internals?**  
 Query the `agent_trace` table (latest first) for the full execution audit trail of any request.
+
+**Q: How do I run the full regression?**  
+Run `mvn -o package -DskipTests` first, then
+`powershell -File scripts\regression\run_full_regression.ps1`
+(middleware must be reachable; add `-RepairBaseline` when the baseline has drifted). See
+`docs/test/full-regression-script-guide-2026-08-23.md` for details.
+
+**Q: The three-end baseline became 40/40/0 or inconsistent?**  
+Diagnose with `python scripts/regression/check_baseline.py --names`; when ES/Milvus were wiped
+or ids drifted, rebuild the canonical baseline in a test environment with
+`reset_baseline.py --force` (truncates t_attraction + seeds 10 + raw import + etl/all).
+
+**Q: P3/F85 randomly hit ReadTimeout in full regression?**  
+Caused by slow DashScope windows (a single chain exceeding the backend 300s hard timeout);
+the orchestrator records it as WARN, and re-running the suite when the LLM is idle turns green.
+Deterministic gates (unit tests / P1 / P2 / F104 / RAG hard gates / baseline) are unaffected.
 
 **Q: How do I switch to a different LLM?**  
 `spring-ai` supports multiple providers. Swap the DashScope starter for the corresponding Spring AI starter (e.g. OpenAI) and change the model config in `application.yml` — the agent framework and RAG pipeline are provider-agnostic.
