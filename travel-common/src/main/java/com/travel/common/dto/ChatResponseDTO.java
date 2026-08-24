@@ -21,4 +21,6 @@ public class ChatResponseDTO {
     private String response;
     private Long itineraryId;
     private Integer tokens;
+    /** M5-1：本次发送后会话标题（首条消息自动生成时返回；其余场景为 null） */
+    private String sessionTitle;
 }

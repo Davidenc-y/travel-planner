@@ -2,6 +2,7 @@ package com.travel.planning.service;
 
 import com.travel.common.entity.User;
 import com.travel.common.exception.BusinessException;
+import com.travel.common.exception.ErrorCode;
 import com.travel.planning.repository.UserMapper;
 import com.travel.planning.util.JwtUtil;
 import lombok.RequiredArgsConstructor;
@@ -13,6 +14,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
+import java.util.regex.Pattern;
 
 /**
  * 用户服务
@@ -35,6 +37,11 @@ public class UserService {
 
     private static final String REFRESH_TOKEN_KEY = "refresh_token:";
     private static final long REFRESH_TOKEN_TTL_DAYS = 7;
+    /** M5-1：邮箱格式（与前端一致） */
+    private static final Pattern EMAIL_PATTERN =
+            Pattern.compile("^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}$");
+    /** M5-1：邮箱最大长度（表结构 VARCHAR(100)） */
+    private static final int EMAIL_MAX_LENGTH = 100;
 
     /**
      * 注册（注册即登录，返回 Token 对）
@@ -87,6 +94,29 @@ public class UserService {
         user.setId(userId);
         user.setAvatar(avatarUrl);
         userMapper.updateById(user);
+    }
+
+    /**
+     * M5-1：绑定邮箱（注册未填时后补；格式校验 + 唯一性查重）。
+     */
+    @Transactional
+    public void updateEmail(Long userId, String email) {
+        String normalized = email == null ? "" : email.trim();
+        if (normalized.isEmpty()) {
+            throw new BusinessException(40001, "邮箱不能为空");
+        }
+        if (normalized.length() > EMAIL_MAX_LENGTH || !EMAIL_PATTERN.matcher(normalized).matches()) {
+            throw new BusinessException(40001, "邮箱格式不正确");
+        }
+        User existing = userMapper.findByEmail(normalized);
+        if (existing != null && !existing.getId().equals(userId)) {
+            throw new BusinessException(ErrorCode.EMAIL_EXISTS.code(), ErrorCode.EMAIL_EXISTS.message());
+        }
+        User user = new User();
+        user.setId(userId);
+        user.setEmail(normalized);
+        userMapper.updateById(user);
+        log.info("邮箱绑定成功: userId={}, email={}", userId, normalized);
     }
 
     /**

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { toast } from 'sonner';
 import { Loader2, Search, MapPin, Star, Ticket } from 'lucide-react';
 import { attractionApi, getErrorMessage } from '@/lib/api';
@@ -23,7 +23,8 @@ const ragTypes = [
   { value: 'corrective_rag', label: '查询重写' },
 ];
 
-const cityOptions = ['北京', '上海', '广州', '深圳', '杭州', '成都', '西安', '厦门', '南京', '重庆', '武汉', '长沙'];
+// M5-1：后端城市列表失败时的降级常量（原 F101/F102 硬编码 12 城）
+const FALLBACK_CITY_OPTIONS = ['北京', '上海', '广州', '深圳', '杭州', '成都', '西安', '厦门', '南京', '重庆', '武汉', '长沙'];
 const ALL_CITY = '__all__';
 const PAGE_SIZE = 12;
 
@@ -33,12 +34,25 @@ export default function AttractionsPage() {
   const [results, setResults] = useState<SearchResult[]>([]);
   const [list, setList] = useState<Attraction[]>([]);
   const [cities, setCities] = useState<string[]>([]);
+  const [cityOptions, setCityOptions] = useState<string[]>(FALLBACK_CITY_OPTIONS);
   const [allSelected, setAllSelected] = useState(false);
   const [page, setPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [mode, setMode] = useState<'search' | 'browse'>('search');
+
+  // M5-1：城市下拉动态化——从后端加载全部城市，失败降级内置列表
+  useEffect(() => {
+    attractionApi.listCities()
+      .then((res) => {
+        const data = res.data.data || [];
+        if (data.length > 0) setCityOptions(data);
+      })
+      .catch((err) => {
+        toast.error('城市列表加载失败，已使用内置城市: ' + getErrorMessage(err));
+      });
+  }, []);
 
   const handleSearch = async () => {
     if (!query.trim()) return;

@@ -25,6 +25,7 @@ import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.stereotype.Component;
 import com.travel.planning.trace.TraceContext;
 import com.travel.core.guard.CircuitBreaker;
+import reactor.core.publisher.Flux;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -37,6 +38,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.UUID;
+import java.util.function.Consumer;
 
 /**
  * 旅游行程规划总协调器
@@ -362,6 +364,22 @@ public class TravelSupervisorAgent {
     }
 
     /**
+     * M6：PROFILE/CHAT/FUNCTIONAL 意图的入口直答——真 token 流。
+     *
+     * <p>与 {@link #answerDirect} 同 prompt/同 system 指令，但通过
+     * {@code chatModel.stream} 逐增量回调 {@code tokenSink}；token 用量取流末
+     * 累计 Usage（F27 口径）。空结果兜底文案同样回调，保证前端最终可见完整回答。</p>
+     */
+    public PlanningResult answerDirectStream(String userInput, Long userId, Consumer<String> tokenSink) {
+        if (TraceContext.active()) {
+            TraceContext.current().addPath("direct");
+        }
+        String system = promptTemplates.directAnswerSystem();
+        return streamToResult(system, userInput, true, tokenSink, "入口直答",
+                "抱歉，暂时无法回答，请稍后重试。");
+    }
+
+    /**
      * F85：RECALL 意图的轻量回顾管线——itinerary_day 切片确定性骨架 + LLM 润色
      * （零编造、低 token）；无切片时确定性返回"未找到"，不调 LLM。
      */
@@ -388,6 +406,31 @@ public class TravelSupervisorAgent {
         return new PlanningResult(text.isBlank() ? skeleton : text.trim(), tokens);
     }
 
+    /**
+     * M6：RECALL 意图的轻量回顾管线——真 token 流。
+     *
+     * <p>无行程切片时确定性返回（同步回调一次完整文本）；有切片时走
+     * {@code chatModel.stream} 逐增量回调。与 {@link #answerRecall} 语义一致。</p>
+     */
+    public PlanningResult answerRecallStream(String userInput, List<Map<String, Object>> sessionHits,
+                                             Consumer<String> tokenSink) {
+        if (TraceContext.active()) {
+            TraceContext.current().addPath("recall");
+        }
+        String skeleton = buildRecallSkeleton(sessionHits);
+        String question = extractCurrentQuestion(userInput);
+        if (skeleton.isBlank()) {
+            String fallback = "未找到该行程记录，请确认您是否在本会话中生成过行程。";
+            Consumer<String> sink = tokenSink == null ? t -> { } : tokenSink;
+            sink.accept(fallback);
+            log.info("[Recall] 无行程切片，直接返回: {}", fallback);
+            return new PlanningResult(fallback, 0);
+        }
+        String system = promptTemplates.recallSystem();
+        return streamToResult(system, skeleton + "\n\n用户问题：" + question, true,
+                tokenSink, "回顾管线", skeleton);
+    }
+
     /** F89：直答/回顾路径的 token 写入追溯上下文 */
     /** M3-7：直答调用收敛（System+User 消息构造 + 可选熔断） */
     private ChatResponse callDirect(String system, String userText, boolean withBreaker) {
@@ -396,6 +439,70 @@ public class TravelSupervisorAgent {
             return circuitBreakerRegistry.of("chat").call("chat", () -> chatModel.call(prompt));
         }
         return chatModel.call(prompt);
+    }
+
+    /**
+     * M6：直答/回顾路径的真 token 流（响应式）。
+     *
+     * <p>熔断语义：订阅前经 {@link CircuitBreaker#call} 获取许可（OPEN 直接拒绝、
+     * HALF_OPEN 单探测），与阻塞式 {@code call} 的三态语义保持一致；流建立即视为
+     * 调用成功，流中途异常由调用方降级兜底（不重复计数，详见 M6-3 记录）。</p>
+     */
+    private Flux<ChatResponse> callDirectStream(String system, String userText, boolean withBreaker) {
+        Prompt prompt = new Prompt(List.of(new SystemMessage(system), new UserMessage(userText)));
+        if (!withBreaker) {
+            return chatModel.stream(prompt);
+        }
+        CircuitBreaker breaker = circuitBreakerRegistry.of("chat");
+        return Flux.defer(() -> {
+            try {
+                return breaker.call("chat", () -> chatModel.stream(prompt));
+            } catch (CircuitBreaker.CircuitOpenException e) {
+                return Flux.error(e);
+            }
+        });
+    }
+
+    /**
+     * M6：消费 {@code chatModel.stream} 增量并聚合最终回答。
+     *
+     * <p>DashScope 流式每个 ChatResponse 的 text 为增量片段；Usage 为累计值，
+     * 取最后一段非空 Usage 的 totalTokens（与 F27 口径一致）。</p>
+     */
+    private PlanningResult streamToResult(String system, String userText, boolean withBreaker,
+                                          Consumer<String> tokenSink, String label, String blankFallback) {
+        Consumer<String> sink = tokenSink == null ? t -> { } : tokenSink;
+        StringBuilder sb = new StringBuilder();
+        long[] tokens = {0};
+        ChatResponse[] lastResponse = new ChatResponse[1];
+        callDirectStream(system, userText, withBreaker)
+                .doOnNext(resp -> {
+                    lastResponse[0] = resp;
+                    String text = resp.getResult() != null && resp.getResult().getOutput() != null
+                            ? resp.getResult().getOutput().getText() : null;
+                    if (text != null && !text.isBlank()) {
+                        sb.append(text);
+                        sink.accept(text);
+                    }
+                    if (resp.getMetadata() != null && resp.getMetadata().getUsage() != null
+                            && resp.getMetadata().getUsage().getTotalTokens() != null) {
+                        tokens[0] = resp.getMetadata().getUsage().getTotalTokens();
+                    }
+                })
+                .blockLast();
+        String text = sb.toString().trim();
+        if (lastResponse[0] != null) {
+            applyDirectTokens(lastResponse[0]);
+        }
+        if (text.isBlank()) {
+            sink.accept(blankFallback);
+            log.info("[{}] 流式输出为空，返回兜底: len={}, tokens={}",
+                    label, blankFallback.length(), tokens[0]);
+            return new PlanningResult(blankFallback, tokens[0]);
+        }
+        log.info("[{}] 流式输出完成: answerLen={}, tokens={}",
+                label, text.length(), tokens[0]);
+        return new PlanningResult(text, tokens[0]);
     }
 
     private static void applyDirectTokens(ChatResponse direct) {

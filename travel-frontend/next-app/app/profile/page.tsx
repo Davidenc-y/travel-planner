@@ -8,11 +8,18 @@ import { itineraryApi, userApi, getErrorMessage } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 import { UserAvatar } from '@/components/ui/user-avatar';
 
+// M5-1：邮箱格式校验（与后端一致）
+const EMAIL_RE = /^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/;
+
 function ProfileContent() {
   const { username, userId, isAuthenticated, logout, avatar, refreshUser } = useAuth();
   const router = useRouter();
   const [tripCount, setTripCount] = useState<number | null>(null);
   const [email, setEmail] = useState<string | null>(null);
+  // M5-1：邮箱绑定表单（注册未填邮箱时展示）
+  const [emailInput, setEmailInput] = useState('');
+  const [emailError, setEmailError] = useState<string | null>(null);
+  const [emailSaving, setEmailSaving] = useState(false);
   // M3-21：头像上传本地预览（上传成功/失败后清除，回退服务端头像）
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -46,8 +53,38 @@ function ProfileContent() {
     }
   };
 
+  const handleEmailChange = (value: string) => {
+    setEmailInput(value);
+    const trimmed = value.trim();
+    if (trimmed && !EMAIL_RE.test(trimmed)) {
+      setEmailError('邮箱格式不正确');
+    } else {
+      setEmailError(null);
+    }
+  };
+
+  const handleBindEmail = async () => {
+    const value = emailInput.trim();
+    if (!EMAIL_RE.test(value)) {
+      setEmailError('邮箱格式不正确');
+      return;
+    }
+    setEmailSaving(true);
+    try {
+      await userApi.updateEmail(value);
+      setEmail(value);
+      setEmailInput('');
+      setEmailError(null);
+      toast.success('邮箱绑定成功');
+    } catch (err) {
+      toast.error('邮箱绑定失败: ' + getErrorMessage(err));
+    } finally {
+      setEmailSaving(false);
+    }
+  };
+
   if (!isAuthenticated) {
-    router.push('/login');
+    router.replace('/');
     return null;
   }
 
@@ -79,7 +116,38 @@ function ProfileContent() {
           <div>
             <h2 className="text-xl font-semibold">{username}</h2>
             <p className="text-sm text-slate-400">用户 ID: {userId}</p>
-            {email && <p className="text-sm text-slate-400">{email}</p>}
+            {email ? (
+              <p className="text-sm text-slate-400">{email}</p>
+            ) : (
+              <div className="mt-1 max-w-sm">
+                <div className="flex gap-2">
+                  <input
+                    type="email"
+                    value={emailInput}
+                    onChange={(e) => handleEmailChange(e.target.value)}
+                    onBlur={() => {
+                      if (emailInput.trim() && !EMAIL_RE.test(emailInput.trim())) {
+                        setEmailError('邮箱格式不正确');
+                      }
+                    }}
+                    placeholder="your@email.com"
+                    aria-label="绑定邮箱"
+                    className="flex-1 px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-transparent focus:ring-2 focus:ring-brand-500 outline-none text-sm"
+                  />
+                  <button
+                    type="button"
+                    onClick={handleBindEmail}
+                    disabled={emailSaving || !emailInput.trim() || !EMAIL_RE.test(emailInput.trim())}
+                    className="px-3 py-1.5 rounded-lg bg-brand-500 text-white text-sm hover:bg-brand-600 disabled:opacity-50 magnetic"
+                  >
+                    {emailSaving ? '绑定中…' : '绑定邮箱'}
+                  </button>
+                </div>
+                {emailError && (
+                  <p className="text-xs text-red-500 mt-1" role="alert">{emailError}</p>
+                )}
+              </div>
+            )}
           </div>
         </div>
 

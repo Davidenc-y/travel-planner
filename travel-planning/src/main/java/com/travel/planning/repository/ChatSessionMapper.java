@@ -27,6 +27,17 @@ public interface ChatSessionMapper extends BaseMapper<ChatSession> {
     @Update("UPDATE t_chat_session SET summary_final = #{text}, updated_at = NOW() WHERE session_id = #{sessionId} AND summary_final IS NULL")
     int updateSummaryFinal(@Param("sessionId") String sessionId, @Param("text") String text);
 
+    /** M5-1：更新会话标题（手动编辑） */
+    @Update("UPDATE t_chat_session SET title = #{title}, updated_at = NOW() WHERE session_id = #{sessionId}")
+    int updateTitle(@Param("sessionId") String sessionId, @Param("title") String title);
+
+    /** M5-1：首条消息标题联动——仅当标题为空或仍为默认值时更新，避免覆盖手动标题 */
+    @Update("UPDATE t_chat_session SET title = #{title}, updated_at = NOW() "
+            + "WHERE session_id = #{sessionId} AND (title IS NULL OR title = #{defaultTitle})")
+    int updateTitleIfDefault(@Param("sessionId") String sessionId,
+                             @Param("title") String title,
+                             @Param("defaultTitle") String defaultTitle);
+
     /** M4-4：启动补偿扫描——已归档但收口未完成（排除刚 close 在途的 updatedAt 下限） */
     @Select("SELECT * FROM t_chat_session WHERE status = 'ARCHIVED' AND summary_final IS NULL "
             + "AND updated_at < #{updatedBefore} ORDER BY updated_at ASC LIMIT #{limit}")

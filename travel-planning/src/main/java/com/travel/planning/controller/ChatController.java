@@ -4,11 +4,19 @@ import com.travel.common.dto.ChatResponseDTO;
 import com.travel.common.entity.ChatMessage;
 import com.travel.common.entity.ChatSession;
 import com.travel.common.result.R;
+import com.travel.core.stream.StreamPreflight;
+import com.travel.core.stream.StreamRequest;
+import com.travel.planning.service.ChatStreamService;
 import com.travel.planning.service.ChatService;
+import com.travel.planning.stream.ChatStreamProperties;
+import com.travel.planning.stream.StreamErrorMapper;
+import com.travel.planning.stream.SseStreamAdapter;
 import com.travel.planning.util.AuthUtils;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.util.List;
 import java.util.Map;
@@ -26,6 +34,9 @@ import java.util.Map;
 public class ChatController {
 
     private final ChatService chatService;
+    private final ChatStreamService chatStreamService;
+    private final SseStreamAdapter sseStreamAdapter;
+    private final ChatStreamProperties chatStreamProps;
 
     /**
      * 创建会话
@@ -66,6 +77,17 @@ public class ChatController {
     }
 
     /**
+     * M5-1：更新会话标题（前端双击编辑保存；空/超长/越权由服务校验）
+     */
+    @PutMapping("/sessions/{sessionId}/title")
+    public R<Void> updateTitle(@PathVariable String sessionId,
+                               @RequestBody Map<String, String> body,
+                               @RequestHeader(value = "X-User-Id", required = false) Long userId) {
+        chatService.updateTitle(AuthUtils.resolveUserId(userId), sessionId, body.get("title"));
+        return R.ok();
+    }
+
+    /**
      * 发送消息（M4-3：body 可携带 clientMessageId 幂等键——超时重试携带同键可重放/防重复；
      * 不携带则走原路径）
      */
@@ -77,5 +99,42 @@ public class ChatController {
         String clientMessageId = body.get("clientMessageId");
         return R.ok(chatService.sendMessage(sessionId, message,
                 AuthUtils.resolveUserId(userId), clientMessageId));
+    }
+
+    /**
+     * M6：流式发送（SSE）。同步门禁（auth/guard/归属/幂等/归档）在返回 emitter 前完成，
+     * 错误语义与 JSON 端点一致（40904/40302/40902 等走 HTTP）；流水线异步输出
+     * thinking/token/done/error 事件。
+     *
+     * <p>注意：SseEmitter 必须作为控制器方法返回值直接返回，由 Spring 的
+     * {@code ResponseBodyEmitterReturnValueHandler} 处理并自动设置
+     * {@code text/event-stream}；<b>禁止</b>用 {@code ResponseEntity<SseEmitter>}
+     * 包装——那会走 {@code HttpEntityMethodProcessor} 消息转换器，运行时抛
+     * {@code HttpMessageNotWritableException: No converter for class SseEmitter}
+     * （实测 2026-08-24：成都规划请求因此返回 500，前端回退 JSON 同键重试
+     * 撞 PENDING 40904，最终显示兜底文案，而流水线实际已正常完成并落库）。</p>
+     */
+    @PostMapping("/sessions/{sessionId}/messages/stream")
+    public Object streamMessage(@PathVariable String sessionId,
+                                @RequestBody Map<String, String> body,
+                                @RequestHeader(value = "X-User-Id", required = false) Long userIdHeader) {
+        if (!chatStreamProps.isEnabled()) {
+            return ResponseEntity.notFound().build();
+        }
+        Long userId = AuthUtils.resolveUserId(userIdHeader);
+        String message = body.get("message");
+        String clientMessageId = body.get("clientMessageId");
+        StreamRequest request = new StreamRequest("chat", userId, sessionId,
+                message, clientMessageId, java.util.Map.of());
+        StreamPreflight preflight = chatStreamService.preflight(request);
+        if (!preflight.ok()) {
+            return ResponseEntity.status(StreamErrorMapper.httpStatus(preflight.code()))
+                    .body(R.fail(preflight.code(), preflight.message()));
+        }
+        SseEmitter emitter = sseStreamAdapter.toEmitter(
+                chatStreamService.stream(request, preflight),
+                chatStreamProps.getTimeoutMs(),
+                chatStreamProps.getKeepaliveMs());
+        return emitter;
     }
 }

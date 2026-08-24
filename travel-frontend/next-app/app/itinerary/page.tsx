@@ -28,7 +28,7 @@ const PAGE_SIZE_OPTIONS = [8, 10, 20, 50];
 
   useEffect(() => {
     if (!isAuthenticated) {
-      router.push('/login');
+      router.replace('/');
       return;
     }
     if (userId) {

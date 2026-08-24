@@ -15,6 +15,7 @@ import com.travel.planning.memory.pipeline.ChatMemoryStep;
 import com.travel.planning.memory.pipeline.ChatBudgetStep;
 import com.travel.planning.memory.pipeline.ChatRoutingStep;
 import com.travel.planning.memory.pipeline.ChatSessionGuardProperties;
+import com.travel.planning.memory.pipeline.ChatTitleProperties;
 import com.travel.planning.memory.shortterm.SessionFinalizer;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -55,6 +56,8 @@ public class ChatService {
     private final ChatRoutingStep chatRoutingStep;
     // M4-4：会话状态守卫（ARCHIVED 拒写开关）
     private final ChatSessionGuardProperties sessionGuardProps;
+    // M5-1：会话标题生成配置（首条消息标题长度上限）
+    private final ChatTitleProperties titleProps;
     // M4-4：会话收口器（close 后全量重算摘要，隐式待办+启动补偿）
     private final SessionFinalizer sessionFinalizer;
 
@@ -87,6 +90,32 @@ public class ChatService {
      * （重试重新执行，不重放兜底，M4-0-R1 评审 D3-1/D3-2）。</p>
      */
     public ChatResponseDTO sendMessage(String sessionId, String message, Long userId, String clientMessageId) {
+        ChatStreamPrepared prepared = prepareStream(userId, sessionId, message, clientMessageId);
+        if (prepared.replay()) {
+            // 命中 COMPLETED：直接重放，不落任何库（豁免会话状态校验——已归档会话也应可重放）
+            return ChatResponseDTO.builder()
+                    .sessionId(sessionId)
+                    .response(prepared.gate().replayResponse())
+                    .tokens(prepared.gate().replayTokens() == null ? 0 : prepared.gate().replayTokens())
+                    .build();
+        }
+        ChatStreamResult result = runStream(prepared, ChatProgressListener.NOOP);
+        return ChatResponseDTO.builder()
+                .sessionId(sessionId)
+                .response(result.response())
+                .tokens((int) result.aiTokens())
+                .sessionTitle(result.sessionTitle())
+                .build();
+    }
+
+    /**
+     * M6：流式发送的准备阶段（步骤 1~2 + 标题联动），与 JSON 路径共用。
+     *
+     * <p>包含：40101/40302/40404 校验、Guard 注入检测、beginTurn 幂等门禁、
+     * ARCHIVED 40902、用户消息追加、首条消息标题联动。</p>
+     */
+    public ChatStreamPrepared prepareStream(Long userId, String sessionId, String message,
+                                            String clientMessageId) {
         // F52：防御脏 userId（兜底 0 会导致 user_id=0 画像/会话）。
         if (userId == null || userId <= 0) {
             throw new BusinessException(40101, "用户未登录");
@@ -102,30 +131,56 @@ public class ChatService {
         // M4-3：幂等门禁（在用户消息落库之前；未命中时用户消息已在门禁事务内追加）
         ChatPersistenceStep.TurnGate gate =
                 chatPersistenceStep.beginTurn(sessionId, userId, clientMessageId, message);
-        if (!gate.proceed()) {
-            // 命中 COMPLETED：直接重放，不落任何库（豁免会话状态校验——已归档会话也应可重放）
-            return ChatResponseDTO.builder()
-                    .sessionId(sessionId)
-                    .response(gate.replayResponse())
-                    .tokens(gate.replayTokens() == null ? 0 : gate.replayTokens())
-                    .build();
+        String updatedSessionTitle = null;
+        if (gate.proceed()) {
+            // M4-4：ARCHIVED 会话拒绝新消息（40902；replay 已在上面豁免）
+            if (sessionGuardProps.isRejectArchived() && "ARCHIVED".equals(session.getStatus())) {
+                throw new BusinessException(40902, "会话已关闭");
+            }
+            if (!gate.userMessageAppended() && !gate.reuseUserMessage()) {
+                // 无幂等键/开关关：原路径由服务端追加用户消息
+                chatPersistenceStep.appendUserMessage(sessionId, message);
+            }
+            // M5-1：首条消息标题联动（短全量/长截断；仅默认标题生效，不覆盖手动标题；
+            // 更新失败仅 WARN，不阻断发送主链路）
+            String generatedTitle = buildSessionTitle(message, titleProps.getMaxLength());
+            if (generatedTitle != null) {
+                try {
+                    if (sessionStorePort.updateTitleIfDefault(
+                            sessionId, generatedTitle, SessionStorePort.DEFAULT_SESSION_TITLE) > 0) {
+                        updatedSessionTitle = generatedTitle;
+                    }
+                } catch (Exception e) {
+                    log.warn("[SessionTitle] 首条消息标题更新失败，继续发送: sessionId={}", sessionId, e);
+                }
+            }
         }
-        // M4-4：ARCHIVED 会话拒绝新消息（40902；replay 已在上面豁免）
-        if (sessionGuardProps.isRejectArchived() && "ARCHIVED".equals(session.getStatus())) {
-            throw new BusinessException(40902, "会话已关闭");
-        }
-        if (!gate.userMessageAppended() && !gate.reuseUserMessage()) {
-            // 无幂等键/开关关：原路径由服务端追加用户消息
-            chatPersistenceStep.appendUserMessage(sessionId, message);
-        }
+        return new ChatStreamPrepared(sessionId, message, userId, clientMessageId, gate, updatedSessionTitle);
+    }
+
+    /**
+     * M6：流式发送的执行阶段（步骤 3~9），通过 listener 输出思考与响应就绪事件。
+     *
+     * <p>与旧路径共用同一批步骤组件，异常时幂等记录置 FAILED（M4-3 语义不变）。</p>
+     */
+    public ChatStreamResult runStream(ChatStreamPrepared prepared, ChatProgressListener listener) {
+        String sessionId = prepared.sessionId();
+        String message = prepared.message();
+        Long userId = prepared.userId();
+        String clientMessageId = prepared.clientMessageId();
+        ChatProgressListener l = listener == null ? ChatProgressListener.NOOP : listener;
         try {
+            l.onThinking("preference", "正在分析您的偏好…");
             // M3-12：步骤 3 偏好（确定性偏好保存；语义同 F71）
             chatPreferenceStep.saveIfPreference(userId, message);
+            l.onThinking("knowledge", "正在整理会话知识…");
             // M3-13：步骤 4 知识（切片+异步写入；语义同 Phase C/F78 C1）
             chatKnowledgeStep.writeUserMessageAsync(sessionId, message);
+            l.onThinking("intent", "正在理解您的意图…");
             // M3-14：步骤 5 意图（分类+追溯填充；语义同 F85/F89）
             ChatIntent intent = chatIntentStep.classify(sessionId, userId, message);
 
+            l.onThinking("memory", "正在回顾会话记忆…");
             // M3-15：步骤 6 记忆（画像+历史/摘要组装；语义同 F50/F55/F57/F60）
             ChatMemoryStep.MemoryContext memory = chatMemoryStep.assemble(userId, sessionId);
             String profileContext = memory.profileContext();
@@ -134,6 +189,7 @@ public class ChatService {
             boolean summaryTriggered = memory.summaryTriggered();
             int turns = memory.turns();
             int totalHistoryTokens = memory.totalHistoryTokens();
+            l.onThinking("budget", "正在组装上下文…");
             // M3-16：步骤 7 预算（检索注入+组装+四档预算兜底；语义同 F63/F66/F78/F83/F85）
             ChatBudgetStep.BudgetContext budget = chatBudgetStep.compose(sessionId, userId, intent,
                     message, profileContext, historySection);
@@ -149,8 +205,20 @@ public class ChatService {
                     summaryUsed, summaryTriggered, turns, totalHistoryTokens, inputTokens,
                     !"[]".equals(candidates));
 
-            // M3-17：步骤 8 路由（意图分派 recall/direct/supervisor；语义同 F85/F64/F27）
-            ChatRoutingStep.RouteResult routed = chatRoutingStep.route(intent, composed, userId, sessionHits);
+            l.onThinking("routing", "正在生成回答…");
+            // M3-17/M6：步骤 8 路由（意图分派 recall/direct/supervisor；语义同 F85/F64/F27）
+            // M6：JSON 路径（NOOP listener）保持阻塞式 route() 行为逐字等价；
+            // 流式路径走 routeStream()——直答/回顾真 token 流，规划分块流。
+            ChatRoutingStep.StreamRouteResult routed;
+            if (l == ChatProgressListener.NOOP) {
+                ChatRoutingStep.RouteResult blocking =
+                        chatRoutingStep.route(intent, composed, userId, sessionHits);
+                routed = new ChatRoutingStep.StreamRouteResult(blocking.response(),
+                        blocking.aiTokens(), blocking.fallback(), false);
+            } else {
+                routed = chatRoutingStep.routeStream(intent, composed, userId,
+                        sessionHits, l::onToken);
+            }
             String response = routed.response();
             long aiTokens = routed.aiTokens();
 
@@ -164,11 +232,13 @@ public class ChatService {
                 chatPersistenceStep.completeTurn(clientMessageId, assistantMessageId);
             }
 
-            return ChatResponseDTO.builder()
-                    .sessionId(sessionId)
-                    .response(response)
-                    .tokens((int) aiTokens)
-                    .build();
+            // M6：真 token 流已在路由阶段逐增量输出，避免重复发送完整回答；
+            // 规划/兜底路径在此统一 onResponse，由传输层分块。
+            if (!routed.streamed()) {
+                l.onResponse(response);
+            }
+            return new ChatStreamResult(response, aiTokens, routed.fallback(),
+                    assistantMessageId, prepared.sessionTitle());
         } catch (Exception e) {
             // M4-3（复核观察项 2）：步骤 3~9 意外异常时幂等记录置 FAILED——
             // 否则 PENDING 悬挂，同键重试永远 40904（failTurn 对空键/开关关为 no-op）
@@ -177,11 +247,64 @@ public class ChatService {
         }
     }
 
+    /** M6：流式准备产物（gate 供流式路径复用，避免幂等门禁重复执行） */
+    public record ChatStreamPrepared(String sessionId, String message, Long userId,
+                                     String clientMessageId, ChatPersistenceStep.TurnGate gate,
+                                     String sessionTitle) {
+        public boolean replay() {
+            return !gate.proceed();
+        }
+    }
+
+    /** M6：流式执行结果 */
+    public record ChatStreamResult(String response, long aiTokens, boolean fallback,
+                                   Long assistantMessageId, String sessionTitle) {
+    }
+
     /**
      * 获取用户活跃会话列表
      */
     public List<ChatSession> listSessions(Long userId) {
         return sessionStorePort.listActiveByUserId(userId);
+    }
+
+    /**
+     * M5-1：更新会话标题（前端双击编辑；归档会话也可改标题——只读历史仍展示）。
+     */
+    public void updateTitle(Long userId, String sessionId, String title) {
+        if (userId == null || userId <= 0) {
+            throw new BusinessException(40101, "用户未登录");
+        }
+        ChatSession session = chatPersistenceStep.requireSession(sessionId);
+        if (!userId.equals(session.getUserId())) {
+            throw new BusinessException(40302, "无权访问该会话");
+        }
+        String normalized = title == null ? "" : title.trim();
+        if (normalized.isEmpty()) {
+            throw new BusinessException(40001, "会话标题不能为空");
+        }
+        if (normalized.length() > 200) {
+            throw new BusinessException(40001, "会话标题不能超过200个字符");
+        }
+        int updated = sessionStorePort.updateTitle(sessionId, normalized);
+        if (updated == 0) {
+            throw new BusinessException(40404, "会话不存在: " + sessionId);
+        }
+    }
+
+    /** M5-1：基于首条用户消息生成会话标题（不引 LLM：短全量、长截断） */
+    static String buildSessionTitle(String message, int maxLength) {
+        if (message == null) {
+            return null;
+        }
+        String normalized = message.trim().replaceAll("\\s+", " ");
+        if (normalized.isEmpty()) {
+            return null;
+        }
+        if (normalized.length() <= maxLength) {
+            return normalized;
+        }
+        return normalized.substring(0, maxLength) + "…";
     }
 
     /** M4-4：关闭会话结果（archived=已归档；finalized=收口摘要已完成） */

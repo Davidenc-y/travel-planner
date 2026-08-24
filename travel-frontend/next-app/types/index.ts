@@ -86,6 +86,8 @@ export interface ChatResponse {
   response: string;
   itineraryId?: number;
   tokens?: number;
+  /** M5-1：首条消息自动生成标题时返回；其余场景为 undefined */
+  sessionTitle?: string;
 }
 
 // 景点相关

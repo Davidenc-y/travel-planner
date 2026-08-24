@@ -60,6 +60,13 @@ public class AttractionService {
     }
 
     /**
+     * M5-1：全部城市去重列表（“浏览全部”城市下拉）。
+     */
+    public List<String> listCities() {
+        return attractionMapper.listCities();
+    }
+
+    /**
      * 查询景点详情
      */
     public Attraction getById(Long id) {

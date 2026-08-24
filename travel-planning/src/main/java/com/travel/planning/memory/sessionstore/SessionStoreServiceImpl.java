@@ -31,7 +31,7 @@ public class SessionStoreServiceImpl implements SessionStorePort {
         ChatSession session = new ChatSession();
         session.setSessionId(UUID.randomUUID().toString());
         session.setUserId(userId);
-        session.setTitle(title != null ? title : "旅游规划对话");
+        session.setTitle(title != null ? title : DEFAULT_SESSION_TITLE);
         session.setStatus("ACTIVE");
         sessionMapper.insert(session);
         log.info("创建聊天会话: sessionId={}, userId={}", session.getSessionId(), userId);
@@ -78,6 +78,16 @@ public class SessionStoreServiceImpl implements SessionStorePort {
     @Override
     public int updateSummaryFinal(String sessionId, String text) {
         return sessionMapper.updateSummaryFinal(sessionId, text);
+    }
+
+    @Override
+    public int updateTitle(String sessionId, String title) {
+        return sessionMapper.updateTitle(sessionId, title);
+    }
+
+    @Override
+    public int updateTitleIfDefault(String sessionId, String title, String defaultTitle) {
+        return sessionMapper.updateTitleIfDefault(sessionId, title, defaultTitle);
     }
 
     @Override

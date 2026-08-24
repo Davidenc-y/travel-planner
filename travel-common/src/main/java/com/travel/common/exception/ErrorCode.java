@@ -10,6 +10,8 @@ public enum ErrorCode {
     BAD_REQUEST(40001, 400, "请求参数错误"),
     PARAM_INVALID(40002, 400, "参数非法"),
     USERNAME_EXISTS(40003, 409, "用户名已存在"),
+    /** M5-1：邮箱已被其他账号绑定 */
+    EMAIL_EXISTS(40004, 409, "邮箱已被绑定"),
     UNAUTHORIZED(40101, 401, "用户未登录"),
     AUTH_TOKEN_INVALID(40102, 401, "refreshToken 无效或已过期"),
     AUTH_TOKEN_EXPIRED(40103, 401, "refreshToken 已失效，请重新登录"),

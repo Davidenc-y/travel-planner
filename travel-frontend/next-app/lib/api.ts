@@ -13,11 +13,19 @@
 
 import axios, { AxiosInstance } from 'axios';
 import type { AuthResponse, R } from '@/types';
+import { consumeSseStream, type SseStreamHandlers } from './sse';
 
 const PLANNING_BASE = process.env.NEXT_PUBLIC_API_PLANNING || 'http://localhost:8081';
 const KNOWLEDGE_BASE = process.env.NEXT_PUBLIC_API_KNOWLEDGE || 'http://localhost:8082';
 
 // ==================== 认证辅助（F87） ====================
+
+/** M5-1：显式登出期间抑制 401 自动跳登录——登出统一回首页，避免被在途 401 覆盖 */
+let suppressAuthRedirect = false;
+
+export function setSuppressAuthRedirect(value: boolean): void {
+  suppressAuthRedirect = value;
+}
 
 function clearAuth(): void {
   if (typeof window === 'undefined') return;
@@ -30,7 +38,8 @@ function clearAuth(): void {
 }
 
 function redirectToLogin(): void {
-  if (typeof window !== 'undefined' && window.location.pathname !== '/login') {
+  if (typeof window === 'undefined' || suppressAuthRedirect) return;
+  if (window.location.pathname !== '/login') {
     window.location.href = '/login';
   }
 }
@@ -143,6 +152,9 @@ export const userApi = {
     // 不手动设 Content-Type（axios 自动带 boundary）
     return planningApi.post<R<string>>('/api/v1/users/avatar', fd);
   },
+  /** M5-1：绑定邮箱（注册未填时后补；格式与唯一性由后端校验） */
+  updateEmail: (email: string) =>
+    planningApi.put<R<void>>('/api/v1/users/email', { email }),
 };
 
 // ==================== Itinerary ====================
@@ -174,31 +186,41 @@ export const chatApi = {
   /** M4-9：显式关闭会话（归档+收口摘要；禁止 beforeunload 触发） */
   closeSession: (sessionId: string) =>
     planningApi.post<R<{ archived: boolean; finalized: boolean }>>(`/api/v1/chat/sessions/${sessionId}/close`),
-  /**
-   * F92：流式聊天预留（SSE）。当前后端为一次性 JSON 响应，本方法返回原生 fetch Response；
-   * 后端支持 SSE 后，消费 response.body 的 ReadableStream 即可实现打字机效果。
-   */
-  sendMessageStream: (sessionId: string, message: string, signal?: AbortSignal) =>
-    fetch(`${PLANNING_BASE}/api/v1/chat/sessions/${sessionId}/messages`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...(typeof window !== 'undefined' && localStorage.getItem('accessToken')
-          ? { Authorization: `Bearer ${localStorage.getItem('accessToken')}` }
-          : {}),
-        ...(typeof window !== 'undefined' && localStorage.getItem('userId')
-          ? { 'X-User-Id': localStorage.getItem('userId')! }
-          : {}),
-      },
-      body: JSON.stringify({ message }),
+  /** M5-1：更新会话标题（双击编辑保存） */
+  updateTitle: (sessionId: string, title: string) =>
+    planningApi.put<R<void>>(`/api/v1/chat/sessions/${sessionId}/title`, { title }),
+  /** M6：流式发送（SSE）——POST /messages/stream，事件回调驱动思考气泡与流式文本 */
+  sendMessageStream: (
+    sessionId: string,
+    message: string,
+    clientMessageId: string,
+    signal: AbortSignal,
+    handlers: SseStreamHandlers,
+  ) => {
+    const headers: Record<string, string> = {};
+    if (typeof window !== 'undefined') {
+      const token = localStorage.getItem('accessToken');
+      if (token) headers.Authorization = `Bearer ${token}`;
+      const userId = localStorage.getItem('userId');
+      if (userId) headers['X-User-Id'] = userId;
+    }
+    return consumeSseStream(
+      `${PLANNING_BASE}/api/v1/chat/sessions/${sessionId}/messages/stream`,
+      { message, clientMessageId },
+      headers,
       signal,
-    }),
+      handlers,
+    );
+  },
 };
 
 // ==================== Attractions ====================
 export const attractionApi = {
   list: (city?: string, type?: string, page = 1, size = 10) =>
     knowledgeApi.get<R<import('@/types').PageResult<import('@/types').Attraction>>>('/api/v1/attractions', { params: { city, type, page, size } }),
+  /** M5-1：全部城市列表（“浏览全部”下拉动态数据源） */
+  listCities: () =>
+    knowledgeApi.get<R<string[]>>('/api/v1/attractions/cities'),
   getById: (id: number) =>
     knowledgeApi.get<R<import('@/types').Attraction>>(`/api/v1/attractions/${id}`),
   search: (query: string, ragType = 'hybrid', topK = 10) =>

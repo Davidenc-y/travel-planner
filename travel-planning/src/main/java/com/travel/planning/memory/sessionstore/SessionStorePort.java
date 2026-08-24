@@ -15,6 +15,9 @@ import java.util.List;
  */
 public interface SessionStorePort {
 
+    /** M5-1：默认会话标题（createSession 兜底 + 首条消息联动条件更新共用） */
+    String DEFAULT_SESSION_TITLE = "旅游规划对话";
+
     /**
      * 创建会话（生成 sessionId、标题兜底、状态 ACTIVE），返回 sessionId。
      */
@@ -60,6 +63,20 @@ public interface SessionStorePort {
      * @return 实际更新行数
      */
     int updateSummaryFinal(String sessionId, String text);
+
+    /**
+     * M5-1：更新会话标题（手动编辑）。
+     *
+     * @return 实际更新行数（0=会话不存在）
+     */
+    int updateTitle(String sessionId, String title);
+
+    /**
+     * M5-1：首条消息联动标题——仅当标题为空或仍为默认值时更新。
+     *
+     * @return 实际更新行数（0=标题已被手动修改或会话不存在）
+     */
+    int updateTitleIfDefault(String sessionId, String title, String defaultTitle);
 
     /**
      * M4-4：启动补偿扫描——已归档但收口未完成的会话（updatedBefore 排除刚 close 在途）。

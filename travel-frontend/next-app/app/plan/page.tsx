@@ -58,7 +58,7 @@ function PlanPageContent() {
     }
     if (!isAuthenticated) {
       toast.info('请先登录');
-      router.push('/login?from=/plan');
+      router.replace('/');
       return;
     }
     setLoading(true);

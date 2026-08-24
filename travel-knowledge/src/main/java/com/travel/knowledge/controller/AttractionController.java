@@ -38,6 +38,14 @@ public class AttractionController {
     }
 
     /**
+     * M5-1：全部城市列表（“浏览全部”下拉动态数据源）
+     */
+    @GetMapping("/cities")
+    public R<List<String>> listCities() {
+        return R.ok(attractionService.listCities());
+    }
+
+    /**
      * 查询景点详情
      */
     @GetMapping("/{id}")

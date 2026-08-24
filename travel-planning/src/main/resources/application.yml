@@ -153,6 +153,15 @@ travel:
     # M4-4：ARCHIVED 会话拒绝新消息（COMPLETED 幂等重放豁免）
     session:
       reject-archived: true
+    # M5-1：首条消息标题生成（短全量/长截断；不引 LLM）
+    title:
+      max-length: 20
+    # M6：流式发送（SSE；timeout 覆盖 Supervisor 300s 硬超时）
+    stream:
+      enabled: true
+      timeout-ms: 330000
+      keepalive-ms: 15000
+      chunk-max-chars: 16
     intent:
       enabled: true          # false → 全部走原 supervisor 流程（回滚开关）
       cache-size: 256

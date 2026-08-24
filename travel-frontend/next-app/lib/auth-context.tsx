@@ -2,7 +2,7 @@
 
 import { createContext, useContext, useEffect, useState, ReactNode } from 'react';
 import { useRouter } from 'next/navigation';
-import { authApi } from './api';
+import { authApi, setSuppressAuthRedirect } from './api';
 import { userApi } from './api';
 import { toast } from 'sonner';
 import { isTokenExpired } from './token';
@@ -114,9 +114,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   const logout = () => {
+    // M5-1：登出期间抑制 401 拦截器跳登录，避免登出请求/在途请求的 401 覆盖首页跳转
+    setSuppressAuthRedirect(true);
     // F87：通知后端注销 Redis refreshToken（best-effort，失败仅清本地）
     if (typeof window !== 'undefined' && localStorage.getItem('accessToken')) {
-      authApi.logout().catch(() => {});
+      authApi.logout()
+        .catch(() => {})
+        .finally(() => setSuppressAuthRedirect(false));
     }
     clearLocalAuth();
     clearAuthCookie();
@@ -124,7 +128,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUserId(null);
     setUsername(null);
     setAvatar(null);
-    router.push('/login');
+    // M5-1：主动登出整页跳转默认首页，避免与页面守卫 router.push('/login') 竞态
+    window.location.assign('/');
   };
 
   if (!mounted) {

@@ -46,4 +46,8 @@ public interface AttractionMapper extends BaseMapper<Attraction> {
      */
     @Select("SELECT COUNT(*) FROM t_attraction WHERE indexed = 1")
     long countIndexed();
+
+    /** M5-1：全部城市去重列表（景点“浏览全部”下拉数据源） */
+    @Select("SELECT DISTINCT city FROM t_attraction ORDER BY city")
+    List<String> listCities();
 }

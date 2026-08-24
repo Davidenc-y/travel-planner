@@ -29,7 +29,7 @@ function ItineraryDetailContent() {
 
   useEffect(() => {
     if (!isAuthenticated) {
-      router.push('/login');
+      router.replace('/');
       return;
     }
     // F94：地址栏参数名为短码（?i=38），还原为 itineraryId 再请求后端原始接口
