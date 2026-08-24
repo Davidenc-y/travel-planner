@@ -196,6 +196,7 @@ export const chatApi = {
     clientMessageId: string,
     signal: AbortSignal,
     handlers: SseStreamHandlers,
+    lastEventId?: string,
   ) => {
     const headers: Record<string, string> = {};
     if (typeof window !== 'undefined') {
@@ -204,6 +205,8 @@ export const chatApi = {
       const userId = localStorage.getItem('userId');
       if (userId) headers['X-User-Id'] = userId;
     }
+    // P1：断线续传——携带最近收到的事件 id（仅 COMPLETED 重放生效）
+    if (lastEventId) headers['Last-Event-ID'] = lastEventId;
     return consumeSseStream(
       `${PLANNING_BASE}/api/v1/chat/sessions/${sessionId}/messages/stream`,
       { message, clientMessageId },

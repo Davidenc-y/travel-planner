@@ -7,7 +7,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.servlet.HandlerInterceptor;
 
 /**
- * 请求限流拦截器（F90）。
+ * 请求限流拦截器（F90；M6-9 P2 自 travel-common 迁移，行为不变）。
  *
  * <p>按 userId + 接口维度限流（消费 travel.rate-limit.per-minute 休眠配置）；
  * 超限返回 HTTP 429。放行逻辑与鉴权无关，仅做频率保护。</p>

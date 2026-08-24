@@ -23,6 +23,16 @@
             <groupId>com.travel.common</groupId>
             <artifactId>travel-common</artifactId>
         </dependency>
+        <!-- M6-6-R1 Step 0：聊天流中立模块（StreamingPipeline/端口/payload 映射） -->
+        <dependency>
+            <groupId>com.travel.chatstream</groupId>
+            <artifactId>travel-chat-stream</artifactId>
+        </dependency>
+        <!-- M6-9 P2：MVC 横切组件（全局异常/限流拦截器） -->
+        <dependency>
+            <groupId>com.travel.webmvc</groupId>
+            <artifactId>travel-web-mvc</artifactId>
+        </dependency>
 
         <!-- Spring Boot Web -->
         <dependency>

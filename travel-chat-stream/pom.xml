@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>com.travel.planner</groupId>
+        <artifactId>travel-planner</artifactId>
+        <version>1.0-SNAPSHOT</version>
+    </parent>
+
+    <groupId>com.travel.chatstream</groupId>
+    <artifactId>travel-chat-stream</artifactId>
+    <packaging>jar</packaging>
+
+    <name>travel-chat-stream</name>
+    <description>聊天流领域中立模块（M6-6-R1 Step 0）：StreamingPipeline 实现、端口接口与
+        payload 映射；不依赖 travel-planning，供 MVC/未来 WebFlux 传输层复用</description>
+
+    <dependencies>
+        <!-- 内部依赖：travel-common（含 travel-core；注意 travel-common 当前传递引入
+             spring-boot-starter-web，WebFlux 全量迁移前需先剥离，见 M6-6-R1） -->
+        <dependency>
+            <groupId>com.travel.common</groupId>
+            <artifactId>travel-common</artifactId>
+        </dependency>
+        <!-- Reactor（StreamingPipeline 数据面；版本由父 pom 管理） -->
+        <dependency>
+            <groupId>io.projectreactor</groupId>
+            <artifactId>reactor-core</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+</project>

@@ -11,7 +11,9 @@ public record StreamRequest(
         String sessionId,
         String input,
         String clientMessageId,
-        Map<String, Object> attributes) {
+        Map<String, Object> attributes,
+        /** A-P2：客户端断线重连携带的 Last-Event-ID（1-based 事件序号） */
+        String lastEventId) {
 
     public StreamRequest {
         attributes = attributes == null ? Map.of() : Map.copyOf(attributes);

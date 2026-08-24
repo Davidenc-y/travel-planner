@@ -1,6 +1,5 @@
 package com.travel.planning.stream;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.travel.core.stream.StreamEvent;
 import com.travel.core.stream.StreamMeta;
 import lombok.RequiredArgsConstructor;
@@ -11,8 +10,6 @@ import reactor.core.Disposable;
 import reactor.core.publisher.Flux;
 
 import java.time.Duration;
-import java.util.LinkedHashMap;
-import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
@@ -25,7 +22,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 @RequiredArgsConstructor
 public class SseStreamAdapter {
 
-    private final ObjectMapper objectMapper;
+    private final StreamPayloadMapper payloadMapper;
 
     public SseEmitter toEmitter(Flux<StreamEvent> events, long timeoutMs, long keepaliveMs) {
         SseEmitter emitter = new SseEmitter(timeoutMs);
@@ -61,39 +58,20 @@ public class SseStreamAdapter {
 
     private void send(SseEmitter emitter, StreamEvent event) {
         try {
-            emitter.send(SseEmitter.event()
+            SseEmitter.SseEventBuilder builder = SseEmitter.event()
                     .name(event.type().name().toLowerCase())
-                    .data(objectMapper.writeValueAsString(buildData(event))));
+                    .reconnectTime(3000L)
+                    .data(payloadMapper.toJson(event));
+            // A-P1/A-P2：仅 token/done 携带确定性 id（分块序号）；thinking/ping 不带 id，
+            // 保证普通流与重放流 id 语义一致
+            if (event.eventId() != null) {
+                builder.id(event.eventId());
+            }
+            emitter.send(builder);
         } catch (Exception e) {
             // 客户端断开/序列化失败：上抛由订阅 onError 收口
             throw new IllegalStateException("SSE 发送失败", e);
         }
     }
 
-    /**
-     * M6：按事件类型构造 SSE data 载荷（与前端协议一致）。
-     *
-     * <p>thinking → {@code {stage,message}}；token/done/error → 事件 data 透传；
-     * ping → 空对象。不把整个 StreamEvent 记录序列化到 data，避免前端解析错位。</p>
-     */
-    static Map<String, Object> buildData(StreamEvent event) {
-        Map<String, Object> payload = new LinkedHashMap<>();
-        switch (event.type()) {
-            case THINKING -> {
-                payload.put("stage", event.stage() == null ? "" : event.stage());
-                payload.put("message", event.message() == null ? "" : event.message());
-            }
-            case TOKEN, DONE, ERROR -> {
-                if (event.data() instanceof Map<?, ?> data) {
-                    data.forEach((k, v) -> payload.put(String.valueOf(k), v));
-                } else if (event.data() != null) {
-                    payload.put("value", event.data());
-                }
-            }
-            default -> {
-                // PING：空对象
-            }
-        }
-        return payload;
-    }
 }

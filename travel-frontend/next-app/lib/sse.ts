@@ -32,6 +32,8 @@ export interface SseStreamHandlers {
   onToken?: (payload: StreamTokenPayload) => void;
   onDone?: (payload: StreamDonePayload) => void;
   onError?: (payload: StreamErrorPayload) => void;
+  /** A-P2/P1：记录最近收到的事件 id（断线续传 Last-Event-ID 数据源） */
+  onId?: (id: string) => void;
 }
 
 /**
@@ -89,12 +91,18 @@ export async function consumeSseStream(
 function handleFrame(raw: string, handlers: SseStreamHandlers): void {
   let event = 'message';
   let data = '';
+  let id = '';
   for (const line of raw.split('\n')) {
     if (line.startsWith('event:')) {
       event = line.slice(6).trim();
     } else if (line.startsWith('data:')) {
       data += line.slice(5).trim();
+    } else if (line.startsWith('id:')) {
+      id = line.slice(3).trim();
     }
+  }
+  if (id) {
+    handlers.onId?.(id);
   }
   if (!data) return;
   let payload: any;

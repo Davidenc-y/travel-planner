@@ -4,6 +4,7 @@ import com.travel.common.dto.ChatResponseDTO;
 import com.travel.common.entity.ChatMessage;
 import com.travel.common.entity.ChatSession;
 import com.travel.common.exception.BusinessException;
+import com.travel.core.stream.TurnGate;
 import com.travel.planning.memory.chat.ChatIntent;
 import com.travel.planning.memory.sessionstore.SessionStorePort;
 import com.travel.planning.memory.pipeline.ChatGuardStep;
@@ -33,7 +34,7 @@ import java.util.Map;
 @Slf4j
 @Service
 @RequiredArgsConstructor
-public class ChatService {
+public class ChatService implements ChatStreamExecutor {
 
     // F67/B3-1：会话/消息持久化收口到 SessionStorePort，业务不再直连 Mapper
     private final SessionStorePort sessionStorePort;
@@ -90,7 +91,8 @@ public class ChatService {
      * （重试重新执行，不重放兜底，M4-0-R1 评审 D3-1/D3-2）。</p>
      */
     public ChatResponseDTO sendMessage(String sessionId, String message, Long userId, String clientMessageId) {
-        ChatStreamPrepared prepared = prepareStream(userId, sessionId, message, clientMessageId);
+        ChatStreamExecutor.ChatStreamPrepared prepared =
+                prepareStream(userId, sessionId, message, clientMessageId);
         if (prepared.replay()) {
             // 命中 COMPLETED：直接重放，不落任何库（豁免会话状态校验——已归档会话也应可重放）
             return ChatResponseDTO.builder()
@@ -99,7 +101,8 @@ public class ChatService {
                     .tokens(prepared.gate().replayTokens() == null ? 0 : prepared.gate().replayTokens())
                     .build();
         }
-        ChatStreamResult result = runStream(prepared, ChatProgressListener.NOOP);
+        ChatStreamExecutor.ChatStreamResult result =
+                runStream(prepared, ChatProgressListener.NOOP);
         return ChatResponseDTO.builder()
                 .sessionId(sessionId)
                 .response(result.response())
@@ -114,8 +117,9 @@ public class ChatService {
      * <p>包含：40101/40302/40404 校验、Guard 注入检测、beginTurn 幂等门禁、
      * ARCHIVED 40902、用户消息追加、首条消息标题联动。</p>
      */
-    public ChatStreamPrepared prepareStream(Long userId, String sessionId, String message,
-                                            String clientMessageId) {
+    @Override
+    public ChatStreamExecutor.ChatStreamPrepared prepareStream(
+            Long userId, String sessionId, String message, String clientMessageId) {
         // F52：防御脏 userId（兜底 0 会导致 user_id=0 画像/会话）。
         if (userId == null || userId <= 0) {
             throw new BusinessException(40101, "用户未登录");
@@ -129,8 +133,8 @@ public class ChatService {
             throw new BusinessException(40302, "无权访问该会话");
         }
         // M4-3：幂等门禁（在用户消息落库之前；未命中时用户消息已在门禁事务内追加）
-        ChatPersistenceStep.TurnGate gate =
-                chatPersistenceStep.beginTurn(sessionId, userId, clientMessageId, message);
+        TurnGate gate = chatPersistenceStep.beginTurn(
+                sessionId, userId, clientMessageId, message);
         String updatedSessionTitle = null;
         if (gate.proceed()) {
             // M4-4：ARCHIVED 会话拒绝新消息（40902；replay 已在上面豁免）
@@ -155,7 +159,8 @@ public class ChatService {
                 }
             }
         }
-        return new ChatStreamPrepared(sessionId, message, userId, clientMessageId, gate, updatedSessionTitle);
+        return new ChatStreamExecutor.ChatStreamPrepared(
+                sessionId, message, userId, clientMessageId, gate, updatedSessionTitle);
     }
 
     /**
@@ -163,7 +168,9 @@ public class ChatService {
      *
      * <p>与旧路径共用同一批步骤组件，异常时幂等记录置 FAILED（M4-3 语义不变）。</p>
      */
-    public ChatStreamResult runStream(ChatStreamPrepared prepared, ChatProgressListener listener) {
+    @Override
+    public ChatStreamExecutor.ChatStreamResult runStream(
+            ChatStreamExecutor.ChatStreamPrepared prepared, ChatProgressListener listener) {
         String sessionId = prepared.sessionId();
         String message = prepared.message();
         Long userId = prepared.userId();
@@ -237,7 +244,8 @@ public class ChatService {
             if (!routed.streamed()) {
                 l.onResponse(response);
             }
-            return new ChatStreamResult(response, aiTokens, routed.fallback(),
+            return new ChatStreamExecutor.ChatStreamResult(
+                    response, aiTokens, routed.fallback(),
                     assistantMessageId, prepared.sessionTitle());
         } catch (Exception e) {
             // M4-3（复核观察项 2）：步骤 3~9 意外异常时幂等记录置 FAILED——
@@ -245,20 +253,6 @@ public class ChatService {
             chatPersistenceStep.failTurn(clientMessageId);
             throw e;
         }
-    }
-
-    /** M6：流式准备产物（gate 供流式路径复用，避免幂等门禁重复执行） */
-    public record ChatStreamPrepared(String sessionId, String message, Long userId,
-                                     String clientMessageId, ChatPersistenceStep.TurnGate gate,
-                                     String sessionTitle) {
-        public boolean replay() {
-            return !gate.proceed();
-        }
-    }
-
-    /** M6：流式执行结果 */
-    public record ChatStreamResult(String response, long aiTokens, boolean fallback,
-                                   Long assistantMessageId, String sessionTitle) {
     }
 
     /**

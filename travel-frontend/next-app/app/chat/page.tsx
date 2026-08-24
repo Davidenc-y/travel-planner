@@ -279,11 +279,12 @@ function ChatContent() {
     key: string,
   ): Promise<{ text: string; sessionTitle?: string }> => {
     const maxAttempts = 4;
+    let acc = '';
+    let lastId = '';
+    const doneState: { sessionTitle?: string } = {};
     for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
       const controller = new AbortController();
       streamAbortRef.current = controller;
-      let acc = '';
-      const doneState: { sessionTitle?: string } = {};
       try {
         await chatApi.sendMessageStream(sid, text, key, controller.signal, {
           onThinking: (p) => {
@@ -304,19 +305,28 @@ function ChatContent() {
           onDone: (p) => {
             doneState.sessionTitle = p.sessionTitle;
           },
+          onId: (id) => {
+            lastId = id;
+          },
           onError: (p) => {
             const e: any = new Error(p.message || '流式处理失败');
             e.code = p.code;
             throw e;
           },
-        });
+        }, lastId || undefined);
         // M6-5：流结束不代表展示结束——等逐字揭示完成后才返回最终文本
         await waitForRevealComplete();
         return { text: acc, sessionTitle: doneState.sessionTitle };
       } catch (err: any) {
+        if (err?.name === 'AbortError') throw err;
         const code = err?.response?.data?.code ?? err?.code;
         if (code === 40904 && attempt < maxAttempts - 1) {
           await new Promise((r) => setTimeout(r, 3000));
+          continue;
+        }
+        // P1：中途断线（网络错误、无业务码）且已收到部分内容 → 同键 + Last-Event-ID 续传
+        if (!code && lastId && acc && attempt < maxAttempts - 1) {
+          await new Promise((r) => setTimeout(r, 1000));
           continue;
         }
         throw err;

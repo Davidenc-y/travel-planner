@@ -6,6 +6,7 @@ import com.travel.common.entity.ChatSession;
 import com.travel.common.enums.ChatRole;
 import com.travel.common.exception.BusinessException;
 import com.travel.common.util.TextTokens;
+import com.travel.core.stream.TurnGate;
 import com.travel.planning.memory.sessionstore.SessionStorePort;
 import com.travel.planning.repository.ChatMessageIdemMapper;
 import lombok.RequiredArgsConstructor;
@@ -33,38 +34,6 @@ public class ChatPersistenceStep {
     private final SessionStorePort sessionStorePort;
     private final ChatMessageIdemMapper idemMapper;
     private final ChatIdempotencyProperties idemProps;
-
-    /**
-     * M4-3：轮次门禁结果。
-     *
-     * <ul>
-     *   <li>proceed=false + replayResponse 非空 → 命中 COMPLETED，直接重放；</li>
-     *   <li>proceed=true + userMessageAppended=true → 未命中，用户消息已在
-     *       beginTurn 事务内落库并登记 PENDING，调用方跳过追加；</li>
-     *   <li>proceed=true + reuseUserMessage=true → 命中 FAILED 复用原用户消息（跳过追加）；</li>
-     *   <li>proceed=true 且两者皆 false → 无幂等键/开关关，走原路径
-     *       （调用方自行 appendUserMessage）。</li>
-     * </ul>
-     */
-    public record TurnGate(boolean proceed, String replayResponse, Integer replayTokens,
-                           boolean reuseUserMessage, boolean userMessageAppended) {
-        static TurnGate fresh() {
-            return new TurnGate(true, null, null, false, false);
-        }
-
-        /** 未命中：用户消息已在 beginTurn 事务内落库 */
-        static TurnGate freshAppended() {
-            return new TurnGate(true, null, null, false, true);
-        }
-
-        static TurnGate replay(String response, Integer tokens) {
-            return new TurnGate(false, response, tokens, false, false);
-        }
-
-        static TurnGate reuse() {
-            return new TurnGate(true, null, null, true, false);
-        }
-    }
 
     /**
      * 校验会话存在；不存在抛 40404（语义与 ChatService 原实现一致）。

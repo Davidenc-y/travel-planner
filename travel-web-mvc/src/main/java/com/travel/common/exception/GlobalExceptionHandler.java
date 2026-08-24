@@ -15,7 +15,7 @@ import org.springframework.web.servlet.resource.NoResourceFoundException;
 import jakarta.validation.ConstraintViolationException;
 
 /**
- * 全局异常处理器
+ * 全局异常处理器（M6-9 P2：自 travel-common 迁移至 travel-web-mvc，行为不变）。
  *
  * <p>统一捕获所有异常，返回标准 R&lt;Void&gt; 响应。</p>
  *

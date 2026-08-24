@@ -117,7 +117,8 @@ public class ChatController {
     @PostMapping("/sessions/{sessionId}/messages/stream")
     public Object streamMessage(@PathVariable String sessionId,
                                 @RequestBody Map<String, String> body,
-                                @RequestHeader(value = "X-User-Id", required = false) Long userIdHeader) {
+                                @RequestHeader(value = "X-User-Id", required = false) Long userIdHeader,
+                                @RequestHeader(value = "Last-Event-ID", required = false) String lastEventId) {
         if (!chatStreamProps.isEnabled()) {
             return ResponseEntity.notFound().build();
         }
@@ -125,7 +126,7 @@ public class ChatController {
         String message = body.get("message");
         String clientMessageId = body.get("clientMessageId");
         StreamRequest request = new StreamRequest("chat", userId, sessionId,
-                message, clientMessageId, java.util.Map.of());
+                message, clientMessageId, java.util.Map.of(), lastEventId);
         StreamPreflight preflight = chatStreamService.preflight(request);
         if (!preflight.ok()) {
             return ResponseEntity.status(StreamErrorMapper.httpStatus(preflight.code()))

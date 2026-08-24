@@ -23,6 +23,11 @@
             <groupId>com.travel.common</groupId>
             <artifactId>travel-common</artifactId>
         </dependency>
+        <!-- M6-9 P2：MVC 横切组件（全局异常/限流拦截器） -->
+        <dependency>
+            <groupId>com.travel.webmvc</groupId>
+            <artifactId>travel-web-mvc</artifactId>
+        </dependency>
 
         <!-- Spring Boot Web -->
         <dependency>

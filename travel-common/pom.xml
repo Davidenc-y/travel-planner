@@ -24,10 +24,16 @@
             <artifactId>travel-core</artifactId>
         </dependency>
 
-        <!-- Spring Boot Web（提供 R<T> 序列化、@RestControllerAdvice 等） -->
+        <!-- M6-9 P2：travel-common 不再传递引入 Web Starter；仅保留 Spring Boot 基础 -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-starter-web</artifactId>
+            <artifactId>spring-boot-starter</artifactId>
+        </dependency>
+
+        <!-- Jackson（R<T>/JsonUtils 序列化） -->
+        <dependency>
+            <groupId>com.fasterxml.jackson.core</groupId>
+            <artifactId>jackson-databind</artifactId>
         </dependency>
 
         <!-- MyBatis Plus -->

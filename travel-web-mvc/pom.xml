@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>com.travel.planner</groupId>
+        <artifactId>travel-planner</artifactId>
+        <version>1.0-SNAPSHOT</version>
+    </parent>
+
+    <groupId>com.travel.webmvc</groupId>
+    <artifactId>travel-web-mvc</artifactId>
+    <packaging>jar</packaging>
+
+    <name>travel-web-mvc</name>
+    <description>M6-9 P2：MVC 专属横切组件（全局异常/限流拦截器）独立模块，
+        travel-common 不再传递引入 spring-boot-starter-web</description>
+
+    <dependencies>
+        <!-- 内部依赖：travel-common（纯类型/工具，不再含 Web Starter） -->
+        <dependency>
+            <groupId>com.travel.common</groupId>
+            <artifactId>travel-common</artifactId>
+        </dependency>
+        <!-- MVC 专属（GlobalExceptionHandler / RateLimitInterceptor） -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-web</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+</project>
