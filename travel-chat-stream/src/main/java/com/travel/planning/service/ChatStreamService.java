@@ -33,12 +33,16 @@ public class ChatStreamService extends AbstractStreamingPipeline {
 
     private final ChatStreamExecutor executor;
     private final ChatStreamProperties props;
+    // M6-40：SSE/WebFlux 断开即取消在途轮次（响应式 dispose + 标记）
+    private final TurnCancellationRegistry cancellationRegistry;
 
     public ChatStreamService(ChatStreamExecutor executor, ChatStreamProperties props,
-                             StreamMetrics metrics) {
+                             StreamMetrics metrics,
+                             TurnCancellationRegistry cancellationRegistry) {
         super(metrics);
         this.executor = executor;
         this.props = props;
+        this.cancellationRegistry = cancellationRegistry;
     }
 
     @Override
@@ -81,6 +85,8 @@ public class ChatStreamService extends AbstractStreamingPipeline {
         // thinking/ping 不带 id，保证普通流与重放流 id 语义一致（断线续传可映射）
         AtomicInteger tokenSeq = new AtomicInteger(0);
         return Flux.<StreamEvent>create(sink -> {
+            // M6-40：客户端断开（abort/切会话/关页）→ 取消在途轮次
+            sink.onCancel(() -> cancellationRegistry.cancel(request.clientMessageId()));
             try {
                 ChatStreamExecutor.ChatStreamResult result = executor.runStream(prepared,
                         new ChatProgressListener() {

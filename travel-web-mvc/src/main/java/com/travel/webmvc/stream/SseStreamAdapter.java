@@ -1,7 +1,8 @@
-package com.travel.planning.stream;
+package com.travel.webmvc.stream;
 
 import com.travel.core.stream.StreamEvent;
 import com.travel.core.stream.StreamMeta;
+import com.travel.planning.stream.StreamPayloadMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
@@ -11,9 +12,10 @@ import reactor.core.publisher.Flux;
 
 import java.time.Duration;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
- * M6：Flux&lt;StreamEvent&gt; → Spring MVC SseEmitter 传输适配器。
+ * M6-19：Flux&lt;StreamEvent&gt; → Spring MVC SseEmitter 传输适配器（共享模块）。
  *
  * <p>职责：事件序列化、keepalive、超时、断连清理；领域 Pipeline 不感知传输层。</p>
  */
@@ -25,6 +27,14 @@ public class SseStreamAdapter {
     private final StreamPayloadMapper payloadMapper;
 
     public SseEmitter toEmitter(Flux<StreamEvent> events, long timeoutMs, long keepaliveMs) {
+        return toEmitter(events, timeoutMs, keepaliveMs, null);
+    }
+
+    /**
+     * M6-40：带断开回调的 SSE 适配（客户端断开/超时时取消在途轮次）。
+     */
+    public SseEmitter toEmitter(Flux<StreamEvent> events, long timeoutMs, long keepaliveMs,
+                                Runnable onCancel) {
         SseEmitter emitter = new SseEmitter(timeoutMs);
         // M6：share() 保证保活流与业务流共享同一次上游订阅，避免流水线重复执行
         Flux<StreamEvent> shared = events.share();
@@ -37,9 +47,22 @@ public class SseStreamAdapter {
                 emitter.complete();
             }
         };
+        AtomicReference<Disposable> disposableRef = new AtomicReference<>();
         Disposable disposable = Flux.merge(shared, heartbeats)
                 .subscribe(
-                        ev -> send(emitter, ev),
+                        ev -> {
+                            if (!send(emitter, ev)) {
+                                // M6-53：客户端断开导致发送失败——正常结束推送，
+                                // 不触发 error 处理链（否则容器 async error 会尝试
+                                // 把 R 写入 text/event-stream 响应产生噪音）；
+                                // 底层业务（行程生成）已与订阅取消解耦，继续完成
+                                finish.run();
+                                Disposable d = disposableRef.get();
+                                if (d != null) {
+                                    d.dispose();
+                                }
+                            }
+                        },
                         err -> {
                             log.warn("[SseStream] 流式订阅异常: {}", err.getMessage());
                             if (completed.compareAndSet(false, true)) {
@@ -48,30 +71,38 @@ public class SseStreamAdapter {
                         },
                         finish
                 );
-        emitter.onCompletion(disposable::dispose);
+        disposableRef.set(disposable);
+        emitter.onCompletion(() -> {
+            disposable.dispose();
+            if (onCancel != null) {
+                onCancel.run();
+            }
+        });
         emitter.onTimeout(() -> {
             disposable.dispose();
+            if (onCancel != null) {
+                onCancel.run();
+            }
             finish.run();
         });
         return emitter;
     }
 
-    private void send(SseEmitter emitter, StreamEvent event) {
+    private boolean send(SseEmitter emitter, StreamEvent event) {
         try {
             SseEmitter.SseEventBuilder builder = SseEmitter.event()
                     .name(event.type().name().toLowerCase())
                     .reconnectTime(3000L)
                     .data(payloadMapper.toJson(event));
-            // A-P1/A-P2：仅 token/done 携带确定性 id（分块序号）；thinking/ping 不带 id，
-            // 保证普通流与重放流 id 语义一致
             if (event.eventId() != null) {
                 builder.id(event.eventId());
             }
             emitter.send(builder);
+            return true;
         } catch (Exception e) {
-            // 客户端断开/序列化失败：上抛由订阅 onError 收口
-            throw new IllegalStateException("SSE 发送失败", e);
+            // M6-53：客户端断开/超时——返回 false 由订阅方正常收尾
+            log.warn("[SseStream] SSE 发送失败（客户端断开）: {}", e.getMessage());
+            return false;
         }
     }
-
 }

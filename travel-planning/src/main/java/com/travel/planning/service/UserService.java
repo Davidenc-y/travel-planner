@@ -1,10 +1,10 @@
 package com.travel.planning.service;
 
+import com.travel.common.auth.TokenAuthService;
 import com.travel.common.entity.User;
 import com.travel.common.exception.BusinessException;
 import com.travel.common.exception.ErrorCode;
 import com.travel.planning.repository.UserMapper;
-import com.travel.planning.util.JwtUtil;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -31,7 +31,8 @@ import java.util.regex.Pattern;
 public class UserService {
 
     private final UserMapper userMapper;
-    private final JwtUtil jwtUtil;
+    // M6-25：JWT 逻辑下沉 travel-common（TokenAuthService），行为与旧 JwtUtil 等价
+    private final TokenAuthService tokenAuthService;
     private final StringRedisTemplate redisTemplate;
     private final BCryptPasswordEncoder passwordEncoder = new BCryptPasswordEncoder();
 
@@ -123,12 +124,12 @@ public class UserService {
      * 刷新 Token
      */
     public Map<String, Object> refreshToken(String refreshToken) {
-        if (!jwtUtil.validateToken(refreshToken)) {
+        if (!tokenAuthService.validateToken(refreshToken)) {
             throw new BusinessException(40102, "refreshToken 无效或已过期");
         }
 
-        Long userId = jwtUtil.getUserIdFromToken(refreshToken);
-        String username = jwtUtil.getUsernameFromToken(refreshToken);
+        Long userId = tokenAuthService.getUserIdFromToken(refreshToken);
+        String username = tokenAuthService.getUsernameFromToken(refreshToken);
 
         String redisKey = REFRESH_TOKEN_KEY + userId;
         String storedToken = redisTemplate.opsForValue().get(redisKey);
@@ -155,8 +156,8 @@ public class UserService {
      * 生成 Token 对并存入 Redis
      */
     private Map<String, Object> generateTokenPair(User user) {
-        String accessToken = jwtUtil.generateAccessToken(user.getId(), user.getUsername());
-        String refreshToken = jwtUtil.generateRefreshToken(user.getId(), user.getUsername());
+        String accessToken = tokenAuthService.generateAccessToken(user.getId(), user.getUsername());
+        String refreshToken = tokenAuthService.generateRefreshToken(user.getId(), user.getUsername());
 
         String redisKey = REFRESH_TOKEN_KEY + user.getId();
         redisTemplate.opsForValue().set(redisKey, refreshToken, REFRESH_TOKEN_TTL_DAYS, TimeUnit.DAYS);

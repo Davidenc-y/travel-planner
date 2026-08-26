@@ -1,6 +1,7 @@
 package com.travel.planning.agent.supervisor;
 
 import com.alibaba.cloud.ai.graph.CompileConfig;
+import com.alibaba.cloud.ai.graph.NodeOutput;
 import com.alibaba.cloud.ai.graph.OverAllState;
 import com.alibaba.cloud.ai.graph.RunnableConfig;
 import com.alibaba.cloud.ai.graph.agent.ReactAgent;
@@ -13,6 +14,8 @@ import com.travel.planning.agent.route.RouteArrangementAgent;
 import com.travel.planning.config.AiModelConfig;
 import com.travel.planning.memory.longterm.ProfileToolProvider;
 import com.travel.planning.prompt.PromptTemplates;
+import com.travel.planning.service.TurnCancellation;
+import com.travel.planning.service.TurnInterruptedException;
 import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.messages.AssistantMessage;
@@ -26,11 +29,15 @@ import org.springframework.stereotype.Component;
 import com.travel.planning.trace.TraceContext;
 import com.travel.core.guard.CircuitBreaker;
 import reactor.core.publisher.Flux;
+import reactor.core.Disposable;
 
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
@@ -38,6 +45,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.UUID;
+import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 
 /**
@@ -173,7 +181,7 @@ public class TravelSupervisorAgent {
      * @return 行程规划结果（JSON 字符串，需由调用方解析）
      */
     public String executePlanning(String userInput) throws Exception {
-        return executePlanningWithUsage(userInput, null).answer();
+        return executePlanningWithUsage(userInput, null, null).answer();
     }
 
     /**
@@ -184,10 +192,14 @@ public class TravelSupervisorAgent {
      * F64/B2：userId 写入 RunnableConfig.metadata，供画像工具（get_user_profile /
      * save_user_profile）从 ToolContext 读取，不依赖 LLM 传参。</p>
      */
-    public PlanningResult executePlanningWithUsage(String userInput, Long userId) throws Exception {
+    public PlanningResult executePlanningWithUsage(String userInput, Long userId,
+                                                   TurnCancellation cancellation) throws Exception {
         log.info("开始执行行程规划: input={}, userId={}", userInput, userId);
         long start = System.currentTimeMillis();
         CompletableFuture<Optional<OverAllState>> future = null;
+        // M6-42：阻塞路径取消令牌（null 兼容；入口先检查，取消后不再发起新调用）
+        TurnCancellation cancel = cancellation == null ? TurnCancellation.NOOP : cancellation;
+        cancel.throwIfCancelled();
         // F89：追溯启用时复用切面生成的 requestId，与 TokenUsageInterceptor 关联
         String requestId = TraceContext.active() ? TraceContext.current().requestId
                 : UUID.randomUUID().toString();
@@ -204,6 +216,7 @@ public class TravelSupervisorAgent {
             RunnableConfig.Builder configBuilder = RunnableConfig.builder()
                     .threadId("rag_" + requestId)
                     .addMetadata(TokenUsageInterceptor.REQUEST_ID_KEY, requestId);
+            addCancellationMetadata(configBuilder, cancel);
             // F64/B2：聊天链画像工具 userId 透传（metadata → ToolContext）
             if (userId != null) {
                 configBuilder.addMetadata(ProfileToolProvider.USER_ID_METADATA_KEY, userId);
@@ -213,9 +226,13 @@ public class TravelSupervisorAgent {
                     () -> circuitBreakerRegistry.of("supervisor").call("supervisor",
                             () -> invokeSupervisorSafely(supervisor, userInput, config)),
                     SUPERVISOR_EXECUTOR);
+            // M6-42：等待前检查（取消后不再等待结果）
+            cancel.throwIfCancelled();
             OverAllState finalState = future.orTimeout(MAX_EXECUTION_SECONDS, TimeUnit.SECONDS)
                     .get()
                     .orElseThrow(() -> new IllegalStateException("Supervisor 未返回最终状态"));
+            // M6-42：等待期间发生取消 → 立即终止，不进入重试/直答/落库
+            cancel.throwIfCancelled();
             String result = buildFinalResponse(finalState);
             long[] mainUsage = tokenUsageInterceptor.peek(requestId);
             long totalTokens = tokenUsageInterceptor.endAndGet(requestId);
@@ -228,11 +245,14 @@ public class TravelSupervisorAgent {
             if (!hasSectionOutput(finalState)
                     && looksLikePlanningRequest(userInput)
                     && !isRecallQuery(userInput)) {
+                // M6-42：整图重试前检查取消
+                cancel.throwIfCancelled();
                 String retryRequestId = UUID.randomUUID().toString();
                 tokenUsageInterceptor.begin(retryRequestId);
                 RunnableConfig.Builder retryBuilder = RunnableConfig.builder()
                         .threadId("rag_" + retryRequestId)
                         .addMetadata(TokenUsageInterceptor.REQUEST_ID_KEY, retryRequestId);
+                addCancellationMetadata(retryBuilder, cancel);
                 if (userId != null) {
                     retryBuilder.addMetadata(ProfileToolProvider.USER_ID_METADATA_KEY, userId);
                 }
@@ -241,8 +261,10 @@ public class TravelSupervisorAgent {
                             () -> circuitBreakerRegistry.of("supervisor").call("supervisor",
                                     () -> invokeSupervisorSafely(supervisor, userInput, retryBuilder.build())),
                             SUPERVISOR_EXECUTOR);
+                    cancel.throwIfCancelled();
                     Optional<OverAllState> retried =
                             retryFuture.orTimeout(MAX_EXECUTION_SECONDS, TimeUnit.SECONDS).get();
+                    cancel.throwIfCancelled();
                     if (retried.isPresent() && hasSectionOutput(retried.get())) {
                         finalState = retried.get();
                         result = buildFinalResponse(finalState);
@@ -255,6 +277,9 @@ public class TravelSupervisorAgent {
                         tokenUsageInterceptor.endAndGet(retryRequestId);
                         log.warn("路由重试仍未产生子 Agent 输出，保留原结果");
                     }
+                } catch (TurnInterruptedException e) {
+                    tokenUsageInterceptor.endAndGet(retryRequestId);
+                    throw e;
                 } catch (Exception e) {
                     tokenUsageInterceptor.endAndGet(retryRequestId);
                     log.warn("路由重试失败，保留原结果: {}", e.getMessage());
@@ -266,6 +291,8 @@ public class TravelSupervisorAgent {
             //  /routePlan/budgetEstimate 全为 0，B2 画像问答不可达。）
             if (!hasSectionOutput(finalState)) {
                 try {
+                    // M6-42：直答兜底前检查取消（不再发起新的 LLM 调用）
+                    cancel.throwIfCancelled();
                     // F85：直答兜底从裸输入升级为"system 指令 + 输入"双消息——
                     // 回顾类用回顾专用指令（不得编造景点），其余用覆盖优先级指令
                     // （会话 feedback/最新确认 > constraint > 画像）。
@@ -291,6 +318,9 @@ public class TravelSupervisorAgent {
                         log.info("非规划类问题直答兜底: inputLength={}, answerLength={}",
                                 userInput.length(), result.length());
                     }
+                } catch (TurnInterruptedException e) {
+                    // M6-42：中断终止必须上抛，不得被直答兜底吞掉
+                    throw e;
                 } catch (Exception e) {
                     log.warn("非规划类问题直答兜底失败，保留原结果: {}", e.getMessage());
                 }
@@ -309,6 +339,11 @@ public class TravelSupervisorAgent {
             return new PlanningResult(result, totalTokens);
         } catch (ExecutionException e) {
             Throwable cause = e.getCause();
+            // M6-42：拦截器取消短路抛出的 TurnInterruptedException 可能被图执行器
+            // 包装多层，先根因解包并原样上抛（中断不落库、不转兜底）
+            if (findRootCause(cause) instanceof TurnInterruptedException tie) {
+                throw tie;
+            }
             if (cause instanceof TimeoutException) {
                 if (future != null) {
                     future.cancel(true);
@@ -370,13 +405,14 @@ public class TravelSupervisorAgent {
      * {@code chatModel.stream} 逐增量回调 {@code tokenSink}；token 用量取流末
      * 累计 Usage（F27 口径）。空结果兜底文案同样回调，保证前端最终可见完整回答。</p>
      */
-    public PlanningResult answerDirectStream(String userInput, Long userId, Consumer<String> tokenSink) {
+    public PlanningResult answerDirectStream(String userInput, Long userId, Consumer<String> tokenSink,
+                                             TurnCancellation cancellation) {
         if (TraceContext.active()) {
             TraceContext.current().addPath("direct");
         }
         String system = promptTemplates.directAnswerSystem();
         return streamToResult(system, userInput, true, tokenSink, "入口直答",
-                "抱歉，暂时无法回答，请稍后重试。");
+                "抱歉，暂时无法回答，请稍后重试。", cancellation);
     }
 
     /**
@@ -413,7 +449,8 @@ public class TravelSupervisorAgent {
      * {@code chatModel.stream} 逐增量回调。与 {@link #answerRecall} 语义一致。</p>
      */
     public PlanningResult answerRecallStream(String userInput, List<Map<String, Object>> sessionHits,
-                                             Consumer<String> tokenSink) {
+                                             Consumer<String> tokenSink,
+                                             TurnCancellation cancellation) {
         if (TraceContext.active()) {
             TraceContext.current().addPath("recall");
         }
@@ -428,7 +465,185 @@ public class TravelSupervisorAgent {
         }
         String system = promptTemplates.recallSystem();
         return streamToResult(system, skeleton + "\n\n用户问题：" + question, true,
-                tokenSink, "回顾管线", skeleton);
+                tokenSink, "回顾管线", skeleton, cancellation);
+    }
+
+    /**
+     * M6-18：规划路径图级流式（默认由路由层关闭，开启前需 golden 验证）。
+     *
+     * <p>用 {@code supervisor.stream} 替代 {@code invoke}：每个 {@link NodeOutput}
+     * 携带当时 {@link OverAllState}，取最后一个节点状态作为最终状态；
+     * 节点名经 nodeThinking 输出（thinking 事件），最终回答经 tokenSink 分块输出。
+     * 任何异常/空状态由调用方（ChatRoutingStep）降级回阻塞路径。</p>
+     */
+    public StreamPlanningResult streamPlanningWithUsage(String userInput, Long userId,
+                                                        BiConsumer<String, String> nodeThinking,
+                                                        Consumer<String> tokenSink,
+                                                        TurnCancellation cancellation) throws Exception {
+        log.info("开始执行行程规划(图流): input={}, userId={}", userInput, userId);
+        long start = System.currentTimeMillis();
+        TurnCancellation cancel = cancellation == null ? TurnCancellation.NOOP : cancellation;
+        String requestId = TraceContext.active() ? TraceContext.current().requestId
+                : UUID.randomUUID().toString();
+        tokenUsageInterceptor.begin(requestId);
+        try {
+            RunnableConfig.Builder configBuilder = RunnableConfig.builder()
+                    .threadId("rag_" + requestId)
+                    .addMetadata(TokenUsageInterceptor.REQUEST_ID_KEY, requestId);
+            addCancellationMetadata(configBuilder, cancel);
+            if (userId != null) {
+                configBuilder.addMetadata(ProfileToolProvider.USER_ID_METADATA_KEY, userId);
+            }
+            RunnableConfig config = configBuilder.build();
+            AtomicReference<OverAllState> lastState = new AtomicReference<>();
+            long[] nodeTokens = {0};
+            String[] lastNodeLabel = {null};
+            Flux<NodeOutput> flux = circuitBreakerRegistry.of("supervisor").call(
+                    "supervisor", () -> streamSupervisorSafely(supervisor, userInput, config));
+            blockUntilDone(flux, out -> {
+                if (out.state() != null) {
+                    lastState.set(out.state());
+                }
+                if (out.tokenUsage() != null && out.tokenUsage().getTotalTokens() != null) {
+                    // M6-21：NodeOutput.tokenUsage 为累计口径，取最大值近似本次总用量
+                    nodeTokens[0] = Math.max(nodeTokens[0], out.tokenUsage().getTotalTokens());
+                }
+                String label = friendlyNode(out.node());
+                if (label != null && !label.equals(lastNodeLabel[0]) && nodeThinking != null) {
+                    lastNodeLabel[0] = label;
+                    nodeThinking.accept("routing", label);
+                }
+            }, cancel, MAX_EXECUTION_SECONDS);
+
+            OverAllState finalState = lastState.get();
+            if (finalState == null) {
+                throw new IllegalStateException("图流未返回最终状态");
+            }
+            String result = buildFinalResponse(finalState);
+            // M6-22：先 peek 再 endAndGet，补齐图流路径的追溯 token 写入（与阻塞路径对齐）；
+            // NodeOutput.tokenUsage 仅作拦截器失效时的兜底（M6-21 证明其口径不可信）。
+            long[] streamUsage = tokenUsageInterceptor.peek(requestId);
+            long interceptorTokens = tokenUsageInterceptor.endAndGet(requestId);
+            long totalTokens = interceptorTokens > 0 ? interceptorTokens : nodeTokens[0];
+            if (interceptorTokens <= 0) {
+                log.warn("图流拦截器未采集到 token（可能框架路径变化），使用 NodeOutput 兜底={}",
+                        nodeTokens[0]);
+            }
+            applyTraceTokens(streamUsage);
+            applyTracePath(finalState);
+
+            // F77/B4-2：四键全空且疑似规划 → 整图重试一次；仍空走直答兜底（镜像阻塞路径语义）
+            if (!hasSectionOutput(finalState)
+                    && looksLikePlanningRequest(userInput)
+                    && !isRecallQuery(userInput)) {
+                // M6-40：整图重试前检查取消
+                cancel.throwIfCancelled();
+                String retryRequestId = UUID.randomUUID().toString();
+                tokenUsageInterceptor.begin(retryRequestId);
+                try {
+                    RunnableConfig.Builder retryBuilder = RunnableConfig.builder()
+                            .threadId("rag_" + retryRequestId)
+                            .addMetadata(TokenUsageInterceptor.REQUEST_ID_KEY, retryRequestId);
+                    addCancellationMetadata(retryBuilder, cancel);
+                    if (userId != null) {
+                        retryBuilder.addMetadata(ProfileToolProvider.USER_ID_METADATA_KEY, userId);
+                    }
+                    AtomicReference<OverAllState> retryState = new AtomicReference<>();
+                    long[] retryNodeTokens = {0};
+                    Flux<NodeOutput> retryFlux = circuitBreakerRegistry.of("supervisor").call(
+                            "supervisor", () -> streamSupervisorSafely(
+                                    supervisor, userInput, retryBuilder.build()));
+                    blockUntilDone(retryFlux, out -> {
+                        if (out.state() != null) {
+                            retryState.set(out.state());
+                        }
+                        if (out.tokenUsage() != null && out.tokenUsage().getTotalTokens() != null) {
+                            retryNodeTokens[0] = Math.max(retryNodeTokens[0],
+                                    out.tokenUsage().getTotalTokens());
+                        }
+                    }, cancel, MAX_EXECUTION_SECONDS);
+                    OverAllState retried = retryState.get();
+                    if (retried != null && hasSectionOutput(retried)) {
+                        finalState = retried;
+                        result = buildFinalResponse(retried);
+                        long[] retryUsage = tokenUsageInterceptor.peek(retryRequestId);
+                        long retryInterceptor = tokenUsageInterceptor.endAndGet(retryRequestId);
+                        if (retryInterceptor <= 0) {
+                            log.warn("图流重试拦截器未采集到 token，使用 NodeOutput 兜底={}",
+                                    retryNodeTokens[0]);
+                        }
+                        totalTokens += retryInterceptor > 0
+                                ? retryInterceptor : retryNodeTokens[0];
+                        applyTraceTokens(retryUsage);
+                        applyTracePath(retried);
+                    } else {
+                        tokenUsageInterceptor.endAndGet(retryRequestId);
+                    }
+                } catch (TurnInterruptedException e) {
+                    tokenUsageInterceptor.endAndGet(retryRequestId);
+                    throw e;
+                } catch (Exception e) {
+                    tokenUsageInterceptor.endAndGet(retryRequestId);
+                    log.warn("图流重试失败，保留原结果: {}", e.getMessage());
+                }
+            }
+            if (!hasSectionOutput(finalState)) {
+                // M6-42：图流直答兜底前检查取消（不再发起新的 LLM 调用）
+                cancel.throwIfCancelled();
+                ChatResponse direct = callDirect(
+                        isRecallQuery(userInput)
+                                ? promptTemplates.directRecallSystem()
+                                : promptTemplates.directAnswerSystem(),
+                        userInput, false);
+                String text = direct.getResult() != null && direct.getResult().getOutput() != null
+                        ? direct.getResult().getOutput().getText() : null;
+                if (text != null && !text.isBlank()) {
+                    result = text.trim();
+                    if (direct.getMetadata() != null && direct.getMetadata().getUsage() != null) {
+                        Usage u = direct.getMetadata().getUsage();
+                        totalTokens += u.getTotalTokens() != null ? u.getTotalTokens() : 0;
+                        applyDirectTokens(direct);
+                    }
+                }
+            }
+            if (tokenSink != null && result != null) {
+                tokenSink.accept(result);
+            }
+            long cost = System.currentTimeMillis() - start;
+            log.info("行程规划完成(图流), 耗时={}ms, 结果长度={}, tokens={}", cost,
+                    result == null ? 0 : result.length(), totalTokens);
+            return new StreamPlanningResult(result, totalTokens, false);
+        } catch (Exception e) {
+            tokenUsageInterceptor.endAndGet(requestId);
+            throw e;
+        }
+    }
+
+    /** M6-18：图流规划结果 */
+    public record StreamPlanningResult(String answer, long totalTokens, boolean fallback) {
+    }
+
+    /** M6-21：把图节点名映射为友好 thinking；内部节点返回 null 跳过 */
+    private static String friendlyNode(String node) {
+        if (node == null || node.isBlank()) {
+            return null;
+        }
+        if (node.contains("preference_analysis")) {
+            return "正在分析偏好…";
+        }
+        if (node.contains("attraction_filter")) {
+            return "正在筛选景点…";
+        }
+        if (node.contains("route_arrangement")) {
+            return "正在编排每日行程…";
+        }
+        if (node.contains("budget_estimation")) {
+            return "正在估算预算…";
+        }
+        if (node.contains("supervisor")) {
+            return "正在路由规划子任务…";
+        }
+        return null;
     }
 
     /** F89：直答/回顾路径的 token 写入追溯上下文 */
@@ -470,26 +685,27 @@ public class TravelSupervisorAgent {
      * 取最后一段非空 Usage 的 totalTokens（与 F27 口径一致）。</p>
      */
     private PlanningResult streamToResult(String system, String userText, boolean withBreaker,
-                                          Consumer<String> tokenSink, String label, String blankFallback) {
+                                          Consumer<String> tokenSink, String label, String blankFallback,
+                                          TurnCancellation cancellation) {
+        TurnCancellation cancel = cancellation == null ? TurnCancellation.NOOP : cancellation;
+        cancel.throwIfCancelled();
         Consumer<String> sink = tokenSink == null ? t -> { } : tokenSink;
         StringBuilder sb = new StringBuilder();
         long[] tokens = {0};
         ChatResponse[] lastResponse = new ChatResponse[1];
-        callDirectStream(system, userText, withBreaker)
-                .doOnNext(resp -> {
-                    lastResponse[0] = resp;
-                    String text = resp.getResult() != null && resp.getResult().getOutput() != null
-                            ? resp.getResult().getOutput().getText() : null;
-                    if (text != null && !text.isBlank()) {
-                        sb.append(text);
-                        sink.accept(text);
-                    }
-                    if (resp.getMetadata() != null && resp.getMetadata().getUsage() != null
-                            && resp.getMetadata().getUsage().getTotalTokens() != null) {
-                        tokens[0] = resp.getMetadata().getUsage().getTotalTokens();
-                    }
-                })
-                .blockLast();
+        blockUntilDone(callDirectStream(system, userText, withBreaker), resp -> {
+            lastResponse[0] = resp;
+            String text = resp.getResult() != null && resp.getResult().getOutput() != null
+                    ? resp.getResult().getOutput().getText() : null;
+            if (text != null && !text.isBlank()) {
+                sb.append(text);
+                sink.accept(text);
+            }
+            if (resp.getMetadata() != null && resp.getMetadata().getUsage() != null
+                    && resp.getMetadata().getUsage().getTotalTokens() != null) {
+                tokens[0] = resp.getMetadata().getUsage().getTotalTokens();
+            }
+        }, cancel, MAX_EXECUTION_SECONDS);
         String text = sb.toString().trim();
         if (lastResponse[0] != null) {
             applyDirectTokens(lastResponse[0]);
@@ -503,6 +719,86 @@ public class TravelSupervisorAgent {
         log.info("[{}] 流式输出完成: answerLen={}, tokens={}",
                 label, text.length(), tokens[0]);
         return new PlanningResult(text, tokens[0]);
+    }
+
+    /**
+     * M6-40：可取消订阅并阻塞等待完成（替代 blockLast）。
+     *
+     * <p>取消路径：TurnCancellation.cancel() → dispose 订阅（响应式取消沿 Flux 上传，
+     * 终止 DashScope 流/图流）；节点边界在 onNext 前 throwIfCancelled 短路。
+     * 超时/线程中断保留原语义。</p>
+     */
+    private static <T> void blockUntilDone(Flux<T> flux, Consumer<T> onNext,
+                                           TurnCancellation cancellation,
+                                           long timeoutSeconds) {
+        CountDownLatch latch = new CountDownLatch(1);
+        AtomicReference<Throwable> errorRef = new AtomicReference<>();
+        AtomicBoolean done = new AtomicBoolean(false);
+        Disposable disposable = flux
+                .doOnNext(out -> {
+                    cancellation.throwIfCancelled();
+                    onNext.accept(out);
+                })
+                .subscribe(
+                        ignored -> { },
+                        err -> {
+                            errorRef.set(err);
+                            latch.countDown();
+                        },
+                        () -> {
+                            done.set(true);
+                            latch.countDown();
+                        });
+        cancellation.setDisposable(disposable);
+        if (cancellation.isCancelled()) {
+            disposable.dispose();
+            throw new TurnInterruptedException("轮次已中断");
+        }
+        try {
+            if (!latch.await(timeoutSeconds, TimeUnit.SECONDS)) {
+                disposable.dispose();
+                throw new IllegalStateException("流式执行超时（超过 " + timeoutSeconds + " 秒）");
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            disposable.dispose();
+            // M6-46：线程中断在图流/直答路径几乎总是用户取消（dispose 沿 Flux 上传
+            // 到图执行器后中断等待线程）——必须按取消语义上抛，否则 ChatRoutingStep
+            // 会误走"图流失败，降级阻塞"分支（M6-38 语义回归）
+            throw new TurnInterruptedException("轮次已中断");
+        }
+        Throwable error = errorRef.get();
+        if (error != null) {
+            // M6-42：拦截器取消短路异常可能被图执行器包装，根因解包后原样上抛
+            if (findRootCause(error) instanceof TurnInterruptedException tie) {
+                throw tie;
+            }
+            if (error instanceof RuntimeException re) {
+                throw re;
+            }
+            throw new IllegalStateException("流式执行失败", error);
+        }
+        if (!done.get()) {
+            throw new IllegalStateException("流式执行未返回最终状态");
+        }
+    }
+
+    /** M6-42：把轮次取消 key 写入 RunnableConfig metadata（图内拦截器短路用）。 */
+    private static void addCancellationMetadata(
+            RunnableConfig.Builder builder, TurnCancellation cancel) {
+        String key = cancel == null ? null : cancel.clientMessageId();
+        if (key != null && !key.isBlank()) {
+            builder.addMetadata(TokenUsageInterceptor.TURN_CANCELLATION_KEY, key);
+        }
+    }
+
+    /** M6-42：沿 cause 链收敛根因（拦截器异常可能被图执行器包装多层）。 */
+    private static Throwable findRootCause(Throwable t) {
+        Throwable cur = t;
+        while (cur.getCause() != null && cur.getCause() != cur) {
+            cur = cur.getCause();
+        }
+        return cur;
     }
 
     private static void applyDirectTokens(ChatResponse direct) {
@@ -590,6 +886,16 @@ public class TravelSupervisorAgent {
             return supervisor.invoke(userInput, config);
         } catch (Exception e) {
             throw new RuntimeException("Supervisor 执行失败", e);
+        }
+    }
+
+    /** M6-18：图流安全包装（GraphRunnerException 受检异常 → RuntimeException） */
+    private static Flux<NodeOutput> streamSupervisorSafely(
+            SupervisorAgent supervisor, String userInput, RunnableConfig config) {
+        try {
+            return supervisor.stream(userInput, config);
+        } catch (Exception e) {
+            throw new RuntimeException("Supervisor 图流失败", e);
         }
     }
 

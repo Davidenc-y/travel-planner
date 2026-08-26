@@ -1,5 +1,7 @@
 package com.travel.planning.memory.pipeline;
 
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.travel.common.entity.ChatMessage;
 import com.travel.common.entity.ChatMessageIdem;
 import com.travel.common.entity.ChatSession;
@@ -16,6 +18,8 @@ import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.List;
 
 /**
  * M3-11/M3-18：MessagePipeline 步骤 2「持久化」+ 步骤 9「落库」。
@@ -144,6 +148,123 @@ public class ChatPersistenceStep {
         row.setAssistantMessageId(null);
         row.setUpdatedAt(LocalDateTime.now());
         idemMapper.updateById(row);
+    }
+
+    /**
+     * M6-36：中断登记——PENDING → FAILED（复用既有失败语义：同键重试重新执行）。
+     *
+     * @return 是否发生 PENDING→FAILED 迁移；COMPLETED/FAILED/不存在均不动作
+     */
+    @Transactional
+    public boolean markInterrupted(String sessionId, String clientMessageId) {
+        if (clientMessageId == null || clientMessageId.isBlank() || !idemProps.isEnabled()) {
+            return false;
+        }
+        ChatMessageIdem row = idemMapper.selectById(clientMessageId);
+        if (row == null || !sessionId.equals(row.getSessionId())) {
+            return false;
+        }
+        if (ChatMessageIdem.STATUS_PENDING.equals(row.getStatus())) {
+            row.setStatus(ChatMessageIdem.STATUS_FAILED);
+            row.setAssistantMessageId(null);
+            row.setUpdatedAt(LocalDateTime.now());
+            idemMapper.updateById(row);
+            return true;
+        }
+        return false;
+    }
+
+    /**
+     * M6-40：用户停止 → PENDING → INTERRUPTED（可恢复：同键重试从断点续跑）。
+     *
+     * @return 是否发生 PENDING→INTERRUPTED 迁移
+     */
+    @Transactional
+    public boolean markTurnInterrupted(String sessionId, String clientMessageId) {
+        if (clientMessageId == null || clientMessageId.isBlank() || !idemProps.isEnabled()) {
+            return false;
+        }
+        ChatMessageIdem row = idemMapper.selectById(clientMessageId);
+        if (row == null || !sessionId.equals(row.getSessionId())) {
+            return false;
+        }
+        if (ChatMessageIdem.STATUS_PENDING.equals(row.getStatus())) {
+            row.setStatus(ChatMessageIdem.STATUS_INTERRUPTED);
+            row.setAssistantMessageId(null);
+            row.setUpdatedAt(LocalDateTime.now());
+            idemMapper.updateById(row);
+            return true;
+        }
+        return false;
+    }
+
+    /**
+     * M6-42：按会话 + 幂等键查询轮次登记（会话不匹配视为不存在）。
+     *
+     * <p>供 ChatService.getTurnStatus 恢复重试入口使用；幂等开关关闭时
+     * 无登记记录可查，返回 null。</p>
+     */
+    public ChatMessageIdem findTurn(String sessionId, String clientMessageId) {
+        if (clientMessageId == null || clientMessageId.isBlank() || !idemProps.isEnabled()) {
+            return null;
+        }
+        ChatMessageIdem row = idemMapper.selectById(clientMessageId);
+        if (row == null || !sessionId.equals(row.getSessionId())) {
+            return null;
+        }
+        return row;
+    }
+
+    /**
+     * M6-47：查询会话最近一个 INTERRUPTED 轮次（按 updated_at 倒序）。
+     *
+     * <p>供刷新/重进会话恢复重试入口使用（前端不依赖本地 key）；
+     * 新消息终止在途会把旧轮次置 FAILED，因此该查询天然排除
+     * "重试已永久消失"的轮次。</p>
+     */
+    public ChatMessageIdem findLatestInterrupted(String sessionId) {
+        if (sessionId == null || sessionId.isBlank() || !idemProps.isEnabled()) {
+            return null;
+        }
+        List<ChatMessageIdem> rows = idemMapper.selectList(
+                Wrappers.lambdaQuery(ChatMessageIdem.class)
+                        .eq(ChatMessageIdem::getSessionId, sessionId)
+                        .eq(ChatMessageIdem::getStatus, ChatMessageIdem.STATUS_INTERRUPTED)
+                        .orderByDesc(ChatMessageIdem::getUpdatedAt)
+                        .last("LIMIT 1"));
+        return rows == null || rows.isEmpty() ? null : rows.get(0);
+    }
+
+    /**
+     * M6-39：新消息到来时终止同会话其他在途轮次（PENDING → FAILED）。
+     *
+     * @param excludeClientMessageId 当前新消息自身的幂等键（避免误杀自己）
+     * @return 被终止的 clientMessageId 列表（调用方据此写 Redis 中断标记）
+     */
+    @Transactional
+    public List<String> markSessionInterrupted(String sessionId, String excludeClientMessageId) {
+        if (sessionId == null) {
+            return List.of();
+        }
+        LambdaQueryWrapper<ChatMessageIdem> wrapper = Wrappers.lambdaQuery(ChatMessageIdem.class)
+                .eq(ChatMessageIdem::getSessionId, sessionId)
+                .eq(ChatMessageIdem::getStatus, ChatMessageIdem.STATUS_PENDING);
+        if (excludeClientMessageId != null && !excludeClientMessageId.isBlank()) {
+            wrapper.ne(ChatMessageIdem::getClientMessageId, excludeClientMessageId);
+        }
+        List<ChatMessageIdem> rows = idemMapper.selectList(wrapper);
+        if (rows == null || rows.isEmpty()) {
+            return List.of();
+        }
+        List<String> keys = new ArrayList<>();
+        for (ChatMessageIdem row : rows) {
+            row.setStatus(ChatMessageIdem.STATUS_FAILED);
+            row.setAssistantMessageId(null);
+            row.setUpdatedAt(LocalDateTime.now());
+            idemMapper.updateById(row);
+            keys.add(row.getClientMessageId());
+        }
+        return keys;
     }
 
     /**

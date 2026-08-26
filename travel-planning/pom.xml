@@ -28,6 +28,11 @@
             <groupId>com.travel.chatstream</groupId>
             <artifactId>travel-chat-stream</artifactId>
         </dependency>
+        <!-- M6-31：聊天领域中立模块（ChatService 九步流水线/Agent/记忆/防护/仓储） -->
+        <dependency>
+            <groupId>com.travel.domain</groupId>
+            <artifactId>travel-chat-domain</artifactId>
+        </dependency>
         <!-- M6-9 P2：MVC 横切组件（全局异常/限流拦截器） -->
         <dependency>
             <groupId>com.travel.webmvc</groupId>
@@ -52,36 +57,6 @@
             <artifactId>spring-boot-starter-aop</artifactId>
         </dependency>
 
-        <!-- Spring AI Alibaba DashScope（LLM/Embedding） -->
-        <dependency>
-            <groupId>com.alibaba.cloud.ai</groupId>
-            <artifactId>spring-ai-alibaba-starter-dashscope</artifactId>
-        </dependency>
-
-        <!-- Spring AI Alibaba Agent Framework -->
-        <dependency>
-            <groupId>com.alibaba.cloud.ai</groupId>
-            <artifactId>spring-ai-alibaba-agent-framework</artifactId>
-        </dependency>
-
-        <!-- Spring AI Alibaba Graph Core（StateGraph） -->
-        <dependency>
-            <groupId>com.alibaba.cloud.ai</groupId>
-            <artifactId>spring-ai-alibaba-graph-core</artifactId>
-        </dependency>
-
-        <!-- Spring Cloud OpenFeign（调用 knowledge 模块） -->
-        <dependency>
-            <groupId>org.springframework.cloud</groupId>
-            <artifactId>spring-cloud-starter-openfeign</artifactId>
-        </dependency>
-
-        <!-- Spring Cloud LoadBalancer（Feign 客户端负载均衡） -->
-        <dependency>
-            <groupId>org.springframework.cloud</groupId>
-            <artifactId>spring-cloud-starter-loadbalancer</artifactId>
-        </dependency>
-
         <!-- MyBatis Plus -->
         <dependency>
             <groupId>com.baomidou</groupId>
@@ -99,22 +74,6 @@
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-data-redis</artifactId>
-        </dependency>
-
-        <!-- JJWT（JwtUtil 签发/校验，下沉自 travel-common） -->
-        <dependency>
-            <groupId>io.jsonwebtoken</groupId>
-            <artifactId>jjwt-api</artifactId>
-        </dependency>
-        <dependency>
-            <groupId>io.jsonwebtoken</groupId>
-            <artifactId>jjwt-impl</artifactId>
-            <scope>runtime</scope>
-        </dependency>
-        <dependency>
-            <groupId>io.jsonwebtoken</groupId>
-            <artifactId>jjwt-jackson</artifactId>
-            <scope>runtime</scope>
         </dependency>
 
         <!-- MinIO（图片存储） -->

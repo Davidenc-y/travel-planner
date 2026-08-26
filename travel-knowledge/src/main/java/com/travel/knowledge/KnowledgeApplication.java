@@ -15,7 +15,9 @@ import org.springframework.scheduling.annotation.EnableScheduling;
  * @version 1.0-SNAPSHOT
  * @since 2026-07-28
  */
-@SpringBootApplication(scanBasePackages = {"com.travel.knowledge", "com.travel.common"})
+@SpringBootApplication(scanBasePackages = {
+        "com.travel.knowledge", "com.travel.common", "com.travel.webmvc",
+        "com.travel.planning.stream"})
 @EnableScheduling
 public class KnowledgeApplication {
 

@@ -28,6 +28,11 @@
             <groupId>com.travel.webmvc</groupId>
             <artifactId>travel-web-mvc</artifactId>
         </dependency>
+        <!-- M6-19：RAG 流式（StreamPayloadMapper / 流式框架） -->
+        <dependency>
+            <groupId>com.travel.chatstream</groupId>
+            <artifactId>travel-chat-stream</artifactId>
+        </dependency>
 
         <!-- Spring Boot Web -->
         <dependency>

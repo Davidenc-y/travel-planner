@@ -36,6 +36,20 @@ const PAGE_SIZE_OPTIONS = [8, 10, 20, 50];
     }
   }, [userId, isAuthenticated]);
 
+  // M6-54：存在生成中（GENERATING）的行程时自动轮询刷新（3s），
+  // 生成完成后停止；避免用户停留在本页时状态一直停留在"生成中"
+  useEffect(() => {
+    if (!data) return;
+    const hasGenerating =
+      data.list?.some((i) => i.status === 'GENERATING') ?? false;
+    if (!hasGenerating) return;
+    const timer = setTimeout(() => {
+      loadData(page, pageSize);
+    }, 3000);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data, page, pageSize]);
+
 const loadData = async (targetPage = 1, size = pageSize) => {
     // F102：命中预取缓存则直接展示（取走即删），避免切换卡顿
     const cached = takePrefetch<PageResult<ItineraryResponse>>(`itinerary:${targetPage}:${size}`);
@@ -153,8 +167,9 @@ const loadData = async (targetPage = 1, size = pageSize) => {
                     </p>
                     <p className="text-xs">{formatDate(item.generatedAt)}</p>
                   </div>
-                  {/* M4-9：失败/僵尸生成行提供断点续跑入口 */}
-                  {(item.status === 'FAILED' || item.status === 'GENERATING') && (
+                  {/* M4-9/M6-52：仅可续状态（FAILED/僵尸 GENERATING）显示继续生成；
+                      非僵尸 GENERATING 只显示"生成中"，避免与后台在途生成并发双跑 */}
+                  {item.resumable && (
                     <button
                       onClick={(e) => { e.stopPropagation(); handleResume(item.id); }}
                       disabled={resumingId === item.id}

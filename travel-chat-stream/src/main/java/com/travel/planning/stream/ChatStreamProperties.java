@@ -26,4 +26,7 @@ public class ChatStreamProperties {
 
     /** 最终回答分块大小（字符） */
     private int chunkMaxChars = 16;
+
+    /** M6-18：规划路径图级流式开关（默认关；开启前需 golden 验证） */
+    private boolean planningGraphStreamEnabled = false;
 }

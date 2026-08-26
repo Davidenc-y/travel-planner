@@ -26,7 +26,9 @@
         <module>travel-core</module>
         <module>travel-common</module>
         <module>travel-chat-stream</module>
+        <module>travel-chat-domain</module>
         <module>travel-web-mvc</module>
+        <module>travel-stream-webflux</module>
         <module>travel-planning</module>
         <module>travel-knowledge</module>
         <module>travel-frontend</module>
@@ -146,8 +148,18 @@
                 <version>${project.version}</version>
             </dependency>
             <dependency>
+                <groupId>com.travel.domain</groupId>
+                <artifactId>travel-chat-domain</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
                 <groupId>com.travel.webmvc</groupId>
                 <artifactId>travel-web-mvc</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.travel.webflux</groupId>
+                <artifactId>travel-stream-webflux</artifactId>
                 <version>${project.version}</version>
             </dependency>
 

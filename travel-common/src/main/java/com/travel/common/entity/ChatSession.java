@@ -1,8 +1,11 @@
 package com.travel.common.entity;
 
+import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableName;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
+
+import java.time.LocalDateTime;
 
 /**
  * 聊天会话实体（t_chat_session）
@@ -33,4 +36,11 @@ public class ChatSession extends BaseEntity {
      * 启动补偿/P2 空闲扫描器据此补跑（R2 方案 1.1，替代队列组件）。
      */
     private String summaryFinal;
+
+    /**
+     * M6-49：最后一条消息时间（非表列，仅会话列表按最近消息置顶排序时
+     * 由 SQL 子查询映射回填；无消息会话为 null）。
+     */
+    @TableField(exist = false)
+    private LocalDateTime lastMessageAt;
 }

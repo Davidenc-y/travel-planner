@@ -2,11 +2,14 @@ package com.travel.planning.service;
 
 import com.travel.common.dto.ChatResponseDTO;
 import com.travel.common.entity.ChatMessage;
+import com.travel.common.entity.ChatMessageIdem;
 import com.travel.common.entity.ChatSession;
 import com.travel.common.exception.BusinessException;
 import com.travel.core.stream.TurnGate;
+import com.travel.planning.cancellation.TurnCancellationBroadcaster;
 import com.travel.planning.memory.chat.ChatIntent;
 import com.travel.planning.memory.sessionstore.SessionStorePort;
+import com.travel.planning.memory.pipeline.ChatBreakpointStore;
 import com.travel.planning.memory.pipeline.ChatGuardStep;
 import com.travel.planning.memory.pipeline.ChatPersistenceStep;
 import com.travel.planning.memory.pipeline.ChatPreferenceStep;
@@ -22,6 +25,8 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -61,6 +66,12 @@ public class ChatService implements ChatStreamExecutor {
     private final ChatTitleProperties titleProps;
     // M4-4：会话收口器（close 后全量重算摘要，隐式待办+启动补偿）
     private final SessionFinalizer sessionFinalizer;
+    // M6-36：轮次中断标记与断点快照（Redis 临时态）
+    private final ChatBreakpointStore breakpointStore;
+    // M6-40：在途轮次取消登记表（内存，key=clientMessageId）
+    private final TurnCancellationRegistry cancellationRegistry;
+    // M6-44：跨实例取消广播（Redis Pub/Sub 推送加速；权威仍为 DB + Redis 标记）
+    private final TurnCancellationBroadcaster cancellationBroadcaster;
 
     /**
      * 创建会话
@@ -158,9 +169,144 @@ public class ChatService implements ChatStreamExecutor {
                     log.warn("[SessionTitle] 首条消息标题更新失败，继续发送: sessionId={}", sessionId, e);
                 }
             }
+            // M6-36：新轮次（非 FAILED 复用）清除同会话旧断点——旧任务的重试按钮随之失效
+            if (!gate.reuseUserMessage()) {
+                breakpointStore.clearSessionBreakpoints(sessionId);
+                // M6-39：同时终止同会话其他在途轮次（防旧任务后台完成后幽灵落库）
+                List<String> inFlight = chatPersistenceStep.markSessionInterrupted(
+                        sessionId, clientMessageId);
+                if (inFlight != null && !inFlight.isEmpty()) {
+                    inFlight.forEach(key -> {
+                        breakpointStore.markInterrupted(key);
+                        cancellationRegistry.cancel(key);
+                        cancellationBroadcaster.publishCancel(sessionId, key);
+                    });
+                    log.info("[ChatInterrupt] 新消息终止在途轮次: sessionId={}, keys={}",
+                            sessionId, inFlight);
+                }
+            }
         }
         return new ChatStreamExecutor.ChatStreamPrepared(
                 sessionId, message, userId, clientMessageId, gate, updatedSessionTitle);
+    }
+
+    /**
+     * M6-36：中断在途轮次（PENDING → FAILED + Redis 中断标记）。
+     *
+     * <p>断点快照由 runStream 在路由前写入；若中断发生时尚未写入（步骤 3~7），
+     * 重试将按 FAILED 语义整体重跑。</p>
+     */
+    public void interruptTurn(Long userId, String sessionId, String clientMessageId) {
+        if (userId == null || userId <= 0) {
+            throw new BusinessException(40101, "用户未登录");
+        }
+        ChatSession session = chatPersistenceStep.requireSession(sessionId);
+        if (!userId.equals(session.getUserId())) {
+            throw new BusinessException(40302, "无权访问该会话");
+        }
+        if (clientMessageId == null || clientMessageId.isBlank()) {
+            throw new BusinessException(40001, "幂等键不能为空");
+        }
+        boolean flipped = chatPersistenceStep.markTurnInterrupted(sessionId, clientMessageId);
+        if (flipped) {
+            breakpointStore.markInterrupted(clientMessageId);
+            cancellationRegistry.cancel(clientMessageId);
+            cancellationBroadcaster.publishCancel(sessionId, clientMessageId);
+            log.info("[ChatInterrupt] 轮次已中断: sessionId={}, key={}", sessionId, clientMessageId);
+        }
+    }
+
+    /**
+     * M6-36：清除断点（用户发新消息时前端调用；prepareStream 侧另有双保险）。
+     */
+    public void clearBreakpoint(Long userId, String sessionId, String clientMessageId) {
+        if (userId == null || userId <= 0) {
+            throw new BusinessException(40101, "用户未登录");
+        }
+        ChatSession session = chatPersistenceStep.requireSession(sessionId);
+        if (!userId.equals(session.getUserId())) {
+            throw new BusinessException(40302, "无权访问该会话");
+        }
+        breakpointStore.clearBreakpoint(sessionId, clientMessageId);
+        cancellationRegistry.cancel(clientMessageId);
+        cancellationBroadcaster.publishCancel(sessionId, clientMessageId);
+        log.info("[ChatInterrupt] 断点已清除: sessionId={}, key={}", sessionId, clientMessageId);
+    }
+
+    /**
+     * M6-42：查询轮次状态（前端刷新后恢复重试入口）。
+     *
+     * <p>resumable = INTERRUPTED 且断点快照仍存在（Redis 30min TTL 窗口内）；
+     * 新消息已把旧轮次置 FAILED，故返回 FAILED 时前端不显示重试。</p>
+     */
+    public TurnStatusResult getTurnStatus(Long userId, String sessionId, String clientMessageId) {
+        if (userId == null || userId <= 0) {
+            throw new BusinessException(40101, "用户未登录");
+        }
+        ChatSession session = chatPersistenceStep.requireSession(sessionId);
+        if (!userId.equals(session.getUserId())) {
+            throw new BusinessException(40302, "无权访问该会话");
+        }
+        if (clientMessageId == null || clientMessageId.isBlank()) {
+            throw new BusinessException(40001, "幂等键不能为空");
+        }
+        ChatMessageIdem row = chatPersistenceStep.findTurn(sessionId, clientMessageId);
+        if (row == null) {
+            return new TurnStatusResult(null, false, null);
+        }
+        boolean hasBreakpoint =
+                !breakpointStore.loadBreakpoint(sessionId, clientMessageId).isEmpty();
+        boolean resumable =
+                ChatMessageIdem.STATUS_INTERRUPTED.equals(row.getStatus()) && hasBreakpoint;
+        String userMessage = null;
+        if (row.getUserMessageId() != null) {
+            ChatMessage m = sessionStorePort.findMessageById(row.getUserMessageId());
+            if (m != null) {
+                userMessage = m.getContent();
+            }
+        }
+        return new TurnStatusResult(row.getStatus(), resumable, userMessage);
+    }
+
+    /** M6-42：轮次状态查询结果（status 为 null 表示无登记记录）。 */
+    public record TurnStatusResult(String status, boolean resumable, String userMessage) {
+    }
+
+    /**
+     * M6-47：会话最近可恢复中断轮次（刷新/重进会话恢复重试入口）。
+     *
+     * <p>浏览器刷新/关闭页面时前端不会执行 handleStop（localStorage 无 key），
+     * 因此刷新恢复不能依赖前端本地状态——由后端按"INTERRUPTED + 断点存在"
+     * 权威查询，前端进入会话时直接获取。</p>
+     */
+    public LatestInterruptedTurn getLatestInterruptedTurn(Long userId, String sessionId) {
+        if (userId == null || userId <= 0) {
+            throw new BusinessException(40101, "用户未登录");
+        }
+        ChatSession session = chatPersistenceStep.requireSession(sessionId);
+        if (!userId.equals(session.getUserId())) {
+            throw new BusinessException(40302, "无权访问该会话");
+        }
+        ChatMessageIdem row = chatPersistenceStep.findLatestInterrupted(sessionId);
+        if (row == null) {
+            return new LatestInterruptedTurn(null, null, false);
+        }
+        boolean hasBreakpoint =
+                !breakpointStore.loadBreakpoint(sessionId, row.getClientMessageId()).isEmpty();
+        String userMessage = null;
+        if (row.getUserMessageId() != null) {
+            ChatMessage m = sessionStorePort.findMessageById(row.getUserMessageId());
+            if (m != null) {
+                userMessage = m.getContent();
+            }
+        }
+        return new LatestInterruptedTurn(
+                row.getClientMessageId(), userMessage, hasBreakpoint && userMessage != null);
+    }
+
+    /** M6-47：最近可恢复中断轮次（clientMessageId 为 null 表示无可恢复轮次）。 */
+    public record LatestInterruptedTurn(
+            String clientMessageId, String userMessage, boolean resumable) {
     }
 
     /**
@@ -176,41 +322,91 @@ public class ChatService implements ChatStreamExecutor {
         Long userId = prepared.userId();
         String clientMessageId = prepared.clientMessageId();
         ChatProgressListener l = listener == null ? ChatProgressListener.NOOP : listener;
+        // M6-40：在途轮次登记取消令牌（finally 移除）
+        TurnCancellation cancellation = cancellationRegistry.register(clientMessageId);
+        if (cancellation == null) {
+            cancellation = TurnCancellation.NOOP;
+        }
+        // M6-44：Redis 中断标记作为跨实例权威兜底——Pub/Sub 广播丢失/订阅未建立时，
+        // 图流节点边界与拦截器仍能读到标记并停止（external check 由 isCancelled 组合）
+        cancellation.attachExternalCancelCheck(
+                () -> breakpointStore.isInterrupted(clientMessageId));
         try {
-            l.onThinking("preference", "正在分析您的偏好…");
-            // M3-12：步骤 3 偏好（确定性偏好保存；语义同 F71）
-            chatPreferenceStep.saveIfPreference(userId, message);
-            l.onThinking("knowledge", "正在整理会话知识…");
-            // M3-13：步骤 4 知识（切片+异步写入；语义同 Phase C/F78 C1）
-            chatKnowledgeStep.writeUserMessageAsync(sessionId, message);
-            l.onThinking("intent", "正在理解您的意图…");
-            // M3-14：步骤 5 意图（分类+追溯填充；语义同 F85/F89）
-            ChatIntent intent = chatIntentStep.classify(sessionId, userId, message);
+            // M6-36：重试先清除旧中断标记，避免恢复时被残留标记再次取消
+            breakpointStore.clearInterrupt(clientMessageId);
 
-            l.onThinking("memory", "正在回顾会话记忆…");
-            // M3-15：步骤 6 记忆（画像+历史/摘要组装；语义同 F50/F55/F57/F60）
-            ChatMemoryStep.MemoryContext memory = chatMemoryStep.assemble(userId, sessionId);
-            String profileContext = memory.profileContext();
-            String historySection = memory.historySection();
-            boolean summaryUsed = memory.summaryUsed();
-            boolean summaryTriggered = memory.summaryTriggered();
-            int turns = memory.turns();
-            int totalHistoryTokens = memory.totalHistoryTokens();
-            l.onThinking("budget", "正在组装上下文…");
-            // M3-16：步骤 7 预算（检索注入+组装+四档预算兜底；语义同 F63/F66/F78/F83/F85）
-            ChatBudgetStep.BudgetContext budget = chatBudgetStep.compose(sessionId, userId, intent,
-                    message, profileContext, historySection);
-            String composed = budget.composed();
-            int inputTokens = budget.inputTokens();
-            profileContext = budget.profileContext();
-            historySection = budget.historySection();
-            String candidates = budget.candidates();
-            List<Map<String, Object>> sessionHits = budget.sessionHits();
+            ChatIntent intent;
+            String profileContext;
+            String historySection;
+            String composed;
+            int inputTokens;
+            String candidates;
+            List<Map<String, Object>> sessionHits;
 
-            log.info("聊天输入组装完成: 总长度={}, 含画像={}, 含历史={}, 含摘要={}, 摘要触发={}, 历史轮数={}, 全量历史token={}, 注入token={}, 含知识库候选={}",
-                    composed.length(), !profileContext.isBlank(), !historySection.isBlank(),
-                    summaryUsed, summaryTriggered, turns, totalHistoryTokens, inputTokens,
-                    !"[]".equals(candidates));
+            // M6-36：断点恢复——跳过步骤 3~7，直达路由（复用已组装上下文）
+            Map<String, Object> breakpoint = breakpointStore.loadBreakpoint(sessionId, clientMessageId);
+            if (!breakpoint.isEmpty()) {
+                l.onThinking("resume", "正在从断点恢复…");
+                intent = ChatIntent.valueOf(String.valueOf(breakpoint.get("intent")));
+                composed = (String) breakpoint.get("composed");
+                sessionHits = castSessionHits(breakpoint.get("sessionHits"));
+                profileContext = (String) breakpoint.get("profileContext");
+                historySection = (String) breakpoint.get("historySection");
+                inputTokens = breakpoint.get("inputTokens") == null
+                        ? 0 : ((Number) breakpoint.get("inputTokens")).intValue();
+                candidates = (String) breakpoint.get("candidates");
+            } else {
+                l.onThinking("preference", "正在分析您的偏好…");
+                // M3-12：步骤 3 偏好（确定性偏好保存；语义同 F71）
+                chatPreferenceStep.saveIfPreference(userId, message);
+                l.onThinking("knowledge", "正在整理会话知识…");
+                // M3-13：步骤 4 知识（切片+异步写入；语义同 Phase C/F78 C1）
+                chatKnowledgeStep.writeUserMessageAsync(sessionId, message);
+                l.onThinking("intent", "正在理解您的意图…");
+                // M3-14：步骤 5 意图（分类+追溯填充；语义同 F85/F89）
+                intent = chatIntentStep.classify(sessionId, userId, message);
+
+                l.onThinking("memory", "正在回顾会话记忆…");
+                // M3-15：步骤 6 记忆（画像+历史/摘要组装；语义同 F50/F55/F57/F60）
+                ChatMemoryStep.MemoryContext memory = chatMemoryStep.assemble(userId, sessionId);
+                profileContext = memory.profileContext();
+                historySection = memory.historySection();
+                boolean summaryUsed = memory.summaryUsed();
+                boolean summaryTriggered = memory.summaryTriggered();
+                int turns = memory.turns();
+                int totalHistoryTokens = memory.totalHistoryTokens();
+                l.onThinking("budget", "正在组装上下文…");
+                // M3-16：步骤 7 预算（检索注入+组装+四档预算兜底；语义同 F63/F66/F78/F83/F85）
+                ChatBudgetStep.BudgetContext budget = chatBudgetStep.compose(sessionId, userId, intent,
+                        message, profileContext, historySection);
+                composed = budget.composed();
+                inputTokens = budget.inputTokens();
+                profileContext = budget.profileContext();
+                historySection = budget.historySection();
+                candidates = budget.candidates();
+                sessionHits = budget.sessionHits();
+
+                log.info("聊天输入组装完成: 总长度={}, 含画像={}, 含历史={}, 含摘要={}, 摘要触发={}, 历史轮数={}, 全量历史token={}, 注入token={}, 含知识库候选={}",
+                        composed.length(), !profileContext.isBlank(), !historySection.isBlank(),
+                        summaryUsed, summaryTriggered, turns, totalHistoryTokens, inputTokens,
+                        !"[]".equals(candidates));
+
+                // M6-36：进入路由前保存断点快照（中断后可从此处恢复）
+                Map<String, Object> snapshot = new LinkedHashMap<>();
+                snapshot.put("intent", intent.name());
+                snapshot.put("composed", composed);
+                snapshot.put("sessionHits", sessionHits);
+                snapshot.put("profileContext", profileContext);
+                snapshot.put("historySection", historySection);
+                snapshot.put("inputTokens", inputTokens);
+                snapshot.put("candidates", candidates);
+                breakpointStore.saveBreakpoint(sessionId, clientMessageId, snapshot);
+            }
+
+            // M6-36/40：路由前检查中断（Redis 标记 + 本地取消令牌）
+            if (breakpointStore.isInterrupted(clientMessageId) || cancellation.isCancelled()) {
+                throw new TurnInterruptedException("轮次已中断");
+            }
 
             l.onThinking("routing", "正在生成回答…");
             // M3-17/M6：步骤 8 路由（意图分派 recall/direct/supervisor；语义同 F85/F64/F27）
@@ -219,15 +415,20 @@ public class ChatService implements ChatStreamExecutor {
             ChatRoutingStep.StreamRouteResult routed;
             if (l == ChatProgressListener.NOOP) {
                 ChatRoutingStep.RouteResult blocking =
-                        chatRoutingStep.route(intent, composed, userId, sessionHits);
+                        chatRoutingStep.route(intent, composed, userId, sessionHits, cancellation);
                 routed = new ChatRoutingStep.StreamRouteResult(blocking.response(),
                         blocking.aiTokens(), blocking.fallback(), false);
             } else {
                 routed = chatRoutingStep.routeStream(intent, composed, userId,
-                        sessionHits, l::onToken);
+                        sessionHits, cancellation, l::onToken, l::onThinking);
             }
             String response = routed.response();
             long aiTokens = routed.aiTokens();
+
+            // M6-36/40：路由后、落库前再次检查中断（在途 LLM 已消耗，但不再落库）
+            if (breakpointStore.isInterrupted(clientMessageId) || cancellation.isCancelled()) {
+                throw new TurnInterruptedException("轮次已中断");
+            }
 
             // M3-18：步骤 9 落库（AI 响应保存；语义同 F27）
             Long assistantMessageId = chatPersistenceStep.appendAssistantMessage(sessionId, response, aiTokens);
@@ -247,12 +448,39 @@ public class ChatService implements ChatStreamExecutor {
             return new ChatStreamExecutor.ChatStreamResult(
                     response, aiTokens, routed.fallback(),
                     assistantMessageId, prepared.sessionTitle());
+        } catch (TurnInterruptedException e) {
+            // M6-36/46：中断终止——不落库 assistant 回答。
+            // 幂等状态：PENDING→INTERRUPTED（用户停止可恢复；覆盖 SSE abort 与
+            // interruptTurn 的竞态——谁先到都收敛为 INTERRUPTED，刷新后可重试）；
+            // 已是 FAILED（新消息终止在途 markSessionInterrupted 先行）保持不变，
+            // 保证"重试按钮永久消失"语义。
+            chatPersistenceStep.markTurnInterrupted(sessionId, clientMessageId);
+            log.warn("[ChatInterrupt] 轮次已中断，跳过落库: key={}", clientMessageId);
+            throw e;
         } catch (Exception e) {
             // M4-3（复核观察项 2）：步骤 3~9 意外异常时幂等记录置 FAILED——
             // 否则 PENDING 悬挂，同键重试永远 40904（failTurn 对空键/开关关为 no-op）
             chatPersistenceStep.failTurn(clientMessageId);
             throw e;
+        } finally {
+            cancellationRegistry.remove(clientMessageId);
         }
+    }
+
+    @SuppressWarnings("unchecked")
+    private static List<Map<String, Object>> castSessionHits(Object value) {
+        if (!(value instanceof List<?> list)) {
+            return List.of();
+        }
+        List<Map<String, Object>> result = new ArrayList<>();
+        for (Object o : list) {
+            if (o instanceof Map<?, ?> m) {
+                Map<String, Object> map = new LinkedHashMap<>();
+                m.forEach((k, v) -> map.put(String.valueOf(k), v));
+                result.add(map);
+            }
+        }
+        return result;
     }
 
     /**

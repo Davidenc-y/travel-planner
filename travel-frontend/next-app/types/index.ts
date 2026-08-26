@@ -52,6 +52,8 @@ export interface ItineraryResponse {
   generatedAt?: string;
   /** M4-9：行程状态（GENERATING/FAILED/GENERATED…） */
   status?: string;
+  /** M6-52：是否可继续生成（FAILED 或僵尸 GENERATING） */
+  resumable?: boolean;
 }
 
 export interface PageResult<T> {
@@ -88,6 +90,20 @@ export interface ChatResponse {
   tokens?: number;
   /** M5-1：首条消息自动生成标题时返回；其余场景为 undefined */
   sessionTitle?: string;
+}
+
+/** M6-42：轮次状态查询结果（前端刷新后恢复"执行已中断 + 重试"入口） */
+export interface TurnStatus {
+  status: string | null;
+  resumable: boolean;
+  userMessage?: string;
+}
+
+/** M6-47：会话最近可恢复中断轮次（浏览器刷新/重进会话时后端权威查询） */
+export interface LatestInterruptedTurn {
+  clientMessageId: string | null;
+  userMessage?: string;
+  resumable: boolean;
 }
 
 // 景点相关

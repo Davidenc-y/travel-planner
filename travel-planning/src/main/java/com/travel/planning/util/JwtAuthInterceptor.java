@@ -1,10 +1,11 @@
 package com.travel.planning.util;
 
+import com.travel.common.auth.TokenAuthService;
+import com.travel.common.guard.RateLimitInterceptor;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import com.travel.common.guard.RateLimitInterceptor;
 import org.springframework.stereotype.Component;
 import org.springframework.web.servlet.HandlerInterceptor;
 
@@ -25,7 +26,8 @@ public class JwtAuthInterceptor implements HandlerInterceptor {
 
     private static final String BEARER_PREFIX = "Bearer ";
 
-    private final JwtUtil jwtUtil;
+    // M6-25：JWT 逻辑下沉 travel-common，MVC 与未来 WebFlux 共用 TokenAuthService
+    private final TokenAuthService tokenAuthService;
 
     @Override
     public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler) {
@@ -33,9 +35,9 @@ public class JwtAuthInterceptor implements HandlerInterceptor {
         if (auth != null && auth.startsWith(BEARER_PREFIX)) {
             String token = auth.substring(BEARER_PREFIX.length()).trim();
             try {
-                if (jwtUtil.validateToken(token)) {
-                    Long userId = jwtUtil.getUserIdFromToken(token);
-                    String username = jwtUtil.getUsernameFromToken(token);
+                if (tokenAuthService.validateToken(token)) {
+                    Long userId = tokenAuthService.getUserIdFromToken(token);
+                    String username = tokenAuthService.getUsernameFromToken(token);
                     if (userId != null && userId > 0) {
                         UserContextHolder.setUserId(userId);
                         UserContextHolder.setUsername(username);

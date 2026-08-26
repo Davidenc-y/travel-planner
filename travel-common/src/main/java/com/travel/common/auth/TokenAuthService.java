@@ -1,4 +1,4 @@
-package com.travel.planning.util;
+package com.travel.common.auth;
 
 import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.Jwts;
@@ -14,28 +14,32 @@ import java.util.Map;
 import java.util.UUID;
 
 /**
- * JWT 工具类
+ * 认证令牌服务（M6-25：JWT 签发/解析中立化）。
  *
- * <p>适配 interview-system JwtUtil，改动：</p>
- * <ul>
- *   <li>包名 com.interview.gateway.security → com.travel.planning.util</li>
- *   <li>配置前缀 interview.security.jwt → jwt</li>
- * </ul>
+ * <p>自 {@code com.travel.planning.util.JwtUtil} 下沉至 travel-common：
+ * MVC 侧 {@code JwtAuthInterceptor} 与未来 WebFlux 侧
+ * {@code ReactiveJwtAuthFilter} 共用同一套 JWT 逻辑（M6-6-R1 §2.4 [P1]），
+ * 行为与旧 JwtUtil 完全等价（含 F84 唯一 jti）。</p>
  *
  * @author david_ency
  * @since 1.0-SNAPSHOT
  */
 @Component
-public class JwtUtil {
+public class TokenAuthService {
 
-    @Value("${jwt.secret:travel-planner-secret-key-2026-must-be-long-enough-32chars}")
-    private String secret;
+    private final String secret;
+    private final long expiration;
+    private final long refreshExpiration;
 
-    @Value("${jwt.expiration:86400000}")
-    private long expiration;
-
-    @Value("${jwt.refresh-expiration:604800000}")
-    private long refreshExpiration;
+    public TokenAuthService(
+            @Value("${jwt.secret:travel-planner-secret-key-2026-must-be-long-enough-32chars}")
+            String secret,
+            @Value("${jwt.expiration:86400000}") long expiration,
+            @Value("${jwt.refresh-expiration:604800000}") long refreshExpiration) {
+        this.secret = secret;
+        this.expiration = expiration;
+        this.refreshExpiration = refreshExpiration;
+    }
 
     public String generateAccessToken(Long userId, String username) {
         return generateToken(userId, username, expiration, "access");

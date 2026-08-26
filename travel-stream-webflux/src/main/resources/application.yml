@@ -1,0 +1,125 @@
+server:
+  port: 8083
+
+spring:
+  application:
+    name: travel-stream-webflux
+  cloud:
+    compatibility-verifier:
+      enabled: false
+  datasource:
+    url: jdbc:mysql://${MYSQL_HOST:localhost}:${MYSQL_PORT:3306}/travel_planner?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true
+    username: ${MYSQL_USER:root}
+    password: ${MYSQL_PASSWORD:root123}
+    driver-class-name: com.mysql.cj.jdbc.Driver
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      database: 0
+      timeout: 5000ms
+  ai:
+    dashscope:
+      api-key: ${DASHSCOPE_API_KEY:}
+      chat:
+        options:
+          model: qwen3.7-plus
+          temperature: 0.7
+
+mybatis-plus:
+  configuration:
+    map-underscore-to-camel-case: true
+  global-config:
+    db-config:
+      logic-delete-field: deleted
+      logic-delete-value: 1
+      logic-not-delete-value: 0
+
+travel:
+  ai:
+    models:
+      main: qwen3.7-max
+      light: qwen3.7-max
+      coder: qwen3.7-max
+    timeout:
+      seconds: 120
+    max-output-tokens:
+      main: 8000
+  knowledge:
+    base-url: ${KNOWLEDGE_BASE_URL:http://localhost:8082}
+  memory:
+    shortterm:
+      enabled: true
+      max-turns: 10
+      history-max-tokens: 2000
+      summary-threshold-ratio: 0.7
+      summary-min-turns: 6
+      summary-max-tokens: 800
+      summary-hard-max-tokens: 800
+      summary-max-chars: 20000
+      summary-refresh-turns: 5
+      summary-validate: true
+      summary-retry-times: 1
+      input-max-tokens: 4000
+      profile-max-tokens: 800
+      summary-ttl-days: 7
+      recent-window-turns: 2
+      cas-enabled: true
+      finalize-sync-wait-seconds: 15
+  rag:
+    session-context:
+      top-k: 8
+    attraction-candidates:
+      top-k: 5
+    judge:
+      enabled: false
+      timeout-ms: 3000
+    parent-context:
+      enabled: true
+  llm:
+    background-max-concurrent: 2
+    acquire-timeout-ms: 5000
+  chat:
+    stream:
+      enabled: true
+      timeout-ms: 330000
+      keepalive-ms: 15000
+      chunk-max-chars: 16
+      planning-graph-stream-enabled: true
+    idempotency:
+      enabled: true
+    session:
+      reject-archived: true
+    title:
+      max-length: 20
+    intent:
+      enabled: true
+      cache-size: 256
+      llm-fallback: true
+  guard:
+    enabled: true
+    prompt-injection:
+      enabled: true
+      block-keywords: 忽略以上,忽略之前,忽略系统,忽略所有指令,system prompt,系统提示词,扮演管理员,越权,泄露提示词,绕过限制,bypass,你的指令是什么
+      warn-keywords: 不要遵守,忘记之前的,假装你是
+    circuit-breaker:
+      failure-threshold: 3
+      window-ms: 60000
+      open-timeout-ms: 15000
+  trace:
+    enabled: true
+    store: mysql
+    buffer-size: 1024
+    flush-interval-ms: 1000
+    batch-size: 50
+  cors:
+    allowed-origins: http://localhost:3000,http://127.0.0.1:3000,http://localhost:3100,http://127.0.0.1:3100
+
+jwt:
+  secret: ${JWT_SECRET:travel-planner-secret-key-2026-must-be-long-enough-32chars}
+  expiration: 86400000
+  refresh-expiration: 604800000
+
+logging:
+  level:
+    com.travel: INFO

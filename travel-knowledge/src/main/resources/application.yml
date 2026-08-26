@@ -71,6 +71,13 @@ milvus:
 
 # ============ 应用专属配置 ============
 travel:
+  # M6-19：RAG 检索流式
+  knowledge:
+    stream:
+      enabled: true
+      timeout-ms: 120000
+      keepalive-ms: 15000
+      chunk-max-chars: 16
   # F104 P1：MinIO 业务对象存储（docker-compose travel-minio，9000/9001）
   minio:
     endpoint: http://192.168.253.129:9000

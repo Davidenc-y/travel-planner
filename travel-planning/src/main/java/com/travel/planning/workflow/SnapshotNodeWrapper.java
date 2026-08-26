@@ -54,7 +54,7 @@ public final class SnapshotNodeWrapper {
         });
     }
 
-    private static Long readTaskId(OverAllState state) {
+    static Long readTaskId(OverAllState state) {
         Object v = state == null ? null : state.value(TASK_ID_KEY).orElse(null);
         if (v instanceof Number n) {
             return n.longValue();
@@ -85,24 +85,44 @@ public final class SnapshotNodeWrapper {
         if (value == null) {
             return null;
         }
+        // M6-51：防御——AgentLlmNode 流式分支输出为 Flux（toString 如 "FluxFlatMap"），
+        // 不得入库污染快照（宁可无快照整图重跑，不可用坏快照续跑）
+        if (value instanceof org.reactivestreams.Publisher) {
+            return null;
+        }
+        return normalizeText(textOf(value));
+    }
+
+    /**
+     * M6-51：从 state 值提取文本（Optional 递归解包 → AssistantMessage 取 text →
+     * 其余 AgentOutputUtils.toText）。
+     */
+    static String textOf(Object value) {
         // asNode 输出即 Optional[AssistantMessage]（D1 实证）——common 的
         // AgentOutputUtils 只解包 Optional/String，AssistantMessage 必须在此显式解包
         // Optional 后取 text（否则 toString 污染快照）
         while (value instanceof Optional<?> opt) {
             value = opt.orElse(null);
         }
-        String text;
         if (value instanceof org.springframework.ai.chat.messages.AssistantMessage am) {
-            text = am.getText();
-        } else {
-            text = AgentOutputUtils.toText(value);
+            return am.getText();
         }
+        return AgentOutputUtils.toText(value);
+    }
+
+    /**
+     * M6-51：业务文本 → 可入库快照 payload（剥围栏、拒绝框架对象泄漏、
+     * JSON 规范化；空/污染返回 null）。
+     */
+    static String normalizeText(String text) {
         if (text == null || text.isBlank()) {
             return null;
         }
         String cleaned = AgentOutputUtils.stripCodeFence(text).trim();
-        if (cleaned.startsWith("com.alibaba.")) {
-            return null; // 框架对象 toString 泄漏（GraphResponse 等）——不入库
+        if (cleaned.startsWith("com.alibaba.") || cleaned.startsWith("Flux")) {
+            // 框架对象 toString 泄漏（GraphResponse 等）或 Reactor Flux toString
+            // （如 "FluxFlatMap"）——不入库，宁可无快照整图重跑
+            return null;
         }
         try {
             JsonNode node = JsonUtils.getMapper().readTree(cleaned);

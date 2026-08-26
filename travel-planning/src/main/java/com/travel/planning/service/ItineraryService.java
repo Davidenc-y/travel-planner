@@ -24,6 +24,7 @@ import com.travel.planning.repository.ItineraryMapper;
 import com.travel.planning.workflow.TravelWorkflowBuilder;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.WebClientResponseException;
@@ -305,7 +306,8 @@ public class ItineraryService {
 
     /** 幂等命中/显式 resume 共用：快照断点判定 + 子图续跑 + 终态更新 */
     private ItineraryResponseDTO resumeInternal(Itinerary task) {
-        Map<String, String> snapshots = snapshotPort.loadLatestByTask(task.getId());
+        // M6-51：过滤被污染的快照（Flux toString 泄漏），避免脏字符串注入续跑上下文
+        Map<String, String> snapshots = sanitizeSnapshots(snapshotPort.loadLatestByTask(task.getId()));
         String resumeFrom = resolveResumeFrom(snapshots);
         log.info("行程断点续跑: taskId={}, resumeFrom={}, 快照节点={}",
                 task.getId(), resumeFrom, snapshots.keySet());
@@ -328,6 +330,10 @@ public class ItineraryService {
         injectSnapshot(initialState, "attraction_filter", "attractions", snapshots);
         injectSnapshot(initialState, "route_arrangement", "routePlan", snapshots);
         injectSnapshot(initialState, "budget_estimation", "budgetEstimate", snapshots);
+        // M6-51：resume 子图跳过 user_input/rag_retrieval——父 state 无 messages，
+        // 子 Agent（asNode includeContents=true）只能看到 instruction，拿不到路线/
+        // 偏好上下文（预算估算曾输出全 0 "未提供具体行程路线"）。重建组合消息上下文。
+        initialState.put("messages", buildResumeMessage(userInput, snapshots));
 
         long start = System.currentTimeMillis();
         try {
@@ -397,11 +403,53 @@ public class ItineraryService {
         return com.travel.planning.workflow.TravelWorkflowBuilder.RESUME_FULL;
     }
 
+    /**
+     * M6-51：过滤被污染的快照（Reactor Flux toString 泄漏如 "FluxFlatMap"、
+     * 框架对象 toString 泄漏如 "com.alibaba."）——视为无快照，resume 回退更早断点
+     * 或整图重跑，避免把脏字符串注入续跑上下文。
+     */
+    static Map<String, String> sanitizeSnapshots(Map<String, String> snapshots) {
+        if (snapshots == null || snapshots.isEmpty()) {
+            return snapshots == null ? java.util.Map.of() : snapshots;
+        }
+        Map<String, String> clean = new java.util.LinkedHashMap<>();
+        snapshots.forEach((node, payload) -> {
+            if (payload != null && !payload.isBlank()
+                    && !payload.startsWith("Flux")
+                    && !payload.startsWith("com.alibaba.")) {
+                clean.put(node, payload);
+            }
+        });
+        return clean;
+    }
+
     private static void injectSnapshot(Map<String, Object> initialState, String nodeKey,
                                        String stateKey, Map<String, String> snapshots) {
         String payload = snapshots.get(nodeKey);
         if (payload != null && !payload.isBlank()) {
             initialState.put(stateKey, payload);
+        }
+    }
+
+    /**
+     * M6-51：构建 resume 消息上下文（用户请求 + 已有快照产物）。
+     * 与 UserInputNode 的 messages 形态一致（单个 UserMessage），
+     * 供 includeContents=true 的子 Agent 读取完整上下文。
+     */
+    static UserMessage buildResumeMessage(String userInput, Map<String, String> snapshots) {
+        StringBuilder ctx = new StringBuilder(userInput == null ? "" : userInput);
+        appendResumeSection(ctx, "偏好分析", "preference_analysis", snapshots);
+        appendResumeSection(ctx, "候选景点", "attraction_filter", snapshots);
+        appendResumeSection(ctx, "每日行程", "route_arrangement", snapshots);
+        appendResumeSection(ctx, "预算估算", "budget_estimation", snapshots);
+        return new UserMessage(ctx.toString());
+    }
+
+    private static void appendResumeSection(StringBuilder ctx, String label, String nodeKey,
+                                            Map<String, String> snapshots) {
+        String payload = snapshots.get(nodeKey);
+        if (payload != null && !payload.isBlank()) {
+            ctx.append("\n\n【").append(label).append("】\n").append(payload);
         }
     }
 
@@ -462,6 +510,10 @@ public class ItineraryService {
             RunnableConfig config = RunnableConfig.builder()
                     .addMetadata(com.travel.planning.memory.longterm.ProfileToolProvider.USER_ID_METADATA_KEY,
                             uid == null ? 0L : uid)
+                    // M6-51：AgentLlmNode 默认按 metadata("_stream_") 走流式（输出 Flux），
+                    // 导致 SnapshotNodeWrapper 快照 payload 泄漏为 "FluxFlatMap"（toString）。
+                    // 显式关闭流式 → 节点输出 AssistantMessage，快照可正确归一化业务 JSON。
+                    .addMetadata("_stream_", false)
                     .build();
             future = CompletableFuture.supplyAsync(() -> graph.invoke(initialState, config), WORKFLOW_EXECUTOR);
             return future.orTimeout(MAX_EXECUTION_SECONDS, TimeUnit.SECONDS)
@@ -622,6 +674,9 @@ public class ItineraryService {
                 .estimatedCost(entity.getEstimatedCost())
                 .generatedAt(entity.getCreatedAt() != null ? entity.getCreatedAt().toString() : null)
                 .status(entity.getStatus())
+                // M6-52：权威可续标志——FAILED 或僵尸 GENERATING 可续；
+                // 非僵尸 GENERATING 前端应禁用"继续生成"（避免并发双跑）
+                .resumable(isResumable(entity))
                 .build();
 
         // 解析 content JSON → dayPlans
@@ -657,6 +712,18 @@ public class ItineraryService {
         }
 
         return dto;
+    }
+
+    /**
+     * M6-52：行程是否可断点续跑（与 resume 端点守卫同口径）。
+     */
+    private boolean isResumable(Itinerary entity) {
+        if (entity == null || entity.getStatus() == null) {
+            return false;
+        }
+        String status = entity.getStatus();
+        return "FAILED".equals(status)
+                || ("GENERATING".equals(status) && isZombie(entity));
     }
 
     /**

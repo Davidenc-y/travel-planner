@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>com.travel.planner</groupId>
+        <artifactId>travel-planner</artifactId>
+        <version>1.0-SNAPSHOT</version>
+    </parent>
+
+    <groupId>com.travel.webflux</groupId>
+    <artifactId>travel-stream-webflux</artifactId>
+    <packaging>jar</packaging>
+
+    <name>travel-stream-webflux</name>
+    <description>M6-30 WebFlux 试点：独立响应式传输层（ReactiveJwtAuthFilter/全局异常/CORS/
+        Flux&lt;ServerSentEvent&gt;），复用 travel-chat-stream 中立管线；不依赖任何 MVC 模块</description>
+
+    <dependencies>
+        <!-- 中立流式管线与 payload 映射（无 Web Starter） -->
+        <dependency>
+            <groupId>com.travel.chatstream</groupId>
+            <artifactId>travel-chat-stream</artifactId>
+        </dependency>
+        <!-- M6-32：聊天领域（ChatService 真实执行器/Agent/记忆/防护/仓储） -->
+        <dependency>
+            <groupId>com.travel.domain</groupId>
+            <artifactId>travel-chat-domain</artifactId>
+        </dependency>
+        <!-- WebFlux 传输层（与 MVC starter 互斥，模块内不得引入 starter-web） -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-webflux</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>io.projectreactor</groupId>
+            <artifactId>reactor-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+            </plugin>
+        </plugins>
+    </build>
+</project>

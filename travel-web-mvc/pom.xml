@@ -24,6 +24,11 @@
             <groupId>com.travel.common</groupId>
             <artifactId>travel-common</artifactId>
         </dependency>
+        <!-- M6-19：共享 SSE 传输依赖 payload 映射（travel-chat-stream，无 Web Starter） -->
+        <dependency>
+            <groupId>com.travel.chatstream</groupId>
+            <artifactId>travel-chat-stream</artifactId>
+        </dependency>
         <!-- MVC 专属（GlobalExceptionHandler / RateLimitInterceptor） -->
         <dependency>
             <groupId>org.springframework.boot</groupId>

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
@@ -34,6 +34,13 @@ function PlanPageContent() {
   const [loading, setLoading] = useState(false);
   const [selectedInterests, setSelectedInterests] = useState<string[]>([]);
   const [party, setParty] = useState<string | undefined>(undefined);
+  // M6-16：行程流式状态
+  const [streamPhase, setStreamPhase] = useState<'idle' | 'thinking' | 'streaming'>('idle');
+  const [thinkingLines, setThinkingLines] = useState<string[]>([]);
+  const [streamingText, setStreamingText] = useState('');
+  const streamAbortRef = useRef<AbortController | null>(null);
+
+  useEffect(() => () => streamAbortRef.current?.abort(), []);
 
   const { register, handleSubmit, setValue, getValues, formState: { errors } } = useForm<FormData>({
     resolver: zodResolver(schema),
@@ -62,19 +69,65 @@ function PlanPageContent() {
       return;
     }
     setLoading(true);
+    setStreamPhase('thinking');
+    setThinkingLines(['已提交，正在生成行程…']);
+    setStreamingText('');
+    const payload = {
+      ...data,
+      party: party || undefined,
+      interests: selectedInterests,
+      clientRequestId: generateUUID(),
+    };
+    const controller = new AbortController();
+    streamAbortRef.current = controller;
     try {
-      const res = await itineraryApi.generate({
-        ...data,
-        party: party || undefined,
-        interests: selectedInterests,
-        clientRequestId: generateUUID(),
+      let doneId: number | undefined;
+      let acc = '';
+      await itineraryApi.generateStream(payload, controller.signal, {
+        onThinking: (p) => {
+          setStreamPhase('thinking');
+          const msg = p.message;
+          if (msg) {
+            setThinkingLines((prev) => (prev.includes(msg) ? prev : [...prev, msg]));
+          }
+        },
+        onToken: (p) => {
+          if (p.text) {
+            acc += p.text;
+            setStreamPhase('streaming');
+            setStreamingText(acc);
+          }
+        },
+        onDone: (p) => {
+          doneId = p.itineraryId;
+        },
+        onError: (p) => {
+          const e: any = new Error(p.message || '行程生成失败');
+          e.code = p.code;
+          throw e;
+        },
       });
+      if (!doneId) {
+        throw new Error('未返回行程 ID');
+      }
       toast.success('行程生成成功！');
-      router.push(buildItineraryUrl(res.data.data.id));
+      router.push(buildItineraryUrl(doneId));
     } catch (err: any) {
-      toast.error('生成失败: ' + getErrorMessage(err));
+      if (err?.name === 'AbortError') return;
+      // M6-16：流式异常 → 回退 JSON generate
+      try {
+        const res = await itineraryApi.generate(payload);
+        toast.success('行程生成成功！');
+        router.push(buildItineraryUrl(res.data.data.id));
+      } catch (err2: any) {
+        toast.error('生成失败: ' + getErrorMessage(err2));
+      }
     } finally {
       setLoading(false);
+      setStreamPhase('idle');
+      setThinkingLines([]);
+      setStreamingText('');
+      streamAbortRef.current = null;
     }
   };
 
@@ -193,6 +246,32 @@ function PlanPageContent() {
         </div>
         </FormShell>
       </form>
+
+      {/* M6-16：行程流式生成进度与内容预览 */}
+      {streamPhase !== 'idle' && (
+        <div className="mt-4 glass rounded-xl p-4">
+          {streamPhase === 'thinking' && (
+            <div className="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              行程规划中…
+            </div>
+          )}
+          {thinkingLines.length > 0 && (
+            <div className="mt-2 space-y-1">
+              {thinkingLines.map((line, idx) => (
+                <p key={idx} className="text-xs text-slate-500/80 dark:text-slate-400/80">
+                  {line}
+                </p>
+              ))}
+            </div>
+          )}
+          {streamingText && (
+            <pre className="mt-3 whitespace-pre-wrap text-sm max-h-72 overflow-y-auto">
+              {streamingText}
+            </pre>
+          )}
+        </div>
+      )}
     </div>
   );
 }

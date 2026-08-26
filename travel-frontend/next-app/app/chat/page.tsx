@@ -3,7 +3,7 @@
 import { useEffect, useState, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
-import { Loader2, Send, Plus, MessageSquare, Archive, Copy, ArrowDown } from 'lucide-react';
+import { Loader2, Send, Plus, MessageSquare, Archive, Copy, ArrowDown, Square, RotateCcw } from 'lucide-react';
 import { chatApi, getErrorMessage } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 import type { ChatMessage, ChatResponse, ChatSession } from '@/types';
@@ -17,6 +17,31 @@ import { takePrefetch } from '@/lib/prefetch';
 const REVEAL_INTERVAL_MS = 24;
 const REVEAL_CHARS_PER_TICK = 3;
 const REVEAL_WAIT_TIMEOUT_MS = 120_000;
+
+// M6-36：消息时间戳（同日 HH:mm，跨日 MM-DD HH:mm；本地兜底当前时间）
+function formatMessageTime(iso?: string): string {
+  const d = iso ? new Date(iso) : new Date();
+  if (Number.isNaN(d.getTime())) return '';
+  const now = new Date();
+  const pad = (n: number) => String(n).padStart(2, '0');
+  const hm = `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  const sameDay = d.getFullYear() === now.getFullYear()
+    && d.getMonth() === now.getMonth()
+    && d.getDate() === now.getDate();
+  return sameDay ? hm : `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${hm}`;
+}
+
+interface InterruptedTurn {
+  clientMessageId: string;
+  text: string;
+}
+
+// M6-48：单会话流式 UI 状态（切换会话不中断后端思考，各会话独立维护）
+interface StreamState {
+  phase: 'idle' | 'thinking' | 'streaming';
+  thinkingLines: string[];
+  streamingText: string;
+}
 
 function ChatContent() {
   const router = useRouter();
@@ -47,18 +72,85 @@ function ChatContent() {
   const currentSessionRef = useRef<string | null>(null);
   // M5-1：Esc 取消编辑后，输入框卸载触发的 onBlur 不得误保存
   const cancelEditRef = useRef(false);
-  // M6：流式状态（思考气泡 / 流式文本）
-  const [streamPhase, setStreamPhase] = useState<'idle' | 'thinking' | 'streaming'>('idle');
-  const [thinkingLines, setThinkingLines] = useState<string[]>([]);
-  const [streamingText, setStreamingText] = useState('');
+  // M6-48：流式状态按会话隔离（切会话不中断，切回仍显示思考/输出进度）
+  const [streamStates, setStreamStates] = useState<Record<string, StreamState>>({});
+  // M6-48：后台会话完成回复 → 会话列表右侧红点提示（点进会话后清除）
+  const [completedTurns, setCompletedTurns] = useState<Record<string, boolean>>({});
   const streamAbortRef = useRef<AbortController | null>(null);
-  const prevSessionRef = useRef<string | null>(currentSessionId);
+  // M6-36：每会话最多一个中断轮次（重试/新消息时清除）
+  const [interruptedTurns, setInterruptedTurns] = useState<Record<string, InterruptedTurn>>({});
+  const interruptedRef = useRef<Record<string, InterruptedTurn>>({});
+  const activeTurnRef = useRef<{ sid: string; key: string; text: string } | null>(null);
+  const stopRequestedRef = useRef(false);
+  // M6-50：首条消息发送中才真实创建的会话（完成后再拉取列表，避免提前出现）
+  const pendingNewSessionRef = useRef<string | null>(null);
   // M6-5：待展示文本队列与揭示定时器
   const pendingStreamRef = useRef('');
   const revealTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const activeDraftKey = currentSessionId ?? '__new__';
   const input = drafts[activeDraftKey] ?? '';
+  const currentStreamState = currentSessionId ? streamStates[currentSessionId] : undefined;
+
+  const setInterruptedMap = (
+    updater: (prev: Record<string, InterruptedTurn>) => Record<string, InterruptedTurn>,
+  ) => {
+    setInterruptedTurns((prev) => {
+      const next = updater(prev);
+      interruptedRef.current = next;
+      return next;
+    });
+  };
+
+  const setStreamState = (
+    sid: string,
+    updater: (prev: StreamState) => StreamState,
+  ) => {
+    setStreamStates((prev) => ({
+      ...prev,
+      [sid]: updater(prev[sid] ?? { phase: 'idle', thinkingLines: [], streamingText: '' }),
+    }));
+  };
+
+  const clearStreamState = (sid: string) => {
+    setStreamStates((prev) => {
+      const next = { ...prev };
+      delete next[sid];
+      return next;
+    });
+  };
+
+  // M6-49：会话置顶（最后消息时间最新；配合后端排序，发送完成后即时生效）
+  const moveSessionToTop = (sid: string) => {
+    setSessions((prev) => {
+      const idx = prev.findIndex((s) => s.sessionId === sid);
+      if (idx <= 0) return prev;
+      const next = [...prev];
+      const [s] = next.splice(idx, 1);
+      return [s, ...next];
+    });
+  };
+
+  // M6-50：轮次完成后的会话列表收口——新建会话拉取权威列表（标题已由后端
+  // 首条消息联动生成）；既有会话仅置顶（避免多余请求）
+  const finalizeTurnSession = (sid: string) => {
+    if (pendingNewSessionRef.current === sid) {
+      pendingNewSessionRef.current = null;
+      loadSessions(true);
+    } else {
+      moveSessionToTop(sid);
+    }
+  };
+
+  // M6-49：回复完成（成功/兜底）→ 当前会话直接追加，否则红点提示；并置顶会话
+  const appendAssistantOrNotify = (sid: string, msg: ChatMessage) => {
+    if (currentSessionRef.current === sid) {
+      setMessages((prev) => [...prev, msg]);
+    } else {
+      setCompletedTurns((prev) => ({ ...prev, [sid]: true }));
+    }
+    finalizeTurnSession(sid);
+  };
 
   useEffect(() => {
     if (!isAuthenticated) {
@@ -103,18 +195,10 @@ function ChatContent() {
     }
   }, [editingSessionId]);
 
-  // M6：切换会话时取消在途流并复位流式 UI
+  // M6-48：切换会话不再 abort 在途流（后端继续思考）——仅停止当前会话逐字揭示
   useEffect(() => {
-    if (prevSessionRef.current !== currentSessionId) {
-      prevSessionRef.current = currentSessionId;
-      streamAbortRef.current?.abort();
-      streamAbortRef.current = null;
-      stopReveal();
-      pendingStreamRef.current = '';
-      setStreamPhase('idle');
-      setThinkingLines([]);
-      setStreamingText('');
-    }
+    stopReveal();
+    pendingStreamRef.current = '';
   }, [currentSessionId]);
 
   // M6：组件卸载时取消在途流
@@ -144,7 +228,10 @@ function ChatContent() {
     if (pendingStreamRef.current !== '') {
       const rest = pendingStreamRef.current;
       pendingStreamRef.current = '';
-      setStreamingText((prev) => prev + rest);
+      const sid = currentSessionRef.current;
+      if (sid) {
+        setStreamState(sid, (s) => ({ ...s, streamingText: s.streamingText + rest }));
+      }
     }
     stopReveal();
   };
@@ -164,7 +251,10 @@ function ChatContent() {
       }
       const chunk = pendingStreamRef.current.slice(0, REVEAL_CHARS_PER_TICK);
       pendingStreamRef.current = pendingStreamRef.current.slice(REVEAL_CHARS_PER_TICK);
-      setStreamingText((prev) => prev + chunk);
+      const sid = currentSessionRef.current;
+      if (sid) {
+        setStreamState(sid, (s) => ({ ...s, streamingText: s.streamingText + chunk }));
+      }
     }, REVEAL_INTERVAL_MS);
   };
 
@@ -212,6 +302,23 @@ function ChatContent() {
       if (historySidRef.current !== sid || currentSessionRef.current !== sid) return;
       instantScrollRef.current = true;
       setMessages(res.data.data || []);
+      // M6-47：刷新/切会话后恢复重试入口——浏览器刷新不会触发 handleStop
+      // （无本地 key），统一由后端按"INTERRUPTED + 断点存在"权威查询
+      chatApi.getLatestInterruptedTurn(sid)
+        .then((statusRes) => {
+          if (historySidRef.current !== sid || currentSessionRef.current !== sid) return;
+          const d = statusRes.data.data;
+          if (d?.resumable && d.clientMessageId) {
+            setInterruptedMap((prev) => ({
+              ...prev,
+              [sid]: {
+                clientMessageId: d.clientMessageId!,
+                text: d.userMessage || '',
+              },
+            }));
+          }
+        })
+        .catch(() => {});
     } catch {
       if (historySidRef.current !== sid || currentSessionRef.current !== sid) return;
       instantScrollRef.current = true;
@@ -224,18 +331,14 @@ function ChatContent() {
     creatingRef.current = true;
     setCreatingSession(true);
     try {
-      // M5-1：不再传固定标题，标题由后端首条消息联动生成
-      const res = await chatApi.createSession(userId!);
-      const sid = res.data.data;
-      setCurrentSessionId(sid);
+      // M6-50：点击新会话不立即创建——进入"未创建"编辑态；
+      // 首条消息真正发送时才调用后端创建并加入左侧列表
+      setCurrentSessionId(null);
       setMessages([]);
-      // M5-1：使可能仍在途的旧会话历史响应失效，避免覆盖新会话空消息区
       historySidRef.current = null;
       instantScrollRef.current = true;
-      await loadSessions(true);
-      toast.success('新会话已创建');
     } catch {
-      toast.error('创建会话失败');
+      // 纯本地状态切换，无后端调用
     } finally {
       creatingRef.current = false;
       setCreatingSession(false);
@@ -288,18 +391,29 @@ function ChatContent() {
       try {
         await chatApi.sendMessageStream(sid, text, key, controller.signal, {
           onThinking: (p) => {
-            setStreamPhase('thinking');
-            const msg = p.message;
-            if (msg) {
-              setThinkingLines((prev) => (prev.includes(msg) ? prev : [...prev, msg]));
-            }
+            setStreamState(sid, (s) => ({
+              ...s,
+              phase: 'thinking',
+              thinkingLines: p.message && !s.thinkingLines.includes(p.message)
+                ? [...s.thinkingLines, p.message]
+                : s.thinkingLines,
+            }));
           },
           onToken: (p) => {
-            if (p.text) {
-              acc += p.text;
+            if (!p.text) return;
+            acc += p.text;
+            if (currentSessionRef.current === sid) {
+              // 当前可见会话：进待展示队列逐字揭示
               pendingStreamRef.current += p.text;
-              setStreamPhase('streaming');
+              setStreamState(sid, (s) => ({ ...s, phase: 'streaming' }));
               startReveal();
+            } else {
+              // 后台会话：直接累积，切回时整体可见（不逐字揭示）
+              setStreamState(sid, (s) => ({
+                ...s,
+                phase: 'streaming',
+                streamingText: s.streamingText + p.text,
+              }));
             }
           },
           onDone: (p) => {
@@ -339,24 +453,26 @@ function ChatContent() {
     throw new Error('发送超时，请稍后重试');
   };
 
-  const handleSend = async () => {
-    const text = input.trim();
+  const handleSend = async (retrySid?: string, retryText?: string, retryKey?: string) => {
+    const isRetry = retrySid != null;
+    const text = isRetry ? retryText! : input.trim();
     if (!text || sendingRef.current || creatingRef.current) return;
-    const hadNoSession = !currentSessionId;
+    const hadNoSession = !isRetry && !currentSessionId;
 
     // M5-1：初始界面直接发送 → 自动创建会话并进入
-    let sid = currentSessionId;
-    if (!sid) {
+    let sid = isRetry ? retrySid! : currentSessionId;
+    if (!sid && !isRetry) {
       creatingRef.current = true;
       setCreatingSession(true);
       try {
         const res = await chatApi.createSession(userId!);
         sid = res.data.data;
+        // M6-50：标记为"首条消息中创建"——完成后再刷新列表，标题由后端联动生成
+        pendingNewSessionRef.current = sid;
         setCurrentSessionId(sid);
         setMessages([]);
         historySidRef.current = null;
         instantScrollRef.current = true;
-        await loadSessions(true);
       } catch (err: any) {
         toast.error('创建会话失败: ' + getErrorMessage(err));
         return;
@@ -366,33 +482,58 @@ function ChatContent() {
       }
     }
 
-    const userMsg: ChatMessage = {
-      sessionId: sid!,
-      role: 'user',
-      content: text,
-    };
-    // M5-1：使新建会话的 getHistory 空响应失效，避免覆盖乐观追加的用户消息
-    historySidRef.current = null;
-    setMessages((prev) => [...prev, userMsg]);
-    setDrafts((prev) => {
-      const next = { ...prev };
-      delete next[sid!];
-      if (hadNoSession) delete next.__new__;
-      return next;
-    });
+    // M6-36：发起新消息 → 清除该会话旧断点（重试按钮永久消失）
+    if (!isRetry) {
+      const prevTurn = interruptedRef.current[sid!];
+      if (prevTurn) {
+        setInterruptedMap((prev) => {
+          const next = { ...prev };
+          delete next[sid!];
+          return next;
+        });
+        chatApi.clearBreakpoint(sid!, prevTurn.clientMessageId).catch(() => {});
+      }
+    }
+
+    if (!isRetry) {
+      const userMsg: ChatMessage = {
+        sessionId: sid!,
+        role: 'user',
+        content: text,
+        createdAt: new Date().toISOString(),
+      };
+      // M5-1：使新建会话的 getHistory 空响应失效，避免覆盖乐观追加的用户消息
+      historySidRef.current = null;
+      setMessages((prev) => [...prev, userMsg]);
+      setDrafts((prev) => {
+        const next = { ...prev };
+        delete next[sid!];
+        if (hadNoSession) delete next.__new__;
+        return next;
+      });
+    }
     sendingRef.current = true;
     setSending(true);
-    setStreamPhase('thinking');
-    setThinkingLines(['已收到，Agent 正在思考…']);
-    setStreamingText('');
+    setStreamState(sid!, (s) => ({
+      ...s,
+      phase: 'thinking',
+      thinkingLines: ['已收到，Agent 正在思考…'],
+      streamingText: '',
+    }));
 
     // M4-9：消息幂等键——超时/40904 重试携带同键，杜绝重复追加/双跑
-    const clientMessageId = crypto.randomUUID();
+    const clientMessageId = isRetry ? retryKey! : crypto.randomUUID();
+    activeTurnRef.current = { sid: sid!, key: clientMessageId, text };
     try {
       // M6：优先 SSE 流式；失败自动回退 JSON 端点
       const streamed = await sendStreamWithRetry(sid!, text, clientMessageId);
-      const aiMsg: ChatMessage = { sessionId: sid!, role: 'assistant', content: streamed.text };
-      setMessages((prev) => [...prev, aiMsg]);
+      const aiMsg: ChatMessage = {
+        sessionId: sid!,
+        role: 'assistant',
+        content: streamed.text,
+        createdAt: new Date().toISOString(),
+      };
+      appendAssistantOrNotify(sid!, aiMsg);
       if (streamed.sessionTitle) {
         setSessions((prev) => prev.map((s) =>
           s.sessionId === sid ? { ...s, title: streamed.sessionTitle! } : s));
@@ -402,42 +543,73 @@ function ChatContent() {
       const code = err?.response?.data?.code ?? err?.code;
       if (code === 40904) {
         toast.error('发送超时，请稍后重试');
-        setMessages((prev) => [...prev, {
+        const fallbackMsg: ChatMessage = {
           sessionId: sid!,
           role: 'assistant',
           content: '抱歉，处理您的请求时出现错误，请稍后重试。',
-        }]);
+        };
+        appendAssistantOrNotify(sid!, fallbackMsg);
       } else {
         try {
           const data = await sendMessageWithIdempotency(sid!, text, clientMessageId);
-          setMessages((prev) => [...prev, {
+          const aiMsg: ChatMessage = {
             sessionId: sid!,
             role: 'assistant',
             content: data.response,
-          }]);
+          };
+          appendAssistantOrNotify(sid!, aiMsg);
           if (data.sessionTitle) {
             setSessions((prev) => prev.map((s) =>
               s.sessionId === sid ? { ...s, title: data.sessionTitle! } : s));
           }
         } catch (jsonErr: any) {
           toast.error('发送失败: ' + getErrorMessage(jsonErr));
-          setMessages((prev) => [...prev, {
+          const fallbackMsg: ChatMessage = {
             sessionId: sid!,
             role: 'assistant',
             content: '抱歉，处理您的请求时出现错误，请稍后重试。',
-          }]);
+          };
+          appendAssistantOrNotify(sid!, fallbackMsg);
         }
       }
     } finally {
       sendingRef.current = false;
       setSending(false);
-      setStreamPhase('idle');
-      setThinkingLines([]);
-      setStreamingText('');
+      clearStreamState(sid!);
       stopReveal();
       pendingStreamRef.current = '';
       streamAbortRef.current = null;
+      stopRequestedRef.current = false;
+      activeTurnRef.current = null;
     }
+  };
+
+  /** M6-36：停止当前思考/回复 → 显示“执行已中断”+ 重试按钮 */
+  const handleStop = () => {
+    const sid = currentSessionId;
+    const turn = activeTurnRef.current;
+    if (!sid || !sendingRef.current || !turn) return;
+    stopRequestedRef.current = true;
+    streamAbortRef.current?.abort();
+    clearStreamState(sid);
+    setInterruptedMap((prev) => ({
+      ...prev,
+      [sid]: { clientMessageId: turn.key, text: turn.text },
+    }));
+    // 后端：PENDING → INTERRUPTED + 中断标记（fire-and-forget，失败仅本地状态生效）
+    chatApi.interruptTurn(sid, turn.key).catch(() => {});
+  };
+
+  /** M6-36：重试——同一幂等键续跑（后端有断点快照则跳过步骤 3~7） */
+  const handleRetry = (sid: string) => {
+    const turn = interruptedRef.current[sid];
+    if (!turn) return;
+    setInterruptedMap((prev) => {
+      const next = { ...prev };
+      delete next[sid];
+      return next;
+    });
+    handleSend(sid, turn.text, turn.clientMessageId);
   };
 
   /** M4-9：显式结束会话（归档+收口摘要；不挂 beforeunload——刷新会误归档） */
@@ -556,7 +728,15 @@ function ChatContent() {
                 role="button"
                 tabIndex={0}
                 onClick={() => {
-                  if (editingSessionId !== s.sessionId) setCurrentSessionId(s.sessionId);
+                  if (editingSessionId !== s.sessionId) {
+                    setCurrentSessionId(s.sessionId);
+                    // M6-48：点进会话 → 红点消失
+                    setCompletedTurns((prev) => {
+                      const next = { ...prev };
+                      delete next[s.sessionId];
+                      return next;
+                    });
+                  }
                 }}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter' && editingSessionId !== s.sessionId) {
@@ -570,7 +750,13 @@ function ChatContent() {
                     : 'hover:bg-slate-100 dark:hover:bg-slate-800'
                 )}
               >
-                <MessageSquare className="h-4 w-4 flex-shrink-0" />
+                {/* M6-48：思考/回复中 → 动态加载图标 */}
+                {streamStates[s.sessionId]?.phase === 'thinking'
+                  || streamStates[s.sessionId]?.phase === 'streaming' ? (
+                  <Loader2 className="h-4 w-4 flex-shrink-0 animate-spin text-brand-500" />
+                ) : (
+                  <MessageSquare className="h-4 w-4 flex-shrink-0" />
+                )}
                 {editingSessionId === s.sessionId ? (
                   <input
                     ref={titleInputRef}
@@ -612,6 +798,13 @@ function ChatContent() {
                   <Archive className="h-3.5 w-3.5" />
                 </button>
               )}
+              {/* M6-48：后台会话完成回复 → 红点提示（点进会话后清除） */}
+              {completedTurns[s.sessionId] && currentSessionId !== s.sessionId && (
+                <span
+                  title="有新回复"
+                  className="absolute right-7 top-1/2 -translate-y-1/2 h-2 w-2 rounded-full bg-red-500"
+                />
+              )}
             </div>
           ))}
           {sessions.length === 0 && (
@@ -641,44 +834,62 @@ function ChatContent() {
                 >
                   <div
                     className={cn(
-                      'relative max-w-[70%] rounded-2xl px-4 py-2.5',
-                      msg.role === 'user'
-                        ? 'bg-brand-500 text-white rounded-br-sm'
-                        : 'bg-slate-100 dark:bg-slate-800 rounded-bl-sm'
+                      'flex max-w-[70%] flex-col',
+                      msg.role === 'user' ? 'items-end' : 'items-start'
                     )}
                   >
-                    {msg.role === 'user' ? (
-                      <p className="text-sm whitespace-pre-wrap">{msg.content}</p>
-                    ) : (
-                      <div className="text-sm">
-                        <ChatMessageContent content={msg.content} />
-                      </div>
-                    )}
-                    {/* M5-1：复制按钮——常态隐藏，hover 该消息附近时显示 */}
-                    <button
-                      type="button"
-                      onClick={() => copyMessage(msg.content)}
-                      className="absolute -bottom-2 right-1 p-1 rounded-md opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity bg-slate-200 dark:bg-slate-700 text-slate-500 hover:text-brand-500"
-                      title="复制"
-                      aria-label="复制消息"
+                    <div
+                      className={cn(
+                        'relative rounded-2xl px-4 py-2.5',
+                        msg.role === 'user'
+                          ? 'bg-brand-500 text-white rounded-br-sm'
+                          : 'bg-slate-100 dark:bg-slate-800 rounded-bl-sm'
+                      )}
                     >
-                      <Copy className="h-3 w-3" />
-                    </button>
+                      {msg.role === 'user' ? (
+                        <p className="text-sm whitespace-pre-wrap">{msg.content}</p>
+                      ) : (
+                        <div className="text-sm">
+                          <ChatMessageContent content={msg.content} />
+                        </div>
+                      )}
+                    </div>
+                    {/* M6-49：时间戳与复制按钮在气泡外（左下角），复制按钮透明背景 */}
+                    <div
+                      className={cn(
+                        'mt-1 flex items-center gap-1 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity',
+                        msg.role === 'user' ? 'justify-end' : 'justify-start'
+                      )}
+                    >
+                      {/* M6-50：时间戳在左、复制按钮在右 */}
+                      <span className="text-[10px] text-slate-400/70">
+                        {formatMessageTime(msg.createdAt)}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => copyMessage(msg.content)}
+                        className="rounded-md bg-transparent p-1 text-slate-400 hover:text-brand-500"
+                        title="复制"
+                        aria-label="复制消息"
+                      >
+                        <Copy className="h-3 w-3" />
+                      </button>
+                    </div>
                   </div>
                 </div>
               ))
             )}
             {/* M6：思考气泡（spinner + 浅灰半透明阶段提示） */}
-            {streamPhase === 'thinking' && (
+            {currentStreamState?.phase === 'thinking' && (
               <div className="flex justify-start">
                 <div className="max-w-[70%] rounded-2xl rounded-bl-sm px-4 py-2.5 bg-slate-100/70 dark:bg-slate-800/70">
                   <div className="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400">
                     <Loader2 className="h-4 w-4 animate-spin" />
                     Agent 思考中…
                   </div>
-                  {thinkingLines.length > 0 && (
+                  {currentStreamState.thinkingLines.length > 0 && (
                     <div className="mt-2 space-y-1">
-                      {thinkingLines.map((line, idx) => (
+                      {currentStreamState.thinkingLines.map((line, idx) => (
                         <p key={idx} className="text-xs text-slate-500/80 dark:text-slate-400/80">
                           {line}
                         </p>
@@ -689,10 +900,25 @@ function ChatContent() {
               </div>
             )}
             {/* M6：流式输出（思考完成后替换思考气泡） */}
-            {streamPhase === 'streaming' && (
+            {currentStreamState?.phase === 'streaming' && (
               <div className="flex justify-start">
                 <div className="max-w-[70%] rounded-2xl rounded-bl-sm px-4 py-2.5 bg-slate-100 dark:bg-slate-800">
-                  <p className="text-sm whitespace-pre-wrap">{streamingText}</p>
+                  <p className="text-sm whitespace-pre-wrap">{currentStreamState.streamingText}</p>
+                </div>
+              </div>
+            )}
+            {/* M6-36：执行已中断 + 重试（每会话最多一个断点） */}
+            {interruptedTurns[currentSessionId ?? ''] && (
+              <div className="flex justify-start">
+                <div className="max-w-[70%] rounded-2xl rounded-bl-sm px-4 py-2.5 bg-slate-100 dark:bg-slate-800">
+                  <p className="text-sm text-slate-600 dark:text-slate-300">执行已中断</p>
+                  <button
+                    type="button"
+                    onClick={() => handleRetry(currentSessionId!)}
+                    className="mt-1.5 inline-flex items-center gap-1 text-xs text-brand-500 hover:text-brand-600"
+                  >
+                    <RotateCcw className="h-3 w-3" /> 重试
+                  </button>
                 </div>
               </div>
             )}
@@ -709,7 +935,7 @@ function ChatContent() {
                   updateNearBottom();
                 }
               }}
-              className="absolute bottom-3 left-1/2 -translate-x-1/2 z-10 flex items-center gap-1 px-3 py-1.5 rounded-full bg-brand-500 text-white text-xs shadow-lg hover:bg-brand-600 magnetic"
+              className="absolute bottom-3 left-1/2 -translate-x-1/2 z-10 flex items-center gap-1 px-3 py-1.5 rounded-full bg-brand-500 text-white text-xs shadow-lg hover:bg-brand-600"
             >
               <ArrowDown className="h-3.5 w-3.5" /> 回到底部
             </button>
@@ -727,13 +953,28 @@ function ChatContent() {
             placeholder="输入消息..."
             className="flex-1 px-4 py-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-transparent focus:ring-2 focus:ring-brand-500 outline-none"
           />
-          <button
-            onClick={handleSend}
-            disabled={!input.trim() || sending || creatingSession}
-            className="px-4 py-2 rounded-lg bg-brand-500 text-white hover:bg-brand-600 disabled:opacity-50 magnetic"
-          >
-            <Send className="h-4 w-4" />
-          </button>
+          {/* M6-49：思考阶段可停止；流式回复阶段显示不可点击的发送按钮 */}
+          {sending && activeTurnRef.current?.sid === currentSessionId
+            && currentStreamState?.phase === 'thinking' ? (
+            <button
+              type="button"
+              onClick={handleStop}
+              title="停止"
+              aria-label="停止"
+              className="px-4 py-2 rounded-lg bg-red-500 text-white hover:bg-red-600 magnetic"
+            >
+              <Square className="h-4 w-4" />
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={() => handleSend()}
+              disabled={!input.trim() || sending || creatingSession}
+              className="px-4 py-2 rounded-lg bg-brand-500 text-white hover:bg-brand-600 disabled:opacity-50 magnetic"
+            >
+              <Send className="h-4 w-4" />
+            </button>
+          )}
         </div>
       </div>
     </div>

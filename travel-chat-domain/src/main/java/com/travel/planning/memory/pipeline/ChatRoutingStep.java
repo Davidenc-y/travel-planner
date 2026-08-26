@@ -2,12 +2,16 @@ package com.travel.planning.memory.pipeline;
 
 import com.travel.planning.agent.supervisor.TravelSupervisorAgent;
 import com.travel.planning.memory.chat.ChatIntent;
+import com.travel.planning.service.TurnCancellation;
+import com.travel.planning.service.TurnInterruptedException;
+import com.travel.planning.stream.ChatStreamProperties;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
 import java.util.List;
 import java.util.Map;
+import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 
 /**
@@ -39,18 +43,26 @@ public class ChatRoutingStep {
     }
 
     private final TravelSupervisorAgent supervisorAgent;
+    private final ChatStreamProperties chatStreamProps;
 
     /**
      * 按意图分派：RECALL → 轻量回顾；PROFILE/CHAT/FUNCTIONAL → 入口直答；
      * PLANNING/REFINE → Supervisor 完整规划（F85/F64/F27 语义不变）。
+     *
+     * @param cancellation M6-42：轮次取消令牌（null 兼容 NOOP）；阻塞路径入口检查，
+     *                     规划执行中由拦截器短路 + get 前/后检查兜底
      */
     public RouteResult route(ChatIntent intent, String composed, Long userId,
-                             List<Map<String, Object>> sessionHits) {
+                             List<Map<String, Object>> sessionHits,
+                             TurnCancellation cancellation) {
+        TurnCancellation cancel = cancellation == null ? TurnCancellation.NOOP : cancellation;
         long routeStart = System.currentTimeMillis();
         String response;
         long aiTokens = 0;
         boolean fallback = false;
         try {
+            // M6-42：路由入口检查（取消后不发起任何 LLM 调用）
+            cancel.throwIfCancelled();
             switch (intent) {
                 case RECALL -> {
                     // F85：轻量回顾管线（itinerary_day 骨架 + LLM 润色，零编造）
@@ -68,12 +80,15 @@ public class ChatRoutingStep {
                 }
                 default -> { // PLANNING / REFINE：F64/B2 把 userId 传入 Supervisor（metadata 供画像工具）
                     TravelSupervisorAgent.PlanningResult result =
-                            supervisorAgent.executePlanningWithUsage(composed, userId);
+                            supervisorAgent.executePlanningWithUsage(composed, userId, cancel);
                     response = result.answer();
                     // F27：assistant 消息 tokens = 本次全部 LLM 调用的真实 totalTokens 之和
                     aiTokens = result.totalTokens();
                 }
             }
+        } catch (TurnInterruptedException e) {
+            // M6-42：中断终止必须向上传递（failTurn + 不落库），不得转为兜底文案
+            throw e;
         } catch (Exception e) {
             log.error("Agent 调用失败", e);
             response = "抱歉，处理您的请求时出现错误，请稍后重试。";
@@ -94,31 +109,65 @@ public class ChatRoutingStep {
      */
     public StreamRouteResult routeStream(ChatIntent intent, String composed, Long userId,
                                          List<Map<String, Object>> sessionHits,
-                                         Consumer<String> tokenSink) {
+                                         TurnCancellation cancellation,
+                                         Consumer<String> tokenSink,
+                                         BiConsumer<String, String> thinkingSink) {
         Consumer<String> sink = tokenSink == null ? t -> { } : tokenSink;
+        BiConsumer<String, String> think = thinkingSink == null ? (s, m) -> { } : thinkingSink;
         long routeStart = System.currentTimeMillis();
         try {
             switch (intent) {
                 case RECALL -> {
                     TravelSupervisorAgent.PlanningResult result =
-                            supervisorAgent.answerRecallStream(composed, sessionHits, sink);
+                            supervisorAgent.answerRecallStream(composed, sessionHits, sink, cancellation);
                     logElapsed(intent, routeStart, false);
                     return new StreamRouteResult(result.answer(), result.totalTokens(), false, true);
                 }
                 case PROFILE, CHAT, FUNCTIONAL -> {
                     TravelSupervisorAgent.PlanningResult result =
-                            supervisorAgent.answerDirectStream(composed, userId, sink);
+                            supervisorAgent.answerDirectStream(composed, userId, sink, cancellation);
                     logElapsed(intent, routeStart, false);
                     return new StreamRouteResult(result.answer(), result.totalTokens(), false, true);
                 }
                 default -> {
-                    // 规划/精调：阻塞式 Supervisor（B1 分块流，B2 图级流式专项）
-                    RouteResult blocking = route(intent, composed, userId, sessionHits);
+                    // M6-18：图级流式开关（默认关；开启前需 golden 验证），失败自动降级阻塞
+                    if (chatStreamProps.isPlanningGraphStreamEnabled()) {
+                        // M6-38：用户停止（SSE abort）会让图流线程收到 InterruptedException——
+                        // 此时必须终止，不得降级阻塞再启动一轮完整 LLM 规划
+                        try {
+                            TravelSupervisorAgent.StreamPlanningResult r =
+                                    supervisorAgent.streamPlanningWithUsage(
+                                            composed, userId, think, sink, cancellation);
+                            logElapsed(intent, routeStart, r.fallback());
+                            return new StreamRouteResult(r.answer(), r.totalTokens(),
+                                    r.fallback(), true);
+                        }
+                        catch (InterruptedException e) {
+                            Thread.currentThread().interrupt();
+                            throw new TurnInterruptedException("轮次已中断");
+                        } catch (TurnInterruptedException e) {
+                            // M6-46：中断终止必须上抛——不得被内层 catch(Exception)
+                            // 吞掉后误走"降级阻塞"（M6-38 语义；blockUntilDone 现直接
+                            // 抛 TurnInterruptedException，此分支覆盖运行态）
+                            throw e;
+                        } catch (Exception e) {
+                            log.warn("[ChatRouting][graph-stream] 图流失败，降级阻塞: {}",
+                                    e.getMessage());
+                        }
+                    }
+                    // 规划/精调：阻塞式 Supervisor（B1 分块流）
+                    RouteResult blocking = route(intent, composed, userId, sessionHits, cancellation);
                     logElapsed(intent, routeStart, blocking.fallback());
                     return new StreamRouteResult(blocking.response(), blocking.aiTokens(),
                             blocking.fallback(), false);
                 }
             }
+        } catch (java.util.concurrent.CancellationException e) {
+            Thread.currentThread().interrupt();
+            throw new TurnInterruptedException("轮次已中断");
+        } catch (TurnInterruptedException e) {
+            // 中断终止必须向上传递（failTurn + 不落库），不得转为兜底文案
+            throw e;
         } catch (Exception e) {
             log.error("Agent 流式调用失败", e);
             return new StreamRouteResult("抱歉，处理您的请求时出现错误，请稍后重试。", 0, true, false);

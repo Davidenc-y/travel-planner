@@ -31,6 +31,8 @@ public class ChatMessageIdem implements Serializable {
     public static final String STATUS_COMPLETED = "COMPLETED";
     /** 状态：失败（路由兜底文案；同键重试重新执行，不重放兜底） */
     public static final String STATUS_FAILED = "FAILED";
+    /** M6-40：状态：用户中断（可恢复：同键重试从断点续跑） */
+    public static final String STATUS_INTERRUPTED = "INTERRUPTED";
 
     /** 客户端生成的幂等键（UUID），主键 */
     @TableId(type = IdType.INPUT)

@@ -159,29 +159,34 @@ public class TravelWorkflowBuilder {
         // 断点在 route/budget/optimize 时退化为直边（resume 模式的行为差异，见 M4-8 记录）
         boolean hasRetry = hasAttraction;
 
-        // 节点定义 — agent.asNode(true, false) 框架标准用法 + M4-8 快照包装
+        // 节点定义 — agent.asNode(true, false) 框架标准用法 + M6-51 快照状态节点
         //   includeContents=true:  传递父图 messages 给子 Agent（对话历史携带上下文）
         //   returnReasoningContents=false: 仅返回最终输出，不返回推理过程
-        //   SnapshotNodeWrapper: 执行后异步落业务 JSON 快照（透传输出，行为不变）
+        //   AgentSubGraphNode 的 action 输出为 Flux 旁路流（无法归一化），
+        //   真实产物在执行后 state 中——由 agent 节点后的快照状态节点读取落库
         if (full) {
             workflow.addNode("user_input", AsyncNodeAction.node_async(new UserInputNode()));
             workflow.addNode("rag_retrieval", AsyncNodeAction.node_async(new RagRetrievalNode()));
         }
         if (hasPreference) {
-            workflow.addNode("preference_analysis", SnapshotNodeWrapper.wrap("preference_analysis",
-                    prefAgent.getAgent().asNode(true, false), snapshotPort));
+            workflow.addNode("preference_analysis", prefAgent.getAgent().asNode(true, false));
+            workflow.addNode("snapshot_preference",
+                    SnapshotStateNode.action("preference_analysis", "preference", snapshotPort));
         }
         if (hasAttraction) {
-            workflow.addNode("attraction_filter", SnapshotNodeWrapper.wrap("attraction_filter",
-                    attrAgent.getAgent().asNode(true, false), snapshotPort));
+            workflow.addNode("attraction_filter", attrAgent.getAgent().asNode(true, false));
+            workflow.addNode("snapshot_attraction",
+                    SnapshotStateNode.action("attraction_filter", "attractions", snapshotPort));
         }
         if (hasRoute) {
-            workflow.addNode("route_arrangement", SnapshotNodeWrapper.wrap("route_arrangement",
-                    routeAgent.getAgent().asNode(true, false), snapshotPort));
+            workflow.addNode("route_arrangement", routeAgent.getAgent().asNode(true, false));
+            workflow.addNode("snapshot_route",
+                    SnapshotStateNode.action("route_arrangement", "routePlan", snapshotPort));
         }
         if (hasBudget) {
-            workflow.addNode("budget_estimation", SnapshotNodeWrapper.wrap("budget_estimation",
-                    budgetAgent.getAgent().asNode(true, false), snapshotPort));
+            workflow.addNode("budget_estimation", budgetAgent.getAgent().asNode(true, false));
+            workflow.addNode("snapshot_budget",
+                    SnapshotStateNode.action("budget_estimation", "budgetEstimate", snapshotPort));
         }
         if (hasRetry) {
             workflow.addNode("budget_retry", AsyncNodeAction.node_async(new RetryCounterNode()));
@@ -202,21 +207,27 @@ public class TravelWorkflowBuilder {
             workflow.addEdge("rag_retrieval", "preference_analysis");
         }
         if (hasPreference) {
-            workflow.addEdge("preference_analysis", "attraction_filter");
+            workflow.addEdge("preference_analysis", "snapshot_preference");
+            workflow.addEdge("snapshot_preference", "attraction_filter");
         }
         if (hasAttraction && hasRoute) {
-            workflow.addEdge("attraction_filter", "route_arrangement");
+            workflow.addEdge("attraction_filter", "snapshot_attraction");
+            workflow.addEdge("snapshot_attraction", "route_arrangement");
         }
         if (hasRoute && hasBudget) {
-            workflow.addEdge("route_arrangement", "budget_estimation");
+            workflow.addEdge("route_arrangement", "snapshot_route");
+            workflow.addEdge("snapshot_route", "budget_estimation");
         }
 
         if (hasBudget) {
+            // M6-51 二轮补边：agent 节点 → 快照状态节点（此前遗漏，导致
+            // budget_estimation 无出边 → GraphRunnerException: edge ... doesn't exist）
+            workflow.addEdge("budget_estimation", "snapshot_budget");
             // 条件边：预算超支（>1.2倍）且 retry<MAX_RETRY → budget_retry 递增后回退
             // attraction_filter 重新筛选（F23：回退必须经过计数节点防死循环）
             if (hasRetry) {
                 workflow.addConditionalEdges(
-                        "budget_estimation",
+                        "snapshot_budget",
                         AsyncEdgeAction.edge_async(state -> {
                             int retryCount = readRetryCount(state);
                             double estimatedCost = extractTotalCost(toText(state.value("budgetEstimate")));
@@ -236,20 +247,23 @@ public class TravelWorkflowBuilder {
                 workflow.addEdge("budget_retry", "attraction_filter");
             } else {
                 // M4-8：断点子图不含 attraction_filter → 超支也不回退（快照兜底语义）
-                workflow.addEdge("budget_estimation", "itinerary_optimize");
+                workflow.addEdge("snapshot_budget", "itinerary_optimize");
             }
         }
         workflow.addEdge("itinerary_optimize", "mindmap_output");
         workflow.addEdge("mindmap_output", END);
 
-        int nodeCount = 2 + (full ? 2 : 0) + (hasPreference ? 1 : 0) + (hasAttraction ? 1 : 0)
-                + (hasRoute ? 1 : 0) + (hasBudget ? 1 : 0) + (hasRetry ? 1 : 0);
-        log.info("TravelWorkflow 构建完成: {} 节点, resumeFrom={}（快照包装×{}）",
+        int nodeCount = 2 + (full ? 2 : 0)
+                + (hasPreference ? 2 : 0) + (hasAttraction ? 2 : 0)
+                + (hasRoute ? 2 : 0) + (hasBudget ? 2 : 0) + (hasRetry ? 1 : 0);
+        log.info("TravelWorkflow 构建完成: {} 节点, resumeFrom={}（快照状态节点×{}）",
                 nodeCount, resumeFrom,
                 (hasPreference ? 1 : 0) + (hasAttraction ? 1 : 0) + (hasRoute ? 1 : 0) + (hasBudget ? 1 : 0));
-        // recursionLimit=20：正常路径（含 2 次预算重试）约 14 次节点执行，
-        // 20 次为硬性循环上限，作为防死循环兜底（默认值 100 在 LLM 调用下耗时过长）
-        return workflow.compile(CompileConfig.builder().recursionLimit(20).build());
+        // recursionLimit=30：M6-51 增加 4 个快照状态节点后，full 图正常路径 13 次
+        // 节点执行；预算超支重试每次额外 7 次（budget_retry→attraction→snapshot→
+        // route→snapshot→budget→snapshot→条件），2 次重试最多 27 次——30 为含余量的
+        // 硬性循环上限（默认值 100 在 LLM 调用下耗时过长）
+        return workflow.compile(CompileConfig.builder().recursionLimit(30).build());
     }
 
     // ==================== 工具方法 ====================

@@ -20,6 +20,12 @@ export interface StreamDonePayload {
   tokens?: number;
   sessionTitle?: string;
   replayed?: boolean;
+  // M6-16：行程流式 done（/itineraries/generate/stream）
+  itineraryId?: number;
+  status?: string;
+  destination?: string;
+  days?: number;
+  estimatedCost?: number;
 }
 
 export interface StreamErrorPayload {

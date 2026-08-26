@@ -17,6 +17,9 @@ import { consumeSseStream, type SseStreamHandlers } from './sse';
 
 const PLANNING_BASE = process.env.NEXT_PUBLIC_API_PLANNING || 'http://localhost:8081';
 const KNOWLEDGE_BASE = process.env.NEXT_PUBLIC_API_KNOWLEDGE || 'http://localhost:8082';
+// M6-34：聊天 SSE 灰度切换——NEXT_PUBLIC_STREAM_BASE 指向 WebFlux(8083) 时聊天流走
+// 响应式传输层，其余会话/消息 JSON API 仍走 planning(8081)；未配置时回退 PLANNING_BASE
+const STREAM_BASE = process.env.NEXT_PUBLIC_STREAM_BASE || PLANNING_BASE;
 
 // ==================== 认证辅助（F87） ====================
 
@@ -161,6 +164,27 @@ export const userApi = {
 export const itineraryApi = {
   generate: (data: import('@/types').ItineraryGenerateRequest) =>
     planningApi.post<R<import('@/types').ItineraryResponse>>('/api/v1/itineraries/generate', data),
+  /** M6-16：行程流式生成（SSE）——失败由调用方回退 JSON generate */
+  generateStream: (
+    data: import('@/types').ItineraryGenerateRequest,
+    signal: AbortSignal,
+    handlers: SseStreamHandlers,
+  ) => {
+    const headers: Record<string, string> = {};
+    if (typeof window !== 'undefined') {
+      const token = localStorage.getItem('accessToken');
+      if (token) headers.Authorization = `Bearer ${token}`;
+      const userId = localStorage.getItem('userId');
+      if (userId) headers['X-User-Id'] = userId;
+    }
+    return consumeSseStream(
+      `${PLANNING_BASE}/api/v1/itineraries/generate/stream`,
+      { ...data },
+      headers,
+      signal,
+      handlers,
+    );
+  },
   getById: (id: number) =>
     planningApi.get<R<import('@/types').ItineraryResponse>>(`/api/v1/itineraries/${id}`),
   list: (userId: number, page = 1, size = 10) =>
@@ -189,6 +213,20 @@ export const chatApi = {
   /** M5-1：更新会话标题（双击编辑保存） */
   updateTitle: (sessionId: string, title: string) =>
     planningApi.put<R<void>>(`/api/v1/chat/sessions/${sessionId}/title`, { title }),
+  /** M6-36：中断在途轮次（PENDING → FAILED + Redis 中断标记） */
+  interruptTurn: (sessionId: string, clientMessageId: string) =>
+    planningApi.post<R<void>>(`/api/v1/chat/sessions/${sessionId}/turns/${clientMessageId}/interrupt`),
+  /** M6-36：清除断点（用户发新消息时调用；后端 prepareStream 另有双保险） */
+  clearBreakpoint: (sessionId: string, clientMessageId: string) =>
+    planningApi.delete<R<void>>(`/api/v1/chat/sessions/${sessionId}/turns/${clientMessageId}/breakpoint`),
+  /** M6-42：查询轮次状态（刷新后校验本地中断记录是否仍可恢复重试） */
+  getTurnStatus: (sessionId: string, clientMessageId: string) =>
+    planningApi.get<R<import('@/types').TurnStatus>>(
+      `/api/v1/chat/sessions/${sessionId}/turns/${clientMessageId}`),
+  /** M6-47：查询会话最近可恢复中断轮次（浏览器刷新后恢复重试入口，不依赖本地 key） */
+  getLatestInterruptedTurn: (sessionId: string) =>
+    planningApi.get<R<import('@/types').LatestInterruptedTurn>>(
+      `/api/v1/chat/sessions/${sessionId}/interrupted-turn`),
   /** M6：流式发送（SSE）——POST /messages/stream，事件回调驱动思考气泡与流式文本 */
   sendMessageStream: (
     sessionId: string,
@@ -208,7 +246,7 @@ export const chatApi = {
     // P1：断线续传——携带最近收到的事件 id（仅 COMPLETED 重放生效）
     if (lastEventId) headers['Last-Event-ID'] = lastEventId;
     return consumeSseStream(
-      `${PLANNING_BASE}/api/v1/chat/sessions/${sessionId}/messages/stream`,
+      `${STREAM_BASE}/api/v1/chat/sessions/${sessionId}/messages/stream`,
       { message, clientMessageId },
       headers,
       signal,

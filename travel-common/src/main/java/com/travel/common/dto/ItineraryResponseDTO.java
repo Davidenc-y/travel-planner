@@ -31,6 +31,8 @@ public class ItineraryResponseDTO {
     private String generatedAt;
     /** M4-9：行程状态（GENERATING/FAILED/GENERATED/CONFIRMED/ARCHIVED，前端徽标用） */
     private String status;
+    /** M6-52：是否可继续生成（FAILED 或僵尸 GENERATING；非僵尸 GENERATING 为 false） */
+    private Boolean resumable;
 
     /**
      * 每日计划

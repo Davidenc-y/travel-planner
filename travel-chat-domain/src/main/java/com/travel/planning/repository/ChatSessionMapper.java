@@ -12,7 +12,15 @@ import java.util.List;
 @Mapper
 public interface ChatSessionMapper extends BaseMapper<ChatSession> {
 
-    @Select("SELECT * FROM t_chat_session WHERE user_id = #{userId} AND status = 'ACTIVE' ORDER BY created_at DESC")
+    /**
+     * M6-49：活跃会话按最后一条消息时间倒序（最近消息置顶）；无消息会话
+     * （last_message_at 为 NULL）排最后，同时间按创建时间倒序。
+     */
+    @Select("SELECT s.*, "
+            + "(SELECT MAX(m.created_at) FROM t_chat_message m WHERE m.session_id = s.session_id) AS last_message_at "
+            + "FROM t_chat_session s "
+            + "WHERE s.user_id = #{userId} AND s.status = 'ACTIVE' "
+            + "ORDER BY last_message_at DESC, s.created_at DESC")
     List<ChatSession> findActiveByUserId(Long userId);
 
     @Select("SELECT * FROM t_chat_session WHERE session_id = #{sessionId}")

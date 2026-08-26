@@ -19,8 +19,8 @@
         payload 映射；不依赖 travel-planning，供 MVC/未来 WebFlux 传输层复用</description>
 
     <dependencies>
-        <!-- 内部依赖：travel-common（含 travel-core；注意 travel-common 当前传递引入
-             spring-boot-starter-web，WebFlux 全量迁移前需先剥离，见 M6-6-R1） -->
+        <!-- 内部依赖：travel-common（含 travel-core；M6-11 已剥离 starter-web，
+             本模块保持无 Web 依赖，供 MVC/未来 WebFlux 传输层复用） -->
         <dependency>
             <groupId>com.travel.common</groupId>
             <artifactId>travel-common</artifactId>

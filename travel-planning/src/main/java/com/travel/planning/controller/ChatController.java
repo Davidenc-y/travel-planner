@@ -8,9 +8,10 @@ import com.travel.core.stream.StreamPreflight;
 import com.travel.core.stream.StreamRequest;
 import com.travel.planning.service.ChatStreamService;
 import com.travel.planning.service.ChatService;
+import com.travel.planning.service.TurnCancellationRegistry;
 import com.travel.planning.stream.ChatStreamProperties;
 import com.travel.planning.stream.StreamErrorMapper;
-import com.travel.planning.stream.SseStreamAdapter;
+import com.travel.webmvc.stream.SseStreamAdapter;
 import com.travel.planning.util.AuthUtils;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -37,6 +38,8 @@ public class ChatController {
     private final ChatStreamService chatStreamService;
     private final SseStreamAdapter sseStreamAdapter;
     private final ChatStreamProperties chatStreamProps;
+    // M6-40：SSE 断开/超时取消在途轮次
+    private final TurnCancellationRegistry cancellationRegistry;
 
     /**
      * 创建会话
@@ -135,7 +138,53 @@ public class ChatController {
         SseEmitter emitter = sseStreamAdapter.toEmitter(
                 chatStreamService.stream(request, preflight),
                 chatStreamProps.getTimeoutMs(),
-                chatStreamProps.getKeepaliveMs());
+                chatStreamProps.getKeepaliveMs(),
+                () -> cancellationRegistry.cancel(clientMessageId));
         return emitter;
+    }
+
+    /**
+     * M6-36：中断在途轮次（PENDING → FAILED + Redis 中断标记）。
+     */
+    @PostMapping("/sessions/{sessionId}/turns/{clientMessageId}/interrupt")
+    public R<Void> interruptTurn(@PathVariable String sessionId,
+                                 @PathVariable String clientMessageId,
+                                 @RequestHeader(value = "X-User-Id", required = false) Long userId) {
+        chatService.interruptTurn(AuthUtils.resolveUserId(userId), sessionId, clientMessageId);
+        return R.ok();
+    }
+
+    /**
+     * M6-36：清除断点（用户发新消息时调用；prepareStream 侧另有双保险）。
+     */
+    @DeleteMapping("/sessions/{sessionId}/turns/{clientMessageId}/breakpoint")
+    public R<Void> clearBreakpoint(@PathVariable String sessionId,
+                                   @PathVariable String clientMessageId,
+                                   @RequestHeader(value = "X-User-Id", required = false) Long userId) {
+        chatService.clearBreakpoint(AuthUtils.resolveUserId(userId), sessionId, clientMessageId);
+        return R.ok();
+    }
+
+    /**
+     * M6-42：查询轮次状态（前端刷新后恢复"执行已中断 + 重试"入口）。
+     */
+    @GetMapping("/sessions/{sessionId}/turns/{clientMessageId}")
+    public R<ChatService.TurnStatusResult> getTurnStatus(
+            @PathVariable String sessionId,
+            @PathVariable String clientMessageId,
+            @RequestHeader(value = "X-User-Id", required = false) Long userId) {
+        return R.ok(chatService.getTurnStatus(
+                AuthUtils.resolveUserId(userId), sessionId, clientMessageId));
+    }
+
+    /**
+     * M6-47：查询会话最近可恢复中断轮次（浏览器刷新/重进会话恢复重试入口）。
+     */
+    @GetMapping("/sessions/{sessionId}/interrupted-turn")
+    public R<ChatService.LatestInterruptedTurn> getLatestInterruptedTurn(
+            @PathVariable String sessionId,
+            @RequestHeader(value = "X-User-Id", required = false) Long userId) {
+        return R.ok(chatService.getLatestInterruptedTurn(
+                AuthUtils.resolveUserId(userId), sessionId));
     }
 }

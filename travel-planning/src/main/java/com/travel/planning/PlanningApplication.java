@@ -16,7 +16,8 @@ import org.springframework.scheduling.annotation.EnableScheduling;
  * @version 1.0-SNAPSHOT
  * @since 2026-07-28
  */
-@SpringBootApplication(scanBasePackages = {"com.travel.planning", "com.travel.common"})
+@SpringBootApplication(scanBasePackages = {
+        "com.travel.planning", "com.travel.common", "com.travel.webmvc"})
 @EnableFeignClients(basePackages = "com.travel.planning.client")
 @EnableScheduling
 public class PlanningApplication {

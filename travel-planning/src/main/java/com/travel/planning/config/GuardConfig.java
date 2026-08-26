@@ -1,17 +1,15 @@
 package com.travel.planning.config;
 
 import com.travel.common.guard.RateLimitInterceptor;
-import com.travel.core.guard.CircuitBreaker;
 import com.travel.core.guard.RateLimiter;
-import com.travel.planning.guard.GuardProperties;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
 /**
- * 安全防护装配（F90/F91）：RateLimiter（消费 travel.rate-limit.per-minute 休眠配置）、
- * 限流拦截器、熔断注册表、注入规则关键词刷新。
+ * MVC 侧防护装配（F90/F91）：RateLimiter + 限流拦截器。
+ * 熔断注册表已下沉领域侧 {@code GuardDomainConfig}（M6-31），避免领域依赖 MVC。
  */
 @Configuration
 @RequiredArgsConstructor
@@ -29,11 +27,4 @@ public class GuardConfig {
     public RateLimitInterceptor rateLimitInterceptor(RateLimiter rateLimiter) {
         return new RateLimitInterceptor(rateLimiter);
     }
-
-    @Bean
-    public CircuitBreaker.Registry circuitBreakerRegistry(GuardProperties properties) {
-        GuardProperties.CircuitBreaker cb = properties.getCircuitBreaker();
-        return new CircuitBreaker.Registry(cb.getFailureThreshold(), cb.getWindowMs(), cb.getOpenTimeoutMs());
-    }
-
 }
