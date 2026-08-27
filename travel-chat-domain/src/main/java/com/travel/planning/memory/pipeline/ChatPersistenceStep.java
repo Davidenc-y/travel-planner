@@ -29,6 +29,17 @@ import java.util.List;
  * 检查点前移到 appendUserMessage 之前——用户消息落库与 PENDING 登记同事务，
  * 杜绝"超时重试重复追加用户消息"（M4-0-R1 评审 D3-1）。不带幂等键的请求
  * 走原路径（灰度双轨）。</p>
+ *
+ * <p>M6-55/T2：轮次状态转移表（事件 × 当前态 → 目标态，回归基准）：</p>
+ * <pre>
+ * 事件 \ 当前态      PENDING     INTERRUPTED  FAILED      COMPLETED
+ * 用户停止          INTERRUPTED -           -          -
+ * 新消息终止在途     FAILED      -           -          -
+ * 同键重试（有断点） -           PENDING(跳3~7) PENDING(跳3~7) 重放
+ * 同键重试（无断点） -           PENDING(全量)  PENDING(全量) 重放
+ * 正常完成          COMPLETED   -           -          -
+ * 异常/兜底         FAILED      -           -          -
+ * </pre>
  */
 @Slf4j
 @Component

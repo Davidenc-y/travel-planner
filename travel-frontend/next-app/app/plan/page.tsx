@@ -13,6 +13,7 @@ import { generateUUID } from '@/lib/utils';
 import { buildItineraryUrl } from '@/lib/url-guard';
 import { PagedMultiSelect, PagedSingleSelect } from '@/components/ui/paged-options';
 import { FormShell } from '@/components/ui/form-shell';
+import { DestinationAutocomplete } from '@/components/plan/DestinationAutocomplete';
 
 const schema = z.object({
   destination: z.string().min(1, '目的地不能为空'),
@@ -42,7 +43,7 @@ function PlanPageContent() {
 
   useEffect(() => () => streamAbortRef.current?.abort(), []);
 
-  const { register, handleSubmit, setValue, getValues, formState: { errors } } = useForm<FormData>({
+  const { register, handleSubmit, setValue, getValues, watch, formState: { errors } } = useForm<FormData>({
     resolver: zodResolver(schema),
     defaultValues: { days: 3 },
   });
@@ -173,10 +174,11 @@ function PlanPageContent() {
           <label className="flex items-center gap-2 text-sm font-medium mb-1.5">
             <MapPin className="h-4 w-4 text-brand-500" /> 目的地
           </label>
-          <input
-            {...register('destination')}
+          {/* M7-1：目的地输入 + 城市模糊匹配自动补全（可自由输入，选中回填城市名） */}
+          <DestinationAutocomplete
+            value={watch('destination') ?? ''}
+            onChange={(v) => setValue('destination', v, { shouldValidate: true })}
             placeholder="例如：北京"
-            className="w-full px-4 py-2.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-transparent focus:ring-2 focus:ring-brand-500 focus:border-transparent outline-none transition-all"
           />
           {errors.destination && <p className="text-red-500 text-xs mt-1">{errors.destination.message}</p>}
         </div>

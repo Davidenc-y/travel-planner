@@ -138,11 +138,7 @@ public class ChatService implements ChatStreamExecutor {
         // F90：调用前安全防护（Prompt 注入检测）→ MessagePipeline 步骤 1
         chatGuardStep.check(userId, message);
         // M3-11：步骤 2 持久化（会话校验 + 用户消息落库）
-        ChatSession session = chatPersistenceStep.requireSession(sessionId);
-        // M4-3/H-2：会话归属校验（越权访问他人会话）
-        if (!userId.equals(session.getUserId())) {
-            throw new BusinessException(40302, "无权访问该会话");
-        }
+        ChatSession session = requireOwnedSession(userId, sessionId);
         // M4-3：幂等门禁（在用户消息落库之前；未命中时用户消息已在门禁事务内追加）
         TurnGate gate = chatPersistenceStep.beginTurn(
                 sessionId, userId, clientMessageId, message);
@@ -197,13 +193,7 @@ public class ChatService implements ChatStreamExecutor {
      * 重试将按 FAILED 语义整体重跑。</p>
      */
     public void interruptTurn(Long userId, String sessionId, String clientMessageId) {
-        if (userId == null || userId <= 0) {
-            throw new BusinessException(40101, "用户未登录");
-        }
-        ChatSession session = chatPersistenceStep.requireSession(sessionId);
-        if (!userId.equals(session.getUserId())) {
-            throw new BusinessException(40302, "无权访问该会话");
-        }
+        ChatSession session = requireOwnedSession(userId, sessionId);
         if (clientMessageId == null || clientMessageId.isBlank()) {
             throw new BusinessException(40001, "幂等键不能为空");
         }
@@ -220,13 +210,7 @@ public class ChatService implements ChatStreamExecutor {
      * M6-36：清除断点（用户发新消息时前端调用；prepareStream 侧另有双保险）。
      */
     public void clearBreakpoint(Long userId, String sessionId, String clientMessageId) {
-        if (userId == null || userId <= 0) {
-            throw new BusinessException(40101, "用户未登录");
-        }
-        ChatSession session = chatPersistenceStep.requireSession(sessionId);
-        if (!userId.equals(session.getUserId())) {
-            throw new BusinessException(40302, "无权访问该会话");
-        }
+        ChatSession session = requireOwnedSession(userId, sessionId);
         breakpointStore.clearBreakpoint(sessionId, clientMessageId);
         cancellationRegistry.cancel(clientMessageId);
         cancellationBroadcaster.publishCancel(sessionId, clientMessageId);
@@ -240,13 +224,7 @@ public class ChatService implements ChatStreamExecutor {
      * 新消息已把旧轮次置 FAILED，故返回 FAILED 时前端不显示重试。</p>
      */
     public TurnStatusResult getTurnStatus(Long userId, String sessionId, String clientMessageId) {
-        if (userId == null || userId <= 0) {
-            throw new BusinessException(40101, "用户未登录");
-        }
-        ChatSession session = chatPersistenceStep.requireSession(sessionId);
-        if (!userId.equals(session.getUserId())) {
-            throw new BusinessException(40302, "无权访问该会话");
-        }
+        ChatSession session = requireOwnedSession(userId, sessionId);
         if (clientMessageId == null || clientMessageId.isBlank()) {
             throw new BusinessException(40001, "幂等键不能为空");
         }
@@ -280,13 +258,7 @@ public class ChatService implements ChatStreamExecutor {
      * 权威查询，前端进入会话时直接获取。</p>
      */
     public LatestInterruptedTurn getLatestInterruptedTurn(Long userId, String sessionId) {
-        if (userId == null || userId <= 0) {
-            throw new BusinessException(40101, "用户未登录");
-        }
-        ChatSession session = chatPersistenceStep.requireSession(sessionId);
-        if (!userId.equals(session.getUserId())) {
-            throw new BusinessException(40302, "无权访问该会话");
-        }
+        ChatSession session = requireOwnedSession(userId, sessionId);
         ChatMessageIdem row = chatPersistenceStep.findLatestInterrupted(sessionId);
         if (row == null) {
             return new LatestInterruptedTurn(null, null, false);
@@ -494,13 +466,7 @@ public class ChatService implements ChatStreamExecutor {
      * M5-1：更新会话标题（前端双击编辑；归档会话也可改标题——只读历史仍展示）。
      */
     public void updateTitle(Long userId, String sessionId, String title) {
-        if (userId == null || userId <= 0) {
-            throw new BusinessException(40101, "用户未登录");
-        }
-        ChatSession session = chatPersistenceStep.requireSession(sessionId);
-        if (!userId.equals(session.getUserId())) {
-            throw new BusinessException(40302, "无权访问该会话");
-        }
+        ChatSession session = requireOwnedSession(userId, sessionId);
         String normalized = title == null ? "" : title.trim();
         if (normalized.isEmpty()) {
             throw new BusinessException(40001, "会话标题不能为空");
@@ -541,13 +507,7 @@ public class ChatService implements ChatStreamExecutor {
      * history 查询不受归档影响（只读）。</p>
      */
     public CloseSessionResult closeSession(Long userId, String sessionId) {
-        if (userId == null || userId <= 0) {
-            throw new BusinessException(40101, "用户未登录");
-        }
-        ChatSession session = chatPersistenceStep.requireSession(sessionId);
-        if (!userId.equals(session.getUserId())) {
-            throw new BusinessException(40302, "无权访问该会话");
-        }
+        ChatSession session = requireOwnedSession(userId, sessionId);
         if ("ARCHIVED".equals(session.getStatus())) {
             return new CloseSessionResult(true, session.getSummaryFinal() != null);
         }
@@ -562,5 +522,19 @@ public class ChatService implements ChatStreamExecutor {
         }
         boolean finalized = sessionFinalizer.finalizeSession(sessionId);
         return new CloseSessionResult(true, finalized);
+    }
+
+    /**
+     * M6-56/T4：会话存在 + 归属校验收敛（40101 / 40404 / 40302）。
+     */
+    private ChatSession requireOwnedSession(Long userId, String sessionId) {
+        if (userId == null || userId <= 0) {
+            throw new BusinessException(40101, "用户未登录");
+        }
+        ChatSession session = chatPersistenceStep.requireSession(sessionId);
+        if (!userId.equals(session.getUserId())) {
+            throw new BusinessException(40302, "无权访问该会话");
+        }
+        return session;
     }
 }

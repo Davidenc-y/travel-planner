@@ -6,10 +6,15 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.stereotype.Service;
 
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.util.Collections;
+import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+
+import static com.travel.common.util.AgentOutputUtils.containsAny;
 
 /**
  * 对话入口意图分类器（F85 第二步）。
@@ -52,7 +57,10 @@ public class ChatIntentClassifier {
         if (!properties.isEnabled()) {
             return ChatIntent.PLANNING;
         }
-        ChatIntent cached = cache.get(q);
+        // M6-56/T6：缓存键哈希化——避免明文原文常驻内存（隐私面收窄）；
+        // SHA-256 碰撞可忽略，哈希化不影响规则/LLM 判定本身
+        String cacheKey = cacheKey(q);
+        ChatIntent cached = cache.get(cacheKey);
         if (cached != null) {
             return cached;
         }
@@ -66,9 +74,19 @@ public class ChatIntentClassifier {
             result = ChatIntent.PLANNING;
         }
         if (properties.getCacheSize() > 0) {
-            cache.put(q, result);
+            cache.put(cacheKey, result);
         }
         return result;
+    }
+
+    private static String cacheKey(String q) {
+        try {
+            MessageDigest md = MessageDigest.getInstance("SHA-256");
+            byte[] digest = md.digest(q.getBytes(StandardCharsets.UTF_8));
+            return HexFormat.of().formatHex(digest);
+        } catch (Exception e) {
+            return q; // 防御回退（不影响正确性，仅隐私面不变）
+        }
     }
 
     /**
@@ -122,10 +140,6 @@ public class ChatIntentClassifier {
             log.warn("[ChatIntent] LLM 判定失败，回退: {}", e.getMessage());
             return null;
         }
-    }
-
-    private static boolean containsAny(String text, String... tokens) {
-        return com.travel.common.util.AgentOutputUtils.containsAny(text, tokens);
     }
 
     /** 从 LLM 响应中提取 JSON（容忍 ```json 代码块与前后噪声） */

@@ -51,13 +51,12 @@ public class ChatStreamWebfluxController {
     public Flux<ServerSentEvent<String>> stream(
             @PathVariable String sessionId,
             @RequestBody Map<String, String> body,
-            @RequestHeader(value = "X-User-Id", required = false) Long userIdHeader,
             @RequestHeader(value = "Last-Event-ID", required = false) String lastEventId,
             ServerWebExchange exchange) {
         if (!props.isEnabled()) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "流式端点未启用");
         }
-        Long userId = resolveUserId(exchange, userIdHeader);
+        Long userId = resolveUserId(exchange);
         String message = body.get("message");
         String clientMessageId = body.get("clientMessageId");
         StreamRequest request = new StreamRequest("chat", userId, sessionId,
@@ -84,13 +83,16 @@ public class ChatStreamWebfluxController {
                 });
     }
 
-    private Long resolveUserId(ServerWebExchange exchange, Long userIdHeader) {
+    /**
+     * M6-56/T8：WebFlux 端点仅接受 JWT（ReactiveJwtAuthFilter 注入）——
+     * 移除 X-User-Id 头回退，杜绝伪造头绕过鉴权（与旧 P0-4 同型风险）。
+     * 前端灰度路径（NEXT_PUBLIC_STREAM_BASE=8083）的 SSE 请求已携带
+     * Authorization: Bearer（api.ts sendMessageStream 实证）。
+     */
+    private Long resolveUserId(ServerWebExchange exchange) {
         Object attr = exchange.getAttributes().get(ReactiveJwtAuthFilter.ATTR_USER_ID);
         if (attr instanceof Long id && id > 0) {
             return id;
-        }
-        if (userIdHeader != null && userIdHeader > 0) {
-            return userIdHeader;
         }
         throw new BusinessException(40101, "用户未登录");
     }

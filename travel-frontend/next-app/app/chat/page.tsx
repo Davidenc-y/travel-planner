@@ -1,62 +1,45 @@
 'use client';
 
-import { useEffect, useState, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
-import { Loader2, Send, Plus, MessageSquare, Archive, Copy, ArrowDown, Square, RotateCcw } from 'lucide-react';
+import { ArrowDown, MessageSquare, Send, Square } from 'lucide-react';
 import { chatApi, getErrorMessage } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
-import type { ChatMessage, ChatResponse, ChatSession } from '@/types';
-import { cn } from '@/lib/utils';
-import { ChatMessageContent } from '@/components/feature/chat-message-content';
+import type { ChatMessage, ChatResponse } from '@/types';
 import { Skeleton } from '@/components/ui/skeleton';
-import { takePrefetch } from '@/lib/prefetch';
-
-// M6-5：逐字揭示节奏——后端可能一次性爆发式发送全部分块，
-// 前端按固定节奏消费待展示队列，保证“逐字直到完全展示”。
-const REVEAL_INTERVAL_MS = 24;
-const REVEAL_CHARS_PER_TICK = 3;
-const REVEAL_WAIT_TIMEOUT_MS = 120_000;
-
-// M6-36：消息时间戳（同日 HH:mm，跨日 MM-DD HH:mm；本地兜底当前时间）
-function formatMessageTime(iso?: string): string {
-  const d = iso ? new Date(iso) : new Date();
-  if (Number.isNaN(d.getTime())) return '';
-  const now = new Date();
-  const pad = (n: number) => String(n).padStart(2, '0');
-  const hm = `${pad(d.getHours())}:${pad(d.getMinutes())}`;
-  const sameDay = d.getFullYear() === now.getFullYear()
-    && d.getMonth() === now.getMonth()
-    && d.getDate() === now.getDate();
-  return sameDay ? hm : `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${hm}`;
-}
+import { SessionList } from '@/components/chat/SessionList';
+import {
+  InterruptedBubble,
+  MessageBubble,
+  StreamingBubble,
+  ThinkingBubble,
+} from '@/components/chat/MessageBubble';
+import { useChatStream } from '@/hooks/useChatStream';
+import { useSessionList } from '@/hooks/useSessionList';
 
 interface InterruptedTurn {
   clientMessageId: string;
   text: string;
 }
 
-// M6-48：单会话流式 UI 状态（切换会话不中断后端思考，各会话独立维护）
-interface StreamState {
-  phase: 'idle' | 'thinking' | 'streaming';
-  thinkingLines: string[];
-  streamingText: string;
-}
-
+/**
+ * M6-58/T10：聊天页布局编排。
+ *
+ * <p>会话列表/消息气泡纯展示组件在 components/chat（SessionList、MessageBubble）；
+ * SSE 流式与 reveal 队列在 hooks/useChatStream；会话 CRUD/置顶/标题在
+ * hooks/useSessionList。本文件仅保留跨域状态装配（消息、草稿、当前会话、
+ * 中断轮次、发送编排）与 M5-1/M6-47/M6-48 竞态防护。</p>
+ */
 function ChatContent() {
   const router = useRouter();
   const { userId, isAuthenticated } = useAuth();
-  const [sessions, setSessions] = useState<ChatSession[]>([]);
-  const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
   // M5-1：草稿按会话隔离（未选中会话时使用 '__new__'）
   const [drafts, setDrafts] = useState<Record<string, string>>({});
-  const [loading, setLoading] = useState(false);
   const [sending, setSending] = useState(false);
   const [creatingSession, setCreatingSession] = useState(false);
-  // M5-1：标题编辑态
-  const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
-  const [editingTitle, setEditingTitle] = useState('');
   // M5-1：滚动状态（回到底部按钮）
   const [isNearBottom, setIsNearBottom] = useState(true);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -65,32 +48,26 @@ function ChatContent() {
   const nearBottomRef = useRef(true);
   const creatingRef = useRef(false);
   const sendingRef = useRef(false);
-  const titleInputRef = useRef<HTMLInputElement>(null);
-  const titleSavingRef = useRef(false);
   // M5-1：历史请求竞态防护——切会话/新建会话后，过期历史响应不得覆盖当前消息
   const historySidRef = useRef<string | null>(null);
   const currentSessionRef = useRef<string | null>(null);
-  // M5-1：Esc 取消编辑后，输入框卸载触发的 onBlur 不得误保存
-  const cancelEditRef = useRef(false);
-  // M6-48：流式状态按会话隔离（切会话不中断，切回仍显示思考/输出进度）
-  const [streamStates, setStreamStates] = useState<Record<string, StreamState>>({});
+  // M6-59：新建会话乐观消息保护——getHistory 空响应不得覆盖已显示的用户消息
+  const freshSessionRef = useRef<string | null>(null);
   // M6-48：后台会话完成回复 → 会话列表右侧红点提示（点进会话后清除）
   const [completedTurns, setCompletedTurns] = useState<Record<string, boolean>>({});
-  const streamAbortRef = useRef<AbortController | null>(null);
   // M6-36：每会话最多一个中断轮次（重试/新消息时清除）
   const [interruptedTurns, setInterruptedTurns] = useState<Record<string, InterruptedTurn>>({});
   const interruptedRef = useRef<Record<string, InterruptedTurn>>({});
   const activeTurnRef = useRef<{ sid: string; key: string; text: string } | null>(null);
   const stopRequestedRef = useRef(false);
-  // M6-50：首条消息发送中才真实创建的会话（完成后再拉取列表，避免提前出现）
-  const pendingNewSessionRef = useRef<string | null>(null);
-  // M6-5：待展示文本队列与揭示定时器
-  const pendingStreamRef = useRef('');
-  const revealTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const sessionList = useSessionList(userId ?? null);
+  const chatStream = useChatStream(() => currentSessionRef.current);
 
   const activeDraftKey = currentSessionId ?? '__new__';
   const input = drafts[activeDraftKey] ?? '';
-  const currentStreamState = currentSessionId ? streamStates[currentSessionId] : undefined;
+  const currentStreamState = currentSessionId
+    ? chatStream.streamStates[currentSessionId] : undefined;
 
   const setInterruptedMap = (
     updater: (prev: Record<string, InterruptedTurn>) => Record<string, InterruptedTurn>,
@@ -102,46 +79,6 @@ function ChatContent() {
     });
   };
 
-  const setStreamState = (
-    sid: string,
-    updater: (prev: StreamState) => StreamState,
-  ) => {
-    setStreamStates((prev) => ({
-      ...prev,
-      [sid]: updater(prev[sid] ?? { phase: 'idle', thinkingLines: [], streamingText: '' }),
-    }));
-  };
-
-  const clearStreamState = (sid: string) => {
-    setStreamStates((prev) => {
-      const next = { ...prev };
-      delete next[sid];
-      return next;
-    });
-  };
-
-  // M6-49：会话置顶（最后消息时间最新；配合后端排序，发送完成后即时生效）
-  const moveSessionToTop = (sid: string) => {
-    setSessions((prev) => {
-      const idx = prev.findIndex((s) => s.sessionId === sid);
-      if (idx <= 0) return prev;
-      const next = [...prev];
-      const [s] = next.splice(idx, 1);
-      return [s, ...next];
-    });
-  };
-
-  // M6-50：轮次完成后的会话列表收口——新建会话拉取权威列表（标题已由后端
-  // 首条消息联动生成）；既有会话仅置顶（避免多余请求）
-  const finalizeTurnSession = (sid: string) => {
-    if (pendingNewSessionRef.current === sid) {
-      pendingNewSessionRef.current = null;
-      loadSessions(true);
-    } else {
-      moveSessionToTop(sid);
-    }
-  };
-
   // M6-49：回复完成（成功/兜底）→ 当前会话直接追加，否则红点提示；并置顶会话
   const appendAssistantOrNotify = (sid: string, msg: ChatMessage) => {
     if (currentSessionRef.current === sid) {
@@ -149,7 +86,7 @@ function ChatContent() {
     } else {
       setCompletedTurns((prev) => ({ ...prev, [sid]: true }));
     }
-    finalizeTurnSession(sid);
+    sessionList.finalizeTurnSession(sid);
   };
 
   useEffect(() => {
@@ -157,10 +94,15 @@ function ChatContent() {
       router.replace('/');
       return;
     }
-    if (userId) loadSessions();
+    if (userId) sessionList.loadSessions();
   }, [userId, isAuthenticated]);
 
   useEffect(() => {
+    // M6-59：离开新建会话后其乐观消息保护失效（late 响应由 currentSessionRef 归属校验兜底）
+    if (currentSessionId && freshSessionRef.current
+      && freshSessionRef.current !== currentSessionId) {
+      freshSessionRef.current = null;
+    }
     if (currentSessionId) loadHistory(currentSessionId);
   }, [currentSessionId]);
 
@@ -187,24 +129,14 @@ function ChatContent() {
     }
   }, [messages, sending]);
 
-  // M5-1：标题编辑态聚焦
-  useEffect(() => {
-    if (editingSessionId) {
-      titleInputRef.current?.focus();
-      titleInputRef.current?.select();
-    }
-  }, [editingSessionId]);
-
   // M6-48：切换会话不再 abort 在途流（后端继续思考）——仅停止当前会话逐字揭示
   useEffect(() => {
-    stopReveal();
-    pendingStreamRef.current = '';
+    chatStream.stopRevealForSwitch();
   }, [currentSessionId]);
 
   // M6：组件卸载时取消在途流
   useEffect(() => () => {
-    streamAbortRef.current?.abort();
-    stopReveal();
+    chatStream.dispose();
   }, []);
 
   const updateNearBottom = () => {
@@ -215,91 +147,16 @@ function ChatContent() {
     setIsNearBottom(near);
   };
 
-  // M6-5：停止逐字揭示定时器
-  const stopReveal = () => {
-    if (revealTimerRef.current !== null) {
-      clearInterval(revealTimerRef.current);
-      revealTimerRef.current = null;
-    }
-  };
-
-  // M6-5：立即把剩余待展示文本全部渲染（reduced-motion / 收尾兜底）
-  const flushPendingStream = () => {
-    if (pendingStreamRef.current !== '') {
-      const rest = pendingStreamRef.current;
-      pendingStreamRef.current = '';
-      const sid = currentSessionRef.current;
-      if (sid) {
-        setStreamState(sid, (s) => ({ ...s, streamingText: s.streamingText + rest }));
-      }
-    }
-    stopReveal();
-  };
-
-  // M6-5：启动逐字揭示；reduced-motion 用户直接整体展示
-  const startReveal = () => {
-    if (revealTimerRef.current !== null) return;
-    if (typeof window !== 'undefined'
-      && window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
-      flushPendingStream();
-      return;
-    }
-    revealTimerRef.current = setInterval(() => {
-      if (pendingStreamRef.current === '') {
-        stopReveal();
-        return;
-      }
-      const chunk = pendingStreamRef.current.slice(0, REVEAL_CHARS_PER_TICK);
-      pendingStreamRef.current = pendingStreamRef.current.slice(REVEAL_CHARS_PER_TICK);
-      const sid = currentSessionRef.current;
-      if (sid) {
-        setStreamState(sid, (s) => ({ ...s, streamingText: s.streamingText + chunk }));
-      }
-    }, REVEAL_INTERVAL_MS);
-  };
-
-  // M6-5：等待待展示队列清空（done 后仍把剩余字符逐字展示完再收尾）
-  const waitForRevealComplete = (): Promise<void> =>
-    new Promise((resolve) => {
-      const started = Date.now();
-      const timer = setInterval(() => {
-        if (pendingStreamRef.current === '') {
-          clearInterval(timer);
-          stopReveal();
-          resolve();
-        } else if (Date.now() - started > REVEAL_WAIT_TIMEOUT_MS) {
-          clearInterval(timer);
-          flushPendingStream();
-          resolve();
-        }
-      }, 50);
-    });
-
-  const loadSessions = async (force = false) => {
-    // F102：命中预取缓存则直接展示；M5-1：会话变更后 force 绕过缓存强制刷新
-    if (!force) {
-      const cached = takePrefetch<ChatSession[]>('chat:sessions');
-      if (cached) {
-        setSessions(cached);
-        setLoading(false);
-        return;
-      }
-    }
-    try {
-      const res = await chatApi.listSessions(userId!);
-      setSessions(res.data.data || []);
-    } catch {
-      // ignore
-    } finally {
-      setLoading(false);
-    }
-  };
-
   const loadHistory = async (sid: string) => {
     historySidRef.current = sid;
     try {
       const res = await chatApi.getHistory(sid);
       if (historySidRef.current !== sid || currentSessionRef.current !== sid) return;
+      // M6-59：新建会话已乐观显示用户消息——消费标记并跳过覆盖（响应被本次消费）
+      if (freshSessionRef.current === sid) {
+        freshSessionRef.current = null;
+        return;
+      }
       instantScrollRef.current = true;
       setMessages(res.data.data || []);
       // M6-47：刷新/切会话后恢复重试入口——浏览器刷新不会触发 handleStop
@@ -321,6 +178,11 @@ function ChatContent() {
         .catch(() => {});
     } catch {
       if (historySidRef.current !== sid || currentSessionRef.current !== sid) return;
+      // M6-59：新建会话历史加载失败也不得清空已乐观显示的消息
+      if (freshSessionRef.current === sid) {
+        freshSessionRef.current = null;
+        return;
+      }
       instantScrollRef.current = true;
       setMessages([]);
     }
@@ -375,84 +237,6 @@ function ChatContent() {
     throw new Error('发送超时，请稍后重试');
   };
 
-  /** M6：SSE 流式发送（40904 同键 3s 退避，最多 4 次；业务 error 事件同样重试） */
-  const sendStreamWithRetry = async (
-    sid: string,
-    text: string,
-    key: string,
-  ): Promise<{ text: string; sessionTitle?: string }> => {
-    const maxAttempts = 4;
-    let acc = '';
-    let lastId = '';
-    const doneState: { sessionTitle?: string } = {};
-    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
-      const controller = new AbortController();
-      streamAbortRef.current = controller;
-      try {
-        await chatApi.sendMessageStream(sid, text, key, controller.signal, {
-          onThinking: (p) => {
-            setStreamState(sid, (s) => ({
-              ...s,
-              phase: 'thinking',
-              thinkingLines: p.message && !s.thinkingLines.includes(p.message)
-                ? [...s.thinkingLines, p.message]
-                : s.thinkingLines,
-            }));
-          },
-          onToken: (p) => {
-            if (!p.text) return;
-            acc += p.text;
-            if (currentSessionRef.current === sid) {
-              // 当前可见会话：进待展示队列逐字揭示
-              pendingStreamRef.current += p.text;
-              setStreamState(sid, (s) => ({ ...s, phase: 'streaming' }));
-              startReveal();
-            } else {
-              // 后台会话：直接累积，切回时整体可见（不逐字揭示）
-              setStreamState(sid, (s) => ({
-                ...s,
-                phase: 'streaming',
-                streamingText: s.streamingText + p.text,
-              }));
-            }
-          },
-          onDone: (p) => {
-            doneState.sessionTitle = p.sessionTitle;
-          },
-          onId: (id) => {
-            lastId = id;
-          },
-          onError: (p) => {
-            const e: any = new Error(p.message || '流式处理失败');
-            e.code = p.code;
-            throw e;
-          },
-        }, lastId || undefined);
-        // M6-5：流结束不代表展示结束——等逐字揭示完成后才返回最终文本
-        await waitForRevealComplete();
-        return { text: acc, sessionTitle: doneState.sessionTitle };
-      } catch (err: any) {
-        if (err?.name === 'AbortError') throw err;
-        const code = err?.response?.data?.code ?? err?.code;
-        if (code === 40904 && attempt < maxAttempts - 1) {
-          await new Promise((r) => setTimeout(r, 3000));
-          continue;
-        }
-        // P1：中途断线（网络错误、无业务码）且已收到部分内容 → 同键 + Last-Event-ID 续传
-        if (!code && lastId && acc && attempt < maxAttempts - 1) {
-          await new Promise((r) => setTimeout(r, 1000));
-          continue;
-        }
-        throw err;
-      } finally {
-        if (streamAbortRef.current === controller) {
-          streamAbortRef.current = null;
-        }
-      }
-    }
-    throw new Error('发送超时，请稍后重试');
-  };
-
   const handleSend = async (retrySid?: string, retryText?: string, retryKey?: string) => {
     const isRetry = retrySid != null;
     const text = isRetry ? retryText! : input.trim();
@@ -465,17 +249,16 @@ function ChatContent() {
       creatingRef.current = true;
       setCreatingSession(true);
       try {
-        const res = await chatApi.createSession(userId!);
-        sid = res.data.data;
-        // M6-50：标记为"首条消息中创建"——完成后再刷新列表，标题由后端联动生成
-        pendingNewSessionRef.current = sid;
+        sid = await sessionList.createSession(userId!);
+        if (!sid) return;
+        // M6-59：标记新建会话——本次发送的乐观消息优先，历史空响应不得覆盖
+        freshSessionRef.current = sid;
+        // M6-50/M6-60：标记为"首条消息中创建"——完成后再刷新权威列表（标题后端联动）；
+        // 会话已由 createSession 立即加入左侧列表，思考期间可切走再点回
         setCurrentSessionId(sid);
         setMessages([]);
         historySidRef.current = null;
         instantScrollRef.current = true;
-      } catch (err: any) {
-        toast.error('创建会话失败: ' + getErrorMessage(err));
-        return;
       } finally {
         creatingRef.current = false;
         setCreatingSession(false);
@@ -514,7 +297,7 @@ function ChatContent() {
     }
     sendingRef.current = true;
     setSending(true);
-    setStreamState(sid!, (s) => ({
+    chatStream.setStreamState(sid!, (s) => ({
       ...s,
       phase: 'thinking',
       thinkingLines: ['已收到，Agent 正在思考…'],
@@ -526,7 +309,7 @@ function ChatContent() {
     activeTurnRef.current = { sid: sid!, key: clientMessageId, text };
     try {
       // M6：优先 SSE 流式；失败自动回退 JSON 端点
-      const streamed = await sendStreamWithRetry(sid!, text, clientMessageId);
+      const streamed = await chatStream.sendStreamWithRetry(sid!, text, clientMessageId);
       const aiMsg: ChatMessage = {
         sessionId: sid!,
         role: 'assistant',
@@ -535,8 +318,7 @@ function ChatContent() {
       };
       appendAssistantOrNotify(sid!, aiMsg);
       if (streamed.sessionTitle) {
-        setSessions((prev) => prev.map((s) =>
-          s.sessionId === sid ? { ...s, title: streamed.sessionTitle! } : s));
+        sessionList.updateSessionTitle(sid!, streamed.sessionTitle);
       }
     } catch (err: any) {
       if (err?.name === 'AbortError') return; // 主动取消（切换会话/卸载）
@@ -559,8 +341,7 @@ function ChatContent() {
           };
           appendAssistantOrNotify(sid!, aiMsg);
           if (data.sessionTitle) {
-            setSessions((prev) => prev.map((s) =>
-              s.sessionId === sid ? { ...s, title: data.sessionTitle! } : s));
+            sessionList.updateSessionTitle(sid!, data.sessionTitle);
           }
         } catch (jsonErr: any) {
           toast.error('发送失败: ' + getErrorMessage(jsonErr));
@@ -575,10 +356,7 @@ function ChatContent() {
     } finally {
       sendingRef.current = false;
       setSending(false);
-      clearStreamState(sid!);
-      stopReveal();
-      pendingStreamRef.current = '';
-      streamAbortRef.current = null;
+      chatStream.clearStream(sid!);
       stopRequestedRef.current = false;
       activeTurnRef.current = null;
     }
@@ -590,8 +368,8 @@ function ChatContent() {
     const turn = activeTurnRef.current;
     if (!sid || !sendingRef.current || !turn) return;
     stopRequestedRef.current = true;
-    streamAbortRef.current?.abort();
-    clearStreamState(sid);
+    chatStream.abortStream();
+    chatStream.clearStreamState(sid);
     setInterruptedMap((prev) => ({
       ...prev,
       [sid]: { clientMessageId: turn.key, text: turn.text },
@@ -614,94 +392,31 @@ function ChatContent() {
 
   /** M4-9：显式结束会话（归档+收口摘要；不挂 beforeunload——刷新会误归档） */
   const handleCloseSession = async (sid: string) => {
-    if (!confirm('确定结束该会话？结束后将不再出现在列表中（历史仍可读）。')) return;
-    try {
-      await chatApi.closeSession(sid);
-      setDrafts((prev) => {
-        const next = { ...prev };
-        delete next[sid];
-        return next;
-      });
-      toast.success('会话已结束');
-      if (currentSessionId === sid) {
-        historySidRef.current = null;
-        setCurrentSessionId(null);
-        setMessages([]);
-      }
-      loadSessions(true);
-    } catch (err: any) {
-      toast.error('结束会话失败: ' + getErrorMessage(err));
+    const closed = await sessionList.closeSession(sid);
+    if (!closed) return;
+    setDrafts((prev) => {
+      const next = { ...prev };
+      delete next[sid];
+      return next;
+    });
+    if (currentSessionId === sid) {
+      historySidRef.current = null;
+      setCurrentSessionId(null);
+      setMessages([]);
     }
   };
 
-  // M5-1：双击编辑标题
-  const startEdit = (s: ChatSession) => {
-    cancelEditRef.current = false;
-    setEditingSessionId(s.sessionId);
-    setEditingTitle(s.title);
+  // M6-48：点进会话 → 红点消失
+  const handleSelectSession = (sid: string) => {
+    setCurrentSessionId(sid);
+    setCompletedTurns((prev) => {
+      const next = { ...prev };
+      delete next[sid];
+      return next;
+    });
   };
 
-  const cancelEdit = () => {
-    cancelEditRef.current = true;
-    setEditingSessionId(null);
-    setEditingTitle('');
-  };
-
-  const saveTitle = async (sid: string) => {
-    // Esc 取消后可能残留一次卸载 blur，消费并忽略
-    if (cancelEditRef.current) {
-      cancelEditRef.current = false;
-      return;
-    }
-    if (titleSavingRef.current) return;
-    const title = editingTitle.trim();
-    if (!title) {
-      toast.error('标题不能为空');
-      return;
-    }
-    if (title.length > 200) {
-      toast.error('标题不能超过200个字符');
-      return;
-    }
-    titleSavingRef.current = true;
-    setEditingSessionId(null);
-    try {
-      await chatApi.updateTitle(sid, title);
-      setSessions((prev) => prev.map((s) =>
-        s.sessionId === sid ? { ...s, title } : s));
-      toast.success('标题已更新');
-    } catch (err: any) {
-      setEditingSessionId(sid);
-      setEditingTitle(title);
-      toast.error('标题更新失败: ' + getErrorMessage(err));
-    } finally {
-      titleSavingRef.current = false;
-    }
-  };
-
-  // M5-1：消息复制（clipboard API + 降级）
-  const copyMessage = async (content: string) => {
-    try {
-      await navigator.clipboard.writeText(content);
-      toast.success('已复制');
-    } catch {
-      try {
-        const ta = document.createElement('textarea');
-        ta.value = content;
-        ta.style.position = 'fixed';
-        ta.style.opacity = '0';
-        document.body.appendChild(ta);
-        ta.select();
-        document.execCommand('copy');
-        document.body.removeChild(ta);
-        toast.success('已复制');
-      } catch {
-        toast.error('复制失败');
-      }
-    }
-  };
-
-  if (loading) {
+  if (sessionList.loading) {
     return (
       <div className="space-y-4">
         <Skeleton className="h-10 w-40" />
@@ -713,105 +428,23 @@ function ChatContent() {
   return (
     <div className="flex h-[calc(100vh-8rem)] gap-4">
       {/* 会话列表 */}
-      <div className="w-64 flex-shrink-0 glass rounded-xl p-3 overflow-y-auto">
-        <button
-          onClick={handleNewSession}
-          disabled={creatingSession}
-          className="w-full flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg bg-brand-500 text-white text-sm font-medium hover:bg-brand-600 mb-3 magnetic disabled:opacity-50"
-        >
-          <Plus className="h-4 w-4" /> 新会话
-        </button>
-        <div className="space-y-1">
-          {sessions.map((s) => (
-            <div key={s.sessionId} className="group relative">
-              <div
-                role="button"
-                tabIndex={0}
-                onClick={() => {
-                  if (editingSessionId !== s.sessionId) {
-                    setCurrentSessionId(s.sessionId);
-                    // M6-48：点进会话 → 红点消失
-                    setCompletedTurns((prev) => {
-                      const next = { ...prev };
-                      delete next[s.sessionId];
-                      return next;
-                    });
-                  }
-                }}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' && editingSessionId !== s.sessionId) {
-                    setCurrentSessionId(s.sessionId);
-                  }
-                }}
-                className={cn(
-                  'w-full flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-left cursor-pointer transition-colors pr-8',
-                  currentSessionId === s.sessionId
-                    ? 'bg-brand-50 dark:bg-brand-900/30 text-brand-600 dark:text-brand-300'
-                    : 'hover:bg-slate-100 dark:hover:bg-slate-800'
-                )}
-              >
-                {/* M6-48：思考/回复中 → 动态加载图标 */}
-                {streamStates[s.sessionId]?.phase === 'thinking'
-                  || streamStates[s.sessionId]?.phase === 'streaming' ? (
-                  <Loader2 className="h-4 w-4 flex-shrink-0 animate-spin text-brand-500" />
-                ) : (
-                  <MessageSquare className="h-4 w-4 flex-shrink-0" />
-                )}
-                {editingSessionId === s.sessionId ? (
-                  <input
-                    ref={titleInputRef}
-                    value={editingTitle}
-                    onChange={(e) => setEditingTitle(e.target.value)}
-                    onClick={(e) => e.stopPropagation()}
-                    onDoubleClick={(e) => e.stopPropagation()}
-                    onBlur={() => saveTitle(s.sessionId)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') {
-                        e.preventDefault();
-                        saveTitle(s.sessionId);
-                      } else if (e.key === 'Escape') {
-                        cancelEdit();
-                      }
-                    }}
-                    className="flex-1 min-w-0 rounded px-1 text-sm bg-white/70 dark:bg-slate-900/70 ring-1 ring-brand-500 outline-none"
-                  />
-                ) : (
-                  <span
-                    className="truncate flex-1"
-                    title={s.title}
-                    onDoubleClick={(e) => {
-                      e.stopPropagation();
-                      startEdit(s);
-                    }}
-                  >
-                    {s.title}
-                  </span>
-                )}
-              </div>
-              {/* M4-9：显式结束会话（编辑态隐藏避免误触） */}
-              {editingSessionId !== s.sessionId && (
-                <button
-                  title="结束会话"
-                  onClick={() => handleCloseSession(s.sessionId)}
-                  className="absolute right-1.5 top-1/2 -translate-y-1/2 p-1 rounded-md opacity-0 group-hover:opacity-100 hover:bg-red-50 dark:hover:bg-red-900/20 text-slate-400 hover:text-red-500 transition-all"
-                >
-                  <Archive className="h-3.5 w-3.5" />
-                </button>
-              )}
-              {/* M6-48：后台会话完成回复 → 红点提示（点进会话后清除） */}
-              {completedTurns[s.sessionId] && currentSessionId !== s.sessionId && (
-                <span
-                  title="有新回复"
-                  className="absolute right-7 top-1/2 -translate-y-1/2 h-2 w-2 rounded-full bg-red-500"
-                />
-              )}
-            </div>
-          ))}
-          {sessions.length === 0 && (
-            <p className="text-xs text-slate-400 text-center py-4">暂无会话</p>
-          )}
-        </div>
-      </div>
+      <SessionList
+        sessions={sessionList.sessions}
+        currentSessionId={currentSessionId}
+        creatingSession={creatingSession}
+        streamStates={chatStream.streamStates}
+        completedTurns={completedTurns}
+        editingSessionId={sessionList.editingSessionId}
+        editingTitle={sessionList.editingTitle}
+        onNewSession={handleNewSession}
+        onSelect={handleSelectSession}
+        onEnterSelect={(sid) => setCurrentSessionId(sid)}
+        onStartEdit={sessionList.startEdit}
+        onTitleChange={sessionList.changeEditingTitle}
+        onSaveTitle={sessionList.saveTitle}
+        onCancelEdit={sessionList.cancelEdit}
+        onCloseSession={handleCloseSession}
+      />
 
       {/* 消息区 */}
       <div className="flex-1 flex flex-col glass rounded-xl overflow-hidden">
@@ -828,99 +461,20 @@ function ChatContent() {
               </div>
             ) : (
               messages.map((msg, idx) => (
-                <div
-                  key={idx}
-                  className={cn('group relative flex', msg.role === 'user' ? 'justify-end' : 'justify-start')}
-                >
-                  <div
-                    className={cn(
-                      'flex max-w-[70%] flex-col',
-                      msg.role === 'user' ? 'items-end' : 'items-start'
-                    )}
-                  >
-                    <div
-                      className={cn(
-                        'relative rounded-2xl px-4 py-2.5',
-                        msg.role === 'user'
-                          ? 'bg-brand-500 text-white rounded-br-sm'
-                          : 'bg-slate-100 dark:bg-slate-800 rounded-bl-sm'
-                      )}
-                    >
-                      {msg.role === 'user' ? (
-                        <p className="text-sm whitespace-pre-wrap">{msg.content}</p>
-                      ) : (
-                        <div className="text-sm">
-                          <ChatMessageContent content={msg.content} />
-                        </div>
-                      )}
-                    </div>
-                    {/* M6-49：时间戳与复制按钮在气泡外（左下角），复制按钮透明背景 */}
-                    <div
-                      className={cn(
-                        'mt-1 flex items-center gap-1 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity',
-                        msg.role === 'user' ? 'justify-end' : 'justify-start'
-                      )}
-                    >
-                      {/* M6-50：时间戳在左、复制按钮在右 */}
-                      <span className="text-[10px] text-slate-400/70">
-                        {formatMessageTime(msg.createdAt)}
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() => copyMessage(msg.content)}
-                        className="rounded-md bg-transparent p-1 text-slate-400 hover:text-brand-500"
-                        title="复制"
-                        aria-label="复制消息"
-                      >
-                        <Copy className="h-3 w-3" />
-                      </button>
-                    </div>
-                  </div>
-                </div>
+                <MessageBubble key={idx} message={msg} />
               ))
             )}
             {/* M6：思考气泡（spinner + 浅灰半透明阶段提示） */}
             {currentStreamState?.phase === 'thinking' && (
-              <div className="flex justify-start">
-                <div className="max-w-[70%] rounded-2xl rounded-bl-sm px-4 py-2.5 bg-slate-100/70 dark:bg-slate-800/70">
-                  <div className="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400">
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                    Agent 思考中…
-                  </div>
-                  {currentStreamState.thinkingLines.length > 0 && (
-                    <div className="mt-2 space-y-1">
-                      {currentStreamState.thinkingLines.map((line, idx) => (
-                        <p key={idx} className="text-xs text-slate-500/80 dark:text-slate-400/80">
-                          {line}
-                        </p>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              </div>
+              <ThinkingBubble lines={currentStreamState.thinkingLines} />
             )}
             {/* M6：流式输出（思考完成后替换思考气泡） */}
             {currentStreamState?.phase === 'streaming' && (
-              <div className="flex justify-start">
-                <div className="max-w-[70%] rounded-2xl rounded-bl-sm px-4 py-2.5 bg-slate-100 dark:bg-slate-800">
-                  <p className="text-sm whitespace-pre-wrap">{currentStreamState.streamingText}</p>
-                </div>
-              </div>
+              <StreamingBubble text={currentStreamState.streamingText} />
             )}
             {/* M6-36：执行已中断 + 重试（每会话最多一个断点） */}
             {interruptedTurns[currentSessionId ?? ''] && (
-              <div className="flex justify-start">
-                <div className="max-w-[70%] rounded-2xl rounded-bl-sm px-4 py-2.5 bg-slate-100 dark:bg-slate-800">
-                  <p className="text-sm text-slate-600 dark:text-slate-300">执行已中断</p>
-                  <button
-                    type="button"
-                    onClick={() => handleRetry(currentSessionId!)}
-                    className="mt-1.5 inline-flex items-center gap-1 text-xs text-brand-500 hover:text-brand-600"
-                  >
-                    <RotateCcw className="h-3 w-3" /> 重试
-                  </button>
-                </div>
-              </div>
+              <InterruptedBubble onRetry={() => handleRetry(currentSessionId!)} />
             )}
             <div ref={messagesEndRef} />
           </div>

@@ -4,6 +4,9 @@ import lombok.extern.slf4j.Slf4j;
 
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
@@ -18,9 +21,19 @@ public class RateLimiter {
 
     private final int perMinute;
     private final ConcurrentMap<String, Window> windows = new ConcurrentHashMap<>();
+    // M6-55/T3：定时清理守护线程（每分钟移除非当前分钟窗口），
+    // 防止长期运行 key 空间无界增长（阈值快速路径仍保留）
+    private final ScheduledExecutorService cleaner =
+            Executors.newSingleThreadScheduledExecutor(r -> {
+                Thread t = new Thread(r, "rate-limiter-cleaner");
+                t.setDaemon(true);
+                return t;
+            });
 
     public RateLimiter(int perMinute) {
         this.perMinute = Math.max(1, perMinute);
+        cleaner.scheduleWithFixedDelay(this::cleanupExpired,
+                60, 60, TimeUnit.SECONDS);
     }
 
     /**
@@ -43,6 +56,21 @@ public class RateLimiter {
         }
         int count = w.count.incrementAndGet();
         return count <= perMinute;
+    }
+
+    /** M6-55/T3：移除所有非当前分钟的过期窗口（供定时任务与测试调用）。 */
+    void cleanupExpired() {
+        cleanupExpired(System.currentTimeMillis());
+    }
+
+    void cleanupExpired(long now) {
+        long minute = now / 60_000L;
+        windows.entrySet().removeIf(e -> e.getValue().minute() != minute);
+    }
+
+    /** 释放清理线程（应用关闭时调用；不调用也无碍，daemon 线程随 JVM 退出）。 */
+    public void close() {
+        cleaner.shutdownNow();
     }
 
     /** 当前窗口计数（观测用） */
