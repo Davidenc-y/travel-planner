@@ -1,5 +1,6 @@
 package com.travel.knowledge.trace;
 
+import com.travel.aigateway.route.ModelRoutingContext;
 import com.travel.common.entity.AgentTrace;
 import com.travel.knowledge.repository.AgentTraceMapper;
 import lombok.RequiredArgsConstructor;
@@ -10,6 +11,7 @@ import org.springframework.stereotype.Component;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
 
 /**
@@ -28,7 +30,7 @@ public class KnowledgeTraceRecorder {
     @Value("${travel.trace.enabled:true}")
     private boolean traceEnabled;
 
-    @Value("${spring.ai.dashscope.chat.options.model:qwen3.7-max}")
+    @Value("${travel.rag.trace.model:qwen3.7-max}")
     private String modelName;
 
     /**
@@ -42,13 +44,21 @@ public class KnowledgeTraceRecorder {
         t.setRequestId(UUID.randomUUID().toString());
         t.setTraceType("rag");
         t.setEndpoint("POST /api/v1/attractions/search");
-        t.setModelName(modelName);
+        t.setModelName(modelName); // 先用配置默认，实际路由模型在 runWith 内捕获后覆盖
         t.setCallPath("[\"rag:" + (ragType == null || ragType.isBlank() ? "auto" : ragType) + "\"]");
         t.setInputSummary(truncate(query, 500));
         t.setStartTime(LocalDateTime.now());
         t.setStatus("RUNNING");
         try {
-            T result = fn.get();
+            // M7-6：runWith(null) 先清空 ROUTED 槽位（防线程池跨请求残留），
+            // 链内 RoleRoutingChatModel.resolve 写入实际路由模型，链结束后捕获
+            AtomicReference<String> routed = new AtomicReference<>();
+            T result = ModelRoutingContext.runWith(null, () -> {
+                T r = fn.get();
+                routed.set(ModelRoutingContext.routed());
+                return r;
+            });
+            t.setModelName(routed.get() != null ? routed.get() : modelName);
             t.setEndTime(LocalDateTime.now());
             t.setDurationMs(java.time.Duration.between(t.getStartTime(), t.getEndTime()).toMillis());
             t.setOutputLength(result instanceof List<?> list ? list.size() : 0);

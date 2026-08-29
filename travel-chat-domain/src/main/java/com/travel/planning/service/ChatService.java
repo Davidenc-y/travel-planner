@@ -5,7 +5,11 @@ import com.travel.common.entity.ChatMessage;
 import com.travel.common.entity.ChatMessageIdem;
 import com.travel.common.entity.ChatSession;
 import com.travel.common.exception.BusinessException;
+import com.travel.common.exception.ErrorCode;
 import com.travel.core.stream.TurnGate;
+import com.travel.aigateway.core.GatewayException;
+import com.travel.aigateway.core.ModelRegistry;
+import com.travel.aigateway.route.ModelRoutingContext;
 import com.travel.planning.cancellation.TurnCancellationBroadcaster;
 import com.travel.planning.memory.chat.ChatIntent;
 import com.travel.planning.memory.sessionstore.SessionStorePort;
@@ -21,6 +25,9 @@ import com.travel.planning.memory.pipeline.ChatRoutingStep;
 import com.travel.planning.memory.pipeline.ChatSessionGuardProperties;
 import com.travel.planning.memory.pipeline.ChatTitleProperties;
 import com.travel.planning.memory.shortterm.SessionFinalizer;
+import com.travel.planning.trace.ModelRouteTracker;
+import com.travel.planning.trace.TraceContext;
+import io.lettuce.core.RedisCommandInterruptedException;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -72,6 +79,10 @@ public class ChatService implements ChatStreamExecutor {
     private final TurnCancellationRegistry cancellationRegistry;
     // M6-44：跨实例取消广播（Redis Pub/Sub 推送加速；权威仍为 DB + Redis 标记）
     private final TurnCancellationBroadcaster cancellationBroadcaster;
+    // M7：模型注册表（D6：请求级 model 入口快速失败校验）
+    private final ModelRegistry modelRegistry;
+    // M7：实际路由模型追溯记录（direct 路径由 runStream 包裹捕获）
+    private final ModelRouteTracker modelRouteTracker;
 
     /**
      * 创建会话
@@ -102,8 +113,16 @@ public class ChatService implements ChatStreamExecutor {
      * （重试重新执行，不重放兜底，M4-0-R1 评审 D3-1/D3-2）。</p>
      */
     public ChatResponseDTO sendMessage(String sessionId, String message, Long userId, String clientMessageId) {
+        return sendMessage(sessionId, message, userId, clientMessageId, null);
+    }
+
+    /**
+     * 发送消息并获取响应（M4-3 幂等 + M7 请求级模型）。
+     */
+    public ChatResponseDTO sendMessage(String sessionId, String message, Long userId,
+                                       String clientMessageId, String model) {
         ChatStreamExecutor.ChatStreamPrepared prepared =
-                prepareStream(userId, sessionId, message, clientMessageId);
+                prepareStream(userId, sessionId, message, clientMessageId, model);
         if (prepared.replay()) {
             // 命中 COMPLETED：直接重放，不落任何库（豁免会话状态校验——已归档会话也应可重放）
             return ChatResponseDTO.builder()
@@ -130,11 +149,13 @@ public class ChatService implements ChatStreamExecutor {
      */
     @Override
     public ChatStreamExecutor.ChatStreamPrepared prepareStream(
-            Long userId, String sessionId, String message, String clientMessageId) {
+            Long userId, String sessionId, String message, String clientMessageId, String model) {
         // F52：防御脏 userId（兜底 0 会导致 user_id=0 画像/会话）。
         if (userId == null || userId <= 0) {
             throw new BusinessException(40101, "用户未登录");
         }
+        // M7 D6：请求级 model 必须在注册表且 selectable，否则入口快速失败
+        validateModel(model);
         // F90：调用前安全防护（Prompt 注入检测）→ MessagePipeline 步骤 1
         chatGuardStep.check(userId, message);
         // M3-11：步骤 2 持久化（会话校验 + 用户消息落库）
@@ -183,7 +204,20 @@ public class ChatService implements ChatStreamExecutor {
             }
         }
         return new ChatStreamExecutor.ChatStreamPrepared(
-                sessionId, message, userId, clientMessageId, gate, updatedSessionTitle);
+                sessionId, message, userId, clientMessageId, gate, updatedSessionTitle, model);
+    }
+
+    /** M7 D6：未知/禁用/不可选模型 → 40005，不静默回退。 */
+    private void validateModel(String model) {
+        if (model == null || model.isBlank()) {
+            return;
+        }
+        try {
+            modelRegistry.requireSelectable(model);
+        } catch (GatewayException e) {
+            throw new BusinessException(ErrorCode.MODEL_NOT_FOUND.code(),
+                    ErrorCode.MODEL_NOT_FOUND.message() + ": " + model);
+        }
     }
 
     /**
@@ -288,6 +322,24 @@ public class ChatService implements ChatStreamExecutor {
      */
     @Override
     public ChatStreamExecutor.ChatStreamResult runStream(
+            ChatStreamExecutor.ChatStreamPrepared prepared, ChatProgressListener listener) {
+        return ModelRoutingContext.runWith(prepared.model(), () -> {
+            ChatStreamExecutor.ChatStreamResult result = runStreamInternal(prepared, listener);
+            recordRoutedModel();
+            return result;
+        });
+    }
+
+    /** M7：direct 路径在同一线程完成路由，把实际模型写入追溯（图流路径由拦截器记录）。 */
+    private void recordRoutedModel() {
+        String routed = ModelRoutingContext.routed();
+        if (routed == null || !TraceContext.active()) {
+            return;
+        }
+        modelRouteTracker.record(TraceContext.current().requestId, routed);
+    }
+
+    private ChatStreamExecutor.ChatStreamResult runStreamInternal(
             ChatStreamExecutor.ChatStreamPrepared prepared, ChatProgressListener listener) {
         String sessionId = prepared.sessionId();
         String message = prepared.message();
@@ -430,13 +482,44 @@ public class ChatService implements ChatStreamExecutor {
             log.warn("[ChatInterrupt] 轮次已中断，跳过落库: key={}", clientMessageId);
             throw e;
         } catch (Exception e) {
+            // M7-8：轮次取消（前端停止/断连）会中断 boundedElastic 工作线程，Lettuce
+            // Redis 命令随即抛 RedisCommandInterruptedException。这是“预期取消”而非
+            // 业务失败：恢复中断标记并按 TurnInterruptedException 处理（置 INTERRUPTED、
+            // 不落库、WARN），避免被误判 FAILED 或产生误导性 ERROR。
+            if (isInterruptedCause(e)) {
+                Thread.currentThread().interrupt();
+                // 注意：本 catch 内抛出的异常不会再被上方 catch(TurnInterruptedException)
+                // 捕获，因此在这里直接完成中断登记与日志
+                chatPersistenceStep.markTurnInterrupted(sessionId, clientMessageId);
+                log.warn("[ChatInterrupt] Redis 命令被线程中断，按轮次取消处理: sessionId={}, key={}",
+                        sessionId, clientMessageId);
+                throw new TurnInterruptedException("Redis 命令被中断（轮次取消）");
+            }
             // M4-3（复核观察项 2）：步骤 3~9 意外异常时幂等记录置 FAILED——
             // 否则 PENDING 悬挂，同键重试永远 40904（failTurn 对空键/开关关为 no-op）
+            // M7-8：必须打 ERROR——ChatStreamService 会把该异常转成 SSE error 事件
+            // 且不打日志，若此处静默则“组装完成但无路由/落库”的故障无法排查
+            log.error("[ChatStream] 执行异常: sessionId={}, key={}", sessionId, clientMessageId, e);
             chatPersistenceStep.failTurn(clientMessageId);
             throw e;
         } finally {
             cancellationRegistry.remove(clientMessageId);
         }
+    }
+
+    /** 异常链中是否存在 InterruptedException（含 Lettuce RedisCommandInterruptedException）。 */
+    private static boolean isInterruptedCause(Throwable e) {
+        Throwable cur = e;
+        int depth = 0;
+        while (cur != null && depth < 16) {
+            if (cur instanceof InterruptedException
+                    || cur instanceof RedisCommandInterruptedException) {
+                return true;
+            }
+            cur = cur.getCause();
+            depth++;
+        }
+        return false;
     }
 
     @SuppressWarnings("unchecked")

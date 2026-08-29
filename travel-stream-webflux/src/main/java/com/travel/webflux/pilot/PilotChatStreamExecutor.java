@@ -16,7 +16,7 @@ public class PilotChatStreamExecutor implements ChatStreamExecutor {
 
     @Override
     public ChatStreamPrepared prepareStream(Long userId, String sessionId,
-                                            String message, String clientMessageId) {
+                                            String message, String clientMessageId, String model) {
         if (userId == null || userId <= 0) {
             throw new BusinessException(40101, "用户未登录");
         }
@@ -27,7 +27,7 @@ public class PilotChatStreamExecutor implements ChatStreamExecutor {
             throw new BusinessException(40001, "消息不能为空");
         }
         return new ChatStreamPrepared(sessionId, message, userId,
-                clientMessageId, TurnGate.fresh(), "WebFlux-Pilot");
+                clientMessageId, TurnGate.fresh(), "WebFlux-Pilot", model);
     }
 
     @Override

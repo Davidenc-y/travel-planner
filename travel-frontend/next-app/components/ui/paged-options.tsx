@@ -18,6 +18,8 @@ interface PagedOptionsProps {
   defaultPageSize?: number;
   pageSizeOptions?: number[];
   multiple?: boolean;
+  /** M7-7：面板向上展开（底部输入区/贴边场景防溢出视口） */
+  dropUp?: boolean;
 }
 
 /**
@@ -32,6 +34,7 @@ export function PagedOptions({
   defaultPageSize = 10,
   pageSizeOptions = [10, 20, 50],
   multiple = true,
+  dropUp = false,
 }: PagedOptionsProps) {
   const [open, setOpen] = useState(false);
   const [page, setPage] = useState(1);
@@ -99,7 +102,10 @@ export function PagedOptions({
 
       {open && (
         // F100：下拉面板改不透明（原 glass 半透明透出背景，妨碍选择）
-        <div className="absolute z-30 mt-1 w-full rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 p-3 shadow-xl">
+        <div className={cn(
+          'absolute z-30 w-full rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 p-3 shadow-xl',
+          dropUp ? 'bottom-full mb-1' : 'top-full mt-1'
+        )}>
           {/* 顶部：总数 + 每页条数 */}
           <div className="flex items-center justify-between mb-2 text-xs text-slate-500 dark:text-slate-400">
             <span>共 {options.length} 项</span>

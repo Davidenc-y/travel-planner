@@ -2,6 +2,7 @@ package com.travel.planning.agent.budget;
 
 import com.travel.planning.agent.AbstractReactSubAgent;
 import com.travel.planning.agent.supervisor.TokenUsageInterceptor;
+import com.travel.planning.agent.supervisor.ModelRouteInterceptor;
 import com.travel.planning.prompt.PromptTemplates;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.model.ChatModel;
@@ -17,13 +18,16 @@ public class BudgetEstimationAgent extends AbstractReactSubAgent {
 
     private final ChatModel lightModel;
     private final TokenUsageInterceptor tokenUsageInterceptor;
+    private final ModelRouteInterceptor modelRouteInterceptor;
     private final PromptTemplates promptTemplates;
 
     public BudgetEstimationAgent(@Qualifier("lightModel") ChatModel lightModel,
                                  TokenUsageInterceptor tokenUsageInterceptor,
+                                 ModelRouteInterceptor modelRouteInterceptor,
                                  PromptTemplates promptTemplates) {
         this.lightModel = lightModel;
         this.tokenUsageInterceptor = tokenUsageInterceptor;
+        this.modelRouteInterceptor = modelRouteInterceptor;
         this.promptTemplates = promptTemplates;
     }
 
@@ -60,5 +64,10 @@ public class BudgetEstimationAgent extends AbstractReactSubAgent {
     @Override
     protected TokenUsageInterceptor interceptor() {
         return tokenUsageInterceptor;
+    }
+
+    @Override
+    protected ModelRouteInterceptor modelRouteInterceptor() {
+        return modelRouteInterceptor;
     }
 }

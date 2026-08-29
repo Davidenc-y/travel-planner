@@ -8,9 +8,9 @@ import com.travel.planning.config.LlmGovernor;
 import com.travel.planning.memory.longterm.ProfilePort;
 import com.travel.planning.prompt.PromptTemplates;
 import com.travel.planning.repository.TravelProfileMapper;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.model.ChatModel;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
@@ -29,7 +29,6 @@ import java.util.List;
  */
 @Slf4j
 @Service
-@RequiredArgsConstructor
 public class TravelProfileService implements ProfilePort {
 
     /** 历史行程条目数超阈值触发 LLM 压缩（F64/B2） */
@@ -59,6 +58,17 @@ public class TravelProfileService implements ProfilePort {
     private final LlmGovernor llmGovernor;
     // M3-20：Prompt 模板外置（P1-17）
     private final PromptTemplates promptTemplates;
+
+    // M7-6：画像压缩为低频后台任务 → light 角色（压缩质量由校验与回退守护）
+    public TravelProfileService(TravelProfileMapper profileMapper,
+                                @Qualifier("lightModel") ChatModel chatModel,
+                                LlmGovernor llmGovernor,
+                                PromptTemplates promptTemplates) {
+        this.profileMapper = profileMapper;
+        this.chatModel = chatModel;
+        this.llmGovernor = llmGovernor;
+        this.promptTemplates = promptTemplates;
+    }
 
     /**
      * 获取用户画像（不存在则创建空画像）

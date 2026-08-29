@@ -42,9 +42,19 @@ public class SseStreamAdapter {
                 .map(i -> StreamEvent.ping(new StreamMeta("", "", "", "chat", null, false)))
                 .takeUntilOther(shared.then().onErrorComplete());
         AtomicBoolean completed = new AtomicBoolean(false);
+        // M7-8：响应一旦不可用（客户端断开），后续任何 complete/completeWithError
+        // 都会被 Spring 转成 DeferredResult error 并触发全局异常处理器，必须跳过
+        AtomicBoolean responseUnusable = new AtomicBoolean(false);
         Runnable finish = () -> {
             if (completed.compareAndSet(false, true)) {
-                emitter.complete();
+                if (!responseUnusable.get()) {
+                    try {
+                        emitter.complete();
+                    } catch (Exception e) {
+                        // 兜底：complete() 仍可能因底层响应损坏抛异常
+                        log.debug("[SseStream] 响应已不可用，跳过 complete: {}", e.getMessage());
+                    }
+                }
             }
         };
         AtomicReference<Disposable> disposableRef = new AtomicReference<>();
@@ -56,6 +66,11 @@ public class SseStreamAdapter {
                                 // 不触发 error 处理链（否则容器 async error 会尝试
                                 // 把 R 写入 text/event-stream 响应产生噪音）；
                                 // 底层业务（行程生成）已与订阅取消解耦，继续完成
+                                // M7-8 修正：此时不能再 complete()——Spring 的
+                                // DefaultSseEmitterHandler.complete() 会把 flush 的
+                                // IOException 转成 DeferredResult error 并主动触发
+                                // 全局异常处理器；只标记不可用并停止推送即可
+                                responseUnusable.set(true);
                                 finish.run();
                                 Disposable d = disposableRef.get();
                                 if (d != null) {
@@ -66,7 +81,9 @@ public class SseStreamAdapter {
                         err -> {
                             log.warn("[SseStream] 流式订阅异常: {}", err.getMessage());
                             if (completed.compareAndSet(false, true)) {
-                                emitter.completeWithError(err);
+                                if (!responseUnusable.get()) {
+                                    emitter.completeWithError(err);
+                                }
                             }
                         },
                         finish

@@ -46,7 +46,9 @@ public class CorrectiveRagStrategy implements RagStrategy {
     private final ChatModel chatModel;
 
     @Autowired
-    public CorrectiveRagStrategy(@Qualifier("hybridRag") RagStrategy baseStrategy, ChatModel chatModel) {
+    // M7 Batch 4：查询重写为高频短输出 → light 角色（质量由 RAG 评测门禁守护）
+    public CorrectiveRagStrategy(@Qualifier("hybridRag") RagStrategy baseStrategy,
+                                 @Qualifier("lightModel") ChatModel chatModel) {
         this.baseStrategy = baseStrategy;
         this.chatModel = chatModel;
     }

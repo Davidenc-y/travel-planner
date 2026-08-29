@@ -12,6 +12,8 @@ public enum ErrorCode {
     USERNAME_EXISTS(40003, 409, "用户名已存在"),
     /** M5-1：邮箱已被其他账号绑定 */
     EMAIL_EXISTS(40004, 409, "邮箱已被绑定"),
+    /** M7：请求携带的模型未注册/未启用/不可选（入口快速失败，不静默回退） */
+    MODEL_NOT_FOUND(40005, 400, "模型不存在或不可用"),
     UNAUTHORIZED(40101, 401, "用户未登录"),
     AUTH_TOKEN_INVALID(40102, 401, "refreshToken 无效或已过期"),
     AUTH_TOKEN_EXPIRED(40103, 401, "refreshToken 已失效，请重新登录"),

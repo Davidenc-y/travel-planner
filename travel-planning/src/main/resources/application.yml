@@ -38,18 +38,6 @@ spring:
       database: 0
       timeout: 5000ms
 
-  # ============ AI DashScope ============
-  ai:
-    dashscope:
-      api-key: ${DASHSCOPE_API_KEY:}
-      chat:
-        options:
-          model: qwen3.7-max
-          temperature: 0.7
-      embedding:
-        api-key: ${DASHSCOPE_API_KEY:}
-        model: text-embedding-v2
-
   # ============ Elasticsearch（planning 只读访问） ============
   elasticsearch:
     uris: http://${ES_HOST:localhost}:${ES_PORT:9200}
@@ -75,16 +63,47 @@ travel:
     secret-key: minioadmin
     attractions-bucket: attractions
     avatars-bucket: avatars
-  # 多模型路由
+  # M7：模型注册表（单一事实源；enabled=false 回退旧行为——Batch 2 后旧 AiModelConfig 已删除）
   ai:
-    models:
-      main: qwen3.7-max       # 主推理：行程编排（qwen-max 免费额度已耗尽 → 403）
-      light: qwen-turbo       # 轻量：偏好分析、意图识别（实测可用）
-      coder: qwen3.7-max      # 内容生成：景点描述（qwen3.7-plus 仅兼容模式可用，改 qwen3.7-max）
-    timeout:
-      seconds: 120            # 单次 LLM 调用超时（秒），作为每节点调用硬性退出边界（F24）
-    max-output-tokens:
-      main: 8000              # 主模型（含 main Agent 路由）最大生成 token（F77/B4-2）
+    model-registry:
+      enabled: true
+      default-timeout-seconds: 120
+      models:
+        - key: qwen3.7-max
+          provider: dashscope-native
+          display-name: "Qwen3.7 Max · 深度推理"
+          api-key-env: DASHSCOPE_API_KEY
+          temperature: 0.7
+          max-tokens: 8000
+          top-p: 0.9
+          roles: [main]
+          selectable: true
+          enabled: true
+        - key: qwen-turbo
+          provider: dashscope-native
+          display-name: "Qwen Turbo · 轻量高速"
+          api-key-env: DASHSCOPE_API_KEY
+          temperature: 0.5
+          max-tokens: 2000
+          roles: [light]
+          selectable: true
+          enabled: true
+        - key: qwen3.7-plus
+          provider: openai-compatible
+          base-url: https://dashscope.aliyuncs.com/compatible-mode/v1
+          display-name: "Qwen3.7 Plus · 均衡"
+          api-key-env: DASHSCOPE_API_KEY
+          roles: []
+          selectable: true
+          enabled: true
+        - key: deepseek-chat
+          provider: openai-compatible
+          base-url: https://api.deepseek.com
+          display-name: "DeepSeek Chat · 通用"
+          api-key-env: DEEPSEEK_API_KEY
+          roles: []
+          selectable: true
+          enabled: true
   # 地图 API
   map:
     tencent:

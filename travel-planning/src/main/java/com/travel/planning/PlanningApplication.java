@@ -2,6 +2,7 @@ package com.travel.planning;
 
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.context.annotation.Import;
 import org.springframework.cloud.openfeign.EnableFeignClients;
 import org.springframework.scheduling.annotation.EnableScheduling;
 
@@ -20,6 +21,8 @@ import org.springframework.scheduling.annotation.EnableScheduling;
         "com.travel.planning", "com.travel.common", "com.travel.webmvc"})
 @EnableFeignClients(basePackages = "com.travel.planning.client")
 @EnableScheduling
+// M7：模型网关装配（travel.ai.model-registry.enabled=true 时提供 chatModel/lightModel）
+@Import(com.travel.aigateway.config.GatewayAutoConfig.class)
 public class PlanningApplication {
 
     public static void main(String[] args) {

@@ -10,6 +10,8 @@ export interface ItineraryGenerateRequest {
   clientRequestId: string;
   /** F87：可选关联会话（存在时行程知识写入该会话的 session_context） */
   sessionId?: string;
+  /** M7 Batch 3：请求级模型（可选；null=角色默认） */
+  model?: string;
 }
 
 export interface DayPlan {
@@ -155,4 +157,12 @@ export interface R<T> {
   message: string;
   data: T;
   timestamp: number;
+}
+
+/** M7 Batch 3：前端模型清单条目（GET /api/v1/models，仅 enabled+selectable） */
+export interface ModelOption {
+  key: string;
+  displayName: string;
+  provider: string;
+  selectable: boolean;
 }

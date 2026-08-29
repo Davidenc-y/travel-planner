@@ -2,6 +2,7 @@ package com.travel.knowledge;
 
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.context.annotation.Import;
 import org.springframework.scheduling.annotation.EnableScheduling;
 
 /**
@@ -19,6 +20,8 @@ import org.springframework.scheduling.annotation.EnableScheduling;
         "com.travel.knowledge", "com.travel.common", "com.travel.webmvc",
         "com.travel.planning.stream"})
 @EnableScheduling
+// M7 Batch 4：模型网关装配（travel.ai.model-registry.enabled=true 时提供 chatModel/lightModel）
+@Import(com.travel.aigateway.config.GatewayAutoConfig.class)
 public class KnowledgeApplication {
 
     public static void main(String[] args) {

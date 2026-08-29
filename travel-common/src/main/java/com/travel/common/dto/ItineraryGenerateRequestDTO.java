@@ -46,4 +46,7 @@ public class ItineraryGenerateRequestDTO {
 
     /** Phase C/F78：关联会话 ID（可选；存在时行程知识写入该会话的 session_context） */
     private String sessionId;
+
+    /** M7：请求级模型 key（可选；null=角色默认，由 ItineraryService 路由校验） */
+    private String model;
 }

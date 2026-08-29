@@ -36,16 +36,10 @@ spring:
       database: 0
       timeout: 5000ms
 
-  # ============ AI DashScope（Embedding 必需） ============
+  # ============ AI DashScope（仅 reranker 直连使用；Chat/Embedding 走 M7 注册表） ============
   ai:
     dashscope:
       api-key: ${DASHSCOPE_API_KEY:}
-      chat:
-        options:
-          model: qwen3.7-max # SelfRAG/CorrectiveRAG 使用；qwen-plus 免费额度耗尽 -> 403
-      embedding:
-        api-key: ${DASHSCOPE_API_KEY:}
-        model: text-embedding-v2
 
   # ============ Elasticsearch ============
   elasticsearch:
@@ -71,6 +65,61 @@ milvus:
 
 # ============ 应用专属配置 ============
 travel:
+  # M7 Batch 4：模型注册表（单一事实源；chatModel/lightModel 由 gateway 提供）
+  ai:
+    model-registry:
+      enabled: true
+      default-timeout-seconds: 120
+      models:
+        - key: qwen3.7-max
+          provider: dashscope-native
+          display-name: "Qwen3.7 Max · 深度推理"
+          api-key-env: DASHSCOPE_API_KEY
+          temperature: 0.7
+          max-tokens: 8000
+          top-p: 0.9
+          roles: [main]
+          selectable: true
+          enabled: true
+        - key: qwen-turbo
+          provider: dashscope-native
+          display-name: "Qwen Turbo · 轻量高速"
+          api-key-env: DASHSCOPE_API_KEY
+          temperature: 0.5
+          max-tokens: 2000
+          roles: [light]
+          selectable: true
+          enabled: true
+        - key: qwen3.7-plus
+          provider: openai-compatible
+          base-url: https://dashscope.aliyuncs.com/compatible-mode/v1
+          display-name: "Qwen3.7 Plus · 均衡"
+          api-key-env: DASHSCOPE_API_KEY
+          roles: []
+          selectable: true
+          enabled: true
+        - key: deepseek-chat
+          provider: openai-compatible
+          base-url: https://api.deepseek.com
+          display-name: "DeepSeek Chat · 通用"
+          api-key-env: DEEPSEEK_API_KEY
+          roles: []
+          selectable: true
+          enabled: true
+        - key: text-embedding-v2
+          provider: dashscope-native
+          display-name: "Text Embedding v2"
+          api-key-env: DASHSCOPE_API_KEY
+          roles: [embedding]
+          selectable: false
+          enabled: true
+        - key: gte-rerank-v2
+          provider: dashscope-native
+          display-name: "GTE Rerank v2"
+          api-key-env: DASHSCOPE_API_KEY
+          roles: [rerank]
+          selectable: false
+          enabled: true
   # M6-19：RAG 检索流式
   knowledge:
     stream:
@@ -114,6 +163,8 @@ travel:
       type: none
       candidate-pool: 20
       timeout-ms: 2000
+      # M7 Batch 4：rerank 模型配置化（默认不变）
+      model: gte-rerank-v2
   # ETL 配置
   etl:
     batch-size: 100

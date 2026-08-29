@@ -1,6 +1,7 @@
 package com.travel.planning.controller;
 
 import com.travel.common.dto.ChatResponseDTO;
+import com.travel.common.dto.ChatMessageRequest;
 import com.travel.common.entity.ChatMessage;
 import com.travel.common.entity.ChatSession;
 import com.travel.common.result.R;
@@ -96,12 +97,10 @@ public class ChatController {
      */
     @PostMapping("/sessions/{sessionId}/messages")
     public R<ChatResponseDTO> sendMessage(@PathVariable String sessionId,
-                                           @RequestBody Map<String, String> body,
+                                           @RequestBody ChatMessageRequest body,
                                            @RequestHeader(value = "X-User-Id", required = false) Long userId) {
-        String message = body.get("message");
-        String clientMessageId = body.get("clientMessageId");
-        return R.ok(chatService.sendMessage(sessionId, message,
-                AuthUtils.resolveUserId(userId), clientMessageId));
+        return R.ok(chatService.sendMessage(sessionId, body.getMessage(),
+                AuthUtils.resolveUserId(userId), body.getClientMessageId(), body.getModel()));
     }
 
     /**
@@ -119,17 +118,20 @@ public class ChatController {
      */
     @PostMapping("/sessions/{sessionId}/messages/stream")
     public Object streamMessage(@PathVariable String sessionId,
-                                @RequestBody Map<String, String> body,
+                                @RequestBody ChatMessageRequest body,
                                 @RequestHeader(value = "X-User-Id", required = false) Long userIdHeader,
                                 @RequestHeader(value = "Last-Event-ID", required = false) String lastEventId) {
         if (!chatStreamProps.isEnabled()) {
             return ResponseEntity.notFound().build();
         }
         Long userId = AuthUtils.resolveUserId(userIdHeader);
-        String message = body.get("message");
-        String clientMessageId = body.get("clientMessageId");
+        String message = body.getMessage();
+        String clientMessageId = body.getClientMessageId();
+        String model = body.getModel();
         StreamRequest request = new StreamRequest("chat", userId, sessionId,
-                message, clientMessageId, java.util.Map.of(), lastEventId);
+                message, clientMessageId,
+                model != null && !model.isBlank() ? Map.of("model", model) : Map.of(),
+                lastEventId);
         StreamPreflight preflight = chatStreamService.preflight(request);
         if (!preflight.ok()) {
             return ResponseEntity.status(StreamErrorMapper.httpStatus(preflight.code()))

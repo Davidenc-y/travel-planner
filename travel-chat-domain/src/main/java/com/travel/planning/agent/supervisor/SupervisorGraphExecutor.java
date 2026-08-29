@@ -9,6 +9,7 @@ import com.travel.planning.prompt.PromptTemplates;
 import com.travel.planning.service.TurnCancellation;
 import com.travel.planning.service.TurnInterruptedException;
 import com.travel.planning.trace.TraceContext;
+import com.travel.aigateway.route.ModelRoutingContext;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.metadata.Usage;
 import org.springframework.ai.chat.model.ChatResponse;
@@ -66,6 +67,8 @@ final class SupervisorGraphExecutor {
         // F89：追溯启用时复用切面生成的 requestId，与 TokenUsageInterceptor 关联
         String requestId = TraceContext.active() ? TraceContext.current().requestId
                 : UUID.randomUUID().toString();
+        // M7：阻塞整图在独立虚拟线程执行（ThreadLocal 不继承），先在提交线程捕获模型
+        String model = ModelRoutingContext.current();
         tokenUsageInterceptor.begin(requestId);
         try {
             // F26 修复：必须执行 SupervisorAgent 整图（多步路由循环），
@@ -87,7 +90,8 @@ final class SupervisorGraphExecutor {
             RunnableConfig config = configBuilder.build();
             future = CompletableFuture.supplyAsync(
                     () -> circuitBreakerRegistry.of("supervisor").call("supervisor",
-                            () -> invokeSupervisorSafely(supervisor, userInput, config)),
+                            () -> ModelRoutingContext.runWith(model,
+                                    () -> invokeSupervisorSafely(supervisor, userInput, config))),
                     TravelSupervisorAgent.SUPERVISOR_EXECUTOR);
             // M6-42：等待前检查（取消后不再等待结果）
             cancel.throwIfCancelled();
@@ -123,7 +127,9 @@ final class SupervisorGraphExecutor {
                 try {
                     CompletableFuture<Optional<OverAllState>> retryFuture = CompletableFuture.supplyAsync(
                             () -> circuitBreakerRegistry.of("supervisor").call("supervisor",
-                                    () -> invokeSupervisorSafely(supervisor, userInput, retryBuilder.build())),
+                                    () -> ModelRoutingContext.runWith(model,
+                                            () -> invokeSupervisorSafely(
+                                                    supervisor, userInput, retryBuilder.build()))),
                             TravelSupervisorAgent.SUPERVISOR_EXECUTOR);
                     cancel.throwIfCancelled();
                     Optional<OverAllState> retried =

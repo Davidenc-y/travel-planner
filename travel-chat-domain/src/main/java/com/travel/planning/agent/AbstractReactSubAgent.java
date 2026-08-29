@@ -1,6 +1,8 @@
 package com.travel.planning.agent;
 
 import com.alibaba.cloud.ai.graph.agent.ReactAgent;
+import com.alibaba.cloud.ai.graph.agent.interceptor.ModelInterceptor;
+import com.travel.planning.agent.supervisor.ModelRouteInterceptor;
 import com.travel.planning.agent.supervisor.TokenUsageInterceptor;
 import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
@@ -32,8 +34,14 @@ public abstract class AbstractReactSubAgent {
             if (tools != null && !tools.isEmpty()) {
                 builder.tools(tools);
             }
-            if (interceptor() != null) {
-                builder.interceptors(interceptor());
+            ModelInterceptor tokenInterceptor = interceptor();
+            ModelInterceptor routeInterceptor = modelRouteInterceptor();
+            if (tokenInterceptor != null && routeInterceptor != null) {
+                builder.interceptors(tokenInterceptor, routeInterceptor);
+            } else if (tokenInterceptor != null) {
+                builder.interceptors(tokenInterceptor);
+            } else if (routeInterceptor != null) {
+                builder.interceptors(routeInterceptor);
             }
             this.agent = builder.build();
             log.info("{} 初始化完成", getClass().getSimpleName());
@@ -66,6 +74,11 @@ public abstract class AbstractReactSubAgent {
     }
 
     protected TokenUsageInterceptor interceptor() {
+        return null;
+    }
+
+    /** M7：图流模型路由拦截器（子类注入共享 Bean；null=不挂载）。 */
+    protected ModelRouteInterceptor modelRouteInterceptor() {
         return null;
     }
 }

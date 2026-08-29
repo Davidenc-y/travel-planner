@@ -5,9 +5,11 @@ import com.travel.knowledge.rag.model.QueryIntent;
 import com.travel.knowledge.rag.config.QueryUnderstandingProperties;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.model.ChatModel;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
 
 import java.util.Collections;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -27,7 +29,23 @@ public class QueryUnderstandingService {
     /** 意图 LRU 缓存（access-order，容量由配置 cacheSize 控制） */
     private final Map<String, QueryIntent> cache;
 
-    public QueryUnderstandingService(ChatModel chatModel, QueryUnderstandingProperties properties) {
+    /**
+     * M7-8：LLM type 校验同义词表（在配置 typeKeywords 基础上补充口语/场景词）。
+     * 仅用于“LLM 抽取的 type 是否被原始查询支撑”的校验，防止 qwen-turbo 幻觉
+     * 把“帮我规划重庆一日游”抽成 FOOD 导致过滤后检索为空。
+     */
+    private static final Map<String, List<String>> TYPE_SYNONYMS = Map.of(
+            "CULTURE", List.of("文物", "遗址", "民俗", "展览", "古迹", "博物馆"),
+            "NATURE", List.of("爬山", "风景", "森林", "海边", "湖泊"),
+            "FOOD", List.of("好吃", "火锅", "烧烤", "美食街", "小吃街", "吃", "菜"),
+            "SHOPPING", List.of("购物街", "买"),
+            "FAMILY", List.of("孩子", "带娃", "儿童"),
+            "LEISURE", List.of("温泉", "慢生活")
+    );
+
+    // M7 Batch 4：高频短输出 → light 角色（注册表默认 qwen-turbo；RAG 评测硬门禁守护质量）
+    public QueryUnderstandingService(@Qualifier("lightModel") ChatModel chatModel,
+                                     QueryUnderstandingProperties properties) {
         this.chatModel = chatModel;
         this.properties = properties;
         this.cache = Collections.synchronizedMap(new LinkedHashMap<>(16, 0.75f, true) {
@@ -91,8 +109,8 @@ public class QueryUnderstandingService {
             }
             return new QueryIntent(
                     normalizeCity(raw.city()),
-                    normalizeType(raw.type()),
-                    normalizeKeywords(raw.keywords()),
+                    validateLlmType(raw.type(), query),
+                    normalizeKeywords(raw.keywords(), query),
                     Boolean.TRUE.equals(raw.freeOnly()),
                     query);
         } catch (Exception e) {
@@ -163,13 +181,46 @@ public class QueryUnderstandingService {
         return null;
     }
 
-    private List<String> normalizeKeywords(List<String> keywords) {
+    /**
+     * M7-8：LLM 抽取的 type 必须被原始查询中的类型词支撑，否则置 null。
+     *
+     * <p>背景：qwen-turbo 曾把“帮我规划重庆一日游”抽成 type=FOOD/keywords=[重庆, 美食]，
+     * 该幻觉会进入 RagFilterBuilder 的 type 过滤，导致本可命中的城市景点检索为空。
+     * 校验通过配置 typeKeywords + 同义词表判定；查询明确表达类型时不受影响。</p>
+     */
+    private String validateLlmType(String type, String query) {
+        String t = normalizeType(type);
+        if (t == null || query == null || query.isBlank()) {
+            return t;
+        }
+        List<String> triggers = new ArrayList<>(
+                properties.getTypeKeywords().getOrDefault(t, List.of()));
+        triggers.addAll(TYPE_SYNONYMS.getOrDefault(t, List.of()));
+        if (!containsAny(query, triggers.toArray(new String[0]))) {
+            log.debug("[QueryUnderstanding] LLM 推断 type={} 但原始查询无对应关键词，置为 null: query={}",
+                    t, query);
+            return null;
+        }
+        return t;
+    }
+
+    /**
+     * M7-8：关键词清洗——只保留“能在原始查询文本中找到”的词，并去重。
+     *
+     * <p>背景：qwen-turbo 曾把“帮我规划重庆一日游”抽成 keywords=[重庆, 美食]，
+     * type 已由 {@link #validateLlmType} 置 null，但 keywords 中幻觉词仍会污染
+     * 日志与后续可能的关键词检索；此处按原文锚定过滤，保证意图数据干净。</p>
+     */
+    private List<String> normalizeKeywords(List<String> keywords, String query) {
         if (keywords == null) {
             return List.of();
         }
+        String q = query == null ? "" : query.trim();
         return keywords.stream()
                 .filter(k -> k != null && !k.isBlank())
                 .map(String::trim)
+                .filter(k -> !q.isEmpty() && q.contains(k))
+                .distinct()
                 .toList();
     }
 

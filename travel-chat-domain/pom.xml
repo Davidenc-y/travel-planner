@@ -26,10 +26,10 @@
             <artifactId>travel-chat-stream</artifactId>
         </dependency>
 
-        <!-- Spring AI Alibaba DashScope（LLM/Embedding） -->
+        <!-- M7：模型网关（注册表/工厂/路由代理；内含 DashScope/OpenAI 核心 SDK） -->
         <dependency>
-            <groupId>com.alibaba.cloud.ai</groupId>
-            <artifactId>spring-ai-alibaba-starter-dashscope</artifactId>
+            <groupId>com.travel.aigateway</groupId>
+            <artifactId>travel-ai-gateway</artifactId>
         </dependency>
         <dependency>
             <groupId>com.alibaba.cloud.ai</groupId>

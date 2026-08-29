@@ -205,8 +205,13 @@ export const chatApi = {
   getHistory: (sessionId: string) =>
     planningApi.get<R<import('@/types').ChatMessage[]>>(`/api/v1/chat/sessions/${sessionId}/history`),
   /** M4-9：clientMessageId 为消息幂等键——超时/40904 退避重试须携带同键 */
-  sendMessage: (sessionId: string, message: string, clientMessageId?: string) =>
-    planningApi.post<R<import('@/types').ChatResponse>>(`/api/v1/chat/sessions/${sessionId}/messages`, { message, clientMessageId }),
+  /** M7 Batch 3：model 可选——请求级模型（null=角色默认） */
+  sendMessage: (sessionId: string, message: string, clientMessageId?: string, model?: string) =>
+    planningApi.post<R<import('@/types').ChatResponse>>(`/api/v1/chat/sessions/${sessionId}/messages`, {
+      message,
+      clientMessageId,
+      ...(model ? { model } : {}),
+    }),
   /** M4-9：显式关闭会话（归档+收口摘要；禁止 beforeunload 触发） */
   closeSession: (sessionId: string) =>
     planningApi.post<R<{ archived: boolean; finalized: boolean }>>(`/api/v1/chat/sessions/${sessionId}/close`),
@@ -235,6 +240,7 @@ export const chatApi = {
     signal: AbortSignal,
     handlers: SseStreamHandlers,
     lastEventId?: string,
+    model?: string,
   ) => {
     const headers: Record<string, string> = {};
     if (typeof window !== 'undefined') {
@@ -247,12 +253,19 @@ export const chatApi = {
     if (lastEventId) headers['Last-Event-ID'] = lastEventId;
     return consumeSseStream(
       `${STREAM_BASE}/api/v1/chat/sessions/${sessionId}/messages/stream`,
-      { message, clientMessageId },
+      { message, clientMessageId, ...(model ? { model } : {}) },
       headers,
       signal,
       handlers,
     );
   },
+};
+
+// ==================== Models（M7 Batch 3：模型清单） ====================
+export const modelApi = {
+  /** 前端可选模型清单（后端仅返回 enabled 且 selectable；embedding/rerank 不可选） */
+  list: () =>
+    planningApi.get<R<import('@/types').ModelOption[]>>('/api/v1/models'),
 };
 
 // ==================== Attractions ====================

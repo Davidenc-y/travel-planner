@@ -17,6 +17,8 @@ import {
 } from '@/components/chat/MessageBubble';
 import { useChatStream } from '@/hooks/useChatStream';
 import { useSessionList } from '@/hooks/useSessionList';
+import { useModelPreference } from '@/hooks/useModelPreference';
+import { ModelSelector } from '@/components/model/ModelSelector';
 
 interface InterruptedTurn {
   clientMessageId: string;
@@ -63,6 +65,8 @@ function ChatContent() {
 
   const sessionList = useSessionList(userId ?? null);
   const chatStream = useChatStream(() => currentSessionRef.current);
+  // M7 Batch 3：用户模型偏好（'' = 智能默认）
+  const modelPref = useModelPreference();
 
   const activeDraftKey = currentSessionId ?? '__new__';
   const input = drafts[activeDraftKey] ?? '';
@@ -212,11 +216,16 @@ function ChatContent() {
    * 兼容两种返回形态：HTTP 状态对齐（409 抛异常，err.response.data.code）与
    * 业务码双轨（200 + body.code）。M5-1：返回完整响应以消费 sessionTitle。
    */
-  const sendMessageWithIdempotency = async (sid: string, text: string, key: string): Promise<ChatResponse> => {
+  const sendMessageWithIdempotency = async (
+    sid: string,
+    text: string,
+    key: string,
+    model?: string,
+  ): Promise<ChatResponse> => {
     const maxAttempts = 4;
     for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
       try {
-        const res = await chatApi.sendMessage(sid, text, key);
+        const res = await chatApi.sendMessage(sid, text, key, model);
         if (res.data.code === 40904 && attempt < maxAttempts - 1) {
           await new Promise((r) => setTimeout(r, 3000));
           continue;
@@ -309,7 +318,8 @@ function ChatContent() {
     activeTurnRef.current = { sid: sid!, key: clientMessageId, text };
     try {
       // M6：优先 SSE 流式；失败自动回退 JSON 端点
-      const streamed = await chatStream.sendStreamWithRetry(sid!, text, clientMessageId);
+      const streamed = await chatStream.sendStreamWithRetry(
+        sid!, text, clientMessageId, modelPref.model);
       const aiMsg: ChatMessage = {
         sessionId: sid!,
         role: 'assistant',
@@ -323,6 +333,12 @@ function ChatContent() {
     } catch (err: any) {
       if (err?.name === 'AbortError') return; // 主动取消（切换会话/卸载）
       const code = err?.response?.data?.code ?? err?.code;
+      // M7 Batch 3：所选模型不可用 → 提示并回退智能默认（不重复尝试同模型）
+      if (code === 40005) {
+        toast.error('所选模型不可用，已切换回智能默认');
+        modelPref.select('');
+        return;
+      }
       if (code === 40904) {
         toast.error('发送超时，请稍后重试');
         const fallbackMsg: ChatMessage = {
@@ -333,7 +349,8 @@ function ChatContent() {
         appendAssistantOrNotify(sid!, fallbackMsg);
       } else {
         try {
-          const data = await sendMessageWithIdempotency(sid!, text, clientMessageId);
+          const data = await sendMessageWithIdempotency(
+            sid!, text, clientMessageId, modelPref.model);
           const aiMsg: ChatMessage = {
             sessionId: sid!,
             role: 'assistant',
@@ -497,7 +514,12 @@ function ChatContent() {
         </div>
 
         {/* 输入区 */}
-        <div className="border-t border-slate-200 dark:border-slate-800 p-3 flex gap-2">
+        <div className="border-t border-slate-200 dark:border-slate-800 p-3 flex gap-2 items-center">
+          {/* M7 Batch 3：模型选择（智能默认=不传 model） */}
+          <div className="w-36 flex-shrink-0">
+            {/* M7-7：输入区贴底 → 模型下拉向上展开，避免溢出视口无法选择 */}
+            <ModelSelector value={modelPref.model} onChange={modelPref.select} dropUp />
+          </div>
           <input
             value={input}
             onChange={(e) =>
