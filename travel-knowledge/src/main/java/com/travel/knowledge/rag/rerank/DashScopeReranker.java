@@ -43,7 +43,6 @@ public class DashScopeReranker implements Reranker {
 
     private static final String ENDPOINT =
             "https://dashscope.aliyuncs.com/api/v1/services/rerank/text-rerank/text-rerank";
-    private static final String MODEL = "gte-rerank-v2";
 
     /** 精排专用虚拟线程池（orTimeout 超时后底层调用可被丢弃） */
     private static final ExecutorService RERANK_EXECUTOR = Executors.newVirtualThreadPerTaskExecutor();
@@ -53,14 +52,18 @@ public class DashScopeReranker implements Reranker {
 
     private final RerankProperties properties;
     private final RagRoutingMetrics metrics;
+    /** M7 Batch 4：模型名配置化（travel.rag.rerank.model，默认不变 gte-rerank-v2） */
+    private final String model;
     private final String apiKey;
     private final RestClient restClient;
 
     public DashScopeReranker(RerankProperties properties,
                              RagRoutingMetrics metrics,
+                             @Value("${travel.rag.rerank.model:gte-rerank-v2}") String model,
                              @Value("${spring.ai.dashscope.api-key:}") String apiKey) {
         this.properties = properties;
         this.metrics = metrics;
+        this.model = model;
         this.apiKey = apiKey;
         SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
         factory.setConnectTimeout((int) properties.getTimeoutMs());
@@ -95,7 +98,7 @@ public class DashScopeReranker implements Reranker {
                 .map(r -> (safe(r.getTitle()) + "\n" + safe(r.getSnippet())).strip())
                 .toList();
         Map<String, Object> body = Map.of(
-                "model", MODEL,
+                "model", model,
                 "input", Map.of("query", query == null ? "" : query, "documents", documents),
                 "parameters", Map.of("return_documents", false, "top_n", topK));
         String response = exchange(JsonUtils.toJson(body));

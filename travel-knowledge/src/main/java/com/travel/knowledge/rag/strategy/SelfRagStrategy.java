@@ -42,7 +42,9 @@ public class SelfRagStrategy implements RagStrategy {
     private final ChatModel chatModel;
 
     @Autowired
-    public SelfRagStrategy(@Qualifier("hybridRag") RagStrategy baseStrategy, ChatModel chatModel) {
+    // M7 Batch 4：置信度判断为高频短输出 → light 角色（质量由 RAG 评测门禁守护）
+    public SelfRagStrategy(@Qualifier("hybridRag") RagStrategy baseStrategy,
+                           @Qualifier("lightModel") ChatModel chatModel) {
         this.baseStrategy = baseStrategy;
         this.chatModel = chatModel;
     }

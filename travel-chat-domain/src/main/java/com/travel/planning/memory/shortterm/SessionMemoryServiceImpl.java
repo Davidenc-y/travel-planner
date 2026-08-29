@@ -5,9 +5,9 @@ import com.travel.common.util.JsonUtils;
 import com.travel.planning.config.LlmGovernor;
 import com.travel.planning.memory.sessionstore.SessionStorePort;
 import com.travel.planning.prompt.PromptTemplates;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.model.ChatModel;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.script.DefaultRedisScript;
@@ -29,7 +29,6 @@ import java.util.concurrent.TimeUnit;
  */
 @Slf4j
 @Service
-@RequiredArgsConstructor
 public class SessionMemoryServiceImpl implements SessionMemoryPort {
 
     // F67/B3-1：消息读取收口到 SessionStorePort（不直连 Mapper）
@@ -45,6 +44,21 @@ public class SessionMemoryServiceImpl implements SessionMemoryPort {
     /** M3-9：请求内消息快照（同一请求多次读取只查一次库；异步线程各自独立加载） */
     private final ThreadLocal<Map<String, List<ChatMessage>>> requestMessages =
             ThreadLocal.withInitial(LinkedHashMap::new);
+
+    // M7-6：摘要压缩为低频后台任务 → light 角色（质量由保真校验守护）
+    public SessionMemoryServiceImpl(SessionStorePort sessionStorePort,
+                                    @Qualifier("lightModel") ChatModel chatModel,
+                                    StringRedisTemplate redisTemplate,
+                                    ShortTermMemoryProperties props,
+                                    LlmGovernor llmGovernor,
+                                    PromptTemplates promptTemplates) {
+        this.sessionStorePort = sessionStorePort;
+        this.chatModel = chatModel;
+        this.redisTemplate = redisTemplate;
+        this.props = props;
+        this.llmGovernor = llmGovernor;
+        this.promptTemplates = promptTemplates;
+    }
 
     /**
      * M4-1a/P0-1：摘要双 key CAS 原子写入脚本（版本冲突放弃，滚动/收口共用）。
@@ -293,13 +307,16 @@ public class SessionMemoryServiceImpl implements SessionMemoryPort {
 
             // 语义保真校验 + 重试
             if (props.isSummaryValidate()) {
-                List<String> missing = validateSummary(incremental, summary);
+                // M7-8：校验必须针对“实际生成输入”（旧摘要+新增对话），而不是仅新增
+                // 对话——否则旧上下文保留的关键项（目的地/预算/计划等）会被误判缺失，
+                // 导致滚动摘要反复“降级不保存”，历史持续膨胀且上下文陈旧
+                List<String> missing = validateSummary(input, summary);
                 int retry = 0;
                 while (!missing.isEmpty() && retry < props.getSummaryRetryTimes()) {
                     summary = callSummarize(
                             input + "\n\n【必须补充】" + String.join("、", missing),
                             props.getSummaryHardMaxTokens());
-                    missing = validateSummary(incremental, summary);
+                    missing = validateSummary(input, summary);
                     retry++;
                 }
                 if (!missing.isEmpty()) {

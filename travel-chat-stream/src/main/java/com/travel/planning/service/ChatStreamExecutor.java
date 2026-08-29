@@ -9,14 +9,14 @@ import com.travel.core.stream.TurnGate;
 public interface ChatStreamExecutor {
 
     ChatStreamPrepared prepareStream(Long userId, String sessionId, String message,
-                                     String clientMessageId);
+                                     String clientMessageId, String model);
 
     ChatStreamResult runStream(ChatStreamPrepared prepared, ChatProgressListener listener);
 
     /** 流式准备产物（gate 供流式路径复用，避免幂等门禁重复执行） */
     record ChatStreamPrepared(String sessionId, String message, Long userId,
                               String clientMessageId, TurnGate gate,
-                              String sessionTitle) {
+                              String sessionTitle, String model) {
         public boolean replay() {
             return !gate.proceed();
         }

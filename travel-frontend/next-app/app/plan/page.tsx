@@ -14,6 +14,8 @@ import { buildItineraryUrl } from '@/lib/url-guard';
 import { PagedMultiSelect, PagedSingleSelect } from '@/components/ui/paged-options';
 import { FormShell } from '@/components/ui/form-shell';
 import { DestinationAutocomplete } from '@/components/plan/DestinationAutocomplete';
+import { ModelSelector } from '@/components/model/ModelSelector';
+import { useModelPreference } from '@/hooks/useModelPreference';
 
 const schema = z.object({
   destination: z.string().min(1, '目的地不能为空'),
@@ -32,6 +34,8 @@ const partyOptions = ['独行', '情侣', '家庭', '朋友'];
 function PlanPageContent() {
   const router = useRouter();
   const { isAuthenticated } = useAuth();
+  // M7 Batch 3：用户模型偏好（'' = 智能默认）
+  const modelPref = useModelPreference();
   const [loading, setLoading] = useState(false);
   const [selectedInterests, setSelectedInterests] = useState<string[]>([]);
   const [party, setParty] = useState<string | undefined>(undefined);
@@ -78,6 +82,7 @@ function PlanPageContent() {
       party: party || undefined,
       interests: selectedInterests,
       clientRequestId: generateUUID(),
+      ...(modelPref.model ? { model: modelPref.model } : {}),
     };
     const controller = new AbortController();
     streamAbortRef.current = controller;
@@ -115,6 +120,13 @@ function PlanPageContent() {
       router.push(buildItineraryUrl(doneId));
     } catch (err: any) {
       if (err?.name === 'AbortError') return;
+      // M7 Batch 3：所选模型不可用 → 提示并回退智能默认（跳过同模型 JSON 重试）
+      const code = err?.response?.data?.code ?? err?.code;
+      if (code === 40005) {
+        toast.error('所选模型不可用，已切换回智能默认');
+        modelPref.select('');
+        return;
+      }
       // M6-16：流式异常 → 回退 JSON generate
       try {
         const res = await itineraryApi.generate(payload);
@@ -170,6 +182,13 @@ function PlanPageContent() {
           }
         >
         <div className="space-y-5">
+          <div>
+            <label className="flex items-center gap-2 text-sm font-medium mb-1.5">
+              <Sparkles className="h-4 w-4 text-brand-500" /> 模型
+            </label>
+            {/* M7 Batch 3：模型选择（智能默认=不传 model，后端角色默认） */}
+            <ModelSelector value={modelPref.model} onChange={modelPref.select} />
+          </div>
           <div>
           <label className="flex items-center gap-2 text-sm font-medium mb-1.5">
             <MapPin className="h-4 w-4 text-brand-500" /> 目的地

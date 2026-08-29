@@ -2,6 +2,7 @@ package com.travel.planning.agent.route;
 
 import com.travel.planning.agent.AbstractReactSubAgent;
 import com.travel.planning.agent.supervisor.TokenUsageInterceptor;
+import com.travel.planning.agent.supervisor.ModelRouteInterceptor;
 import com.travel.planning.prompt.PromptTemplates;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.model.ChatModel;
@@ -17,13 +18,16 @@ public class RouteArrangementAgent extends AbstractReactSubAgent {
 
     private final ChatModel chatModel;
     private final TokenUsageInterceptor tokenUsageInterceptor;
+    private final ModelRouteInterceptor modelRouteInterceptor;
     private final PromptTemplates promptTemplates;
 
     public RouteArrangementAgent(@Qualifier("chatModel") ChatModel chatModel,
                                  TokenUsageInterceptor tokenUsageInterceptor,
+                                 ModelRouteInterceptor modelRouteInterceptor,
                                  PromptTemplates promptTemplates) {
         this.chatModel = chatModel;
         this.tokenUsageInterceptor = tokenUsageInterceptor;
+        this.modelRouteInterceptor = modelRouteInterceptor;
         this.promptTemplates = promptTemplates;
     }
 
@@ -60,5 +64,10 @@ public class RouteArrangementAgent extends AbstractReactSubAgent {
     @Override
     protected TokenUsageInterceptor interceptor() {
         return tokenUsageInterceptor;
+    }
+
+    @Override
+    protected ModelRouteInterceptor modelRouteInterceptor() {
+        return modelRouteInterceptor;
     }
 }

@@ -5,6 +5,7 @@ import com.alibaba.cloud.ai.graph.OverAllState;
 import com.alibaba.cloud.ai.graph.RunnableConfig;
 import com.alibaba.cloud.ai.graph.agent.flow.agent.SupervisorAgent;
 import com.travel.core.guard.CircuitBreaker;
+import com.travel.aigateway.route.ModelRoutingContext;
 import com.travel.planning.memory.longterm.ProfileToolProvider;
 import com.travel.planning.prompt.PromptTemplates;
 import com.travel.planning.service.TurnCancellation;
@@ -70,6 +71,11 @@ final class SupervisorStreamExecutor {
             RunnableConfig.Builder configBuilder = RunnableConfig.builder()
                     .threadId("rag_" + requestId)
                     .addMetadata(TokenUsageInterceptor.REQUEST_ID_KEY, requestId);
+            // M7 Level 2：图流 Reactor 线程经 metadata 传播模型 key（拦截器同线程 runWith）
+            String model = ModelRoutingContext.current();
+            if (model != null && !model.isBlank()) {
+                configBuilder.addMetadata(ModelRouteInterceptor.MODEL_KEY, model);
+            }
             ReactiveBlockSupport.addCancellationMetadata(configBuilder, cancel);
             if (userId != null) {
                 configBuilder.addMetadata(ProfileToolProvider.USER_ID_METADATA_KEY, userId);
@@ -124,6 +130,9 @@ final class SupervisorStreamExecutor {
                     RunnableConfig.Builder retryBuilder = RunnableConfig.builder()
                             .threadId("rag_" + retryRequestId)
                             .addMetadata(TokenUsageInterceptor.REQUEST_ID_KEY, retryRequestId);
+                    if (model != null && !model.isBlank()) {
+                        retryBuilder.addMetadata(ModelRouteInterceptor.MODEL_KEY, model);
+                    }
                     ReactiveBlockSupport.addCancellationMetadata(retryBuilder, cancel);
                     if (userId != null) {
                         retryBuilder.addMetadata(ProfileToolProvider.USER_ID_METADATA_KEY, userId);

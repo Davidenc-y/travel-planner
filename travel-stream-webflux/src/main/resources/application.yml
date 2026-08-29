@@ -18,14 +18,6 @@ spring:
       port: ${REDIS_PORT:6379}
       database: 0
       timeout: 5000ms
-  ai:
-    dashscope:
-      api-key: ${DASHSCOPE_API_KEY:}
-      chat:
-        options:
-          model: qwen3.7-plus
-          temperature: 0.7
-
 mybatis-plus:
   configuration:
     map-underscore-to-camel-case: true
@@ -36,15 +28,47 @@ mybatis-plus:
       logic-not-delete-value: 0
 
 travel:
+  # M7：模型注册表（单一事实源；enabled=false 回退旧行为——Batch 2 后旧 AiModelConfig 已删除）
   ai:
-    models:
-      main: qwen3.7-max
-      light: qwen3.7-max
-      coder: qwen3.7-max
-    timeout:
-      seconds: 120
-    max-output-tokens:
-      main: 8000
+    model-registry:
+      enabled: true
+      default-timeout-seconds: 120
+      models:
+        - key: qwen3.7-max
+          provider: dashscope-native
+          display-name: "Qwen3.7 Max · 深度推理"
+          api-key-env: DASHSCOPE_API_KEY
+          temperature: 0.7
+          max-tokens: 8000
+          top-p: 0.9
+          roles: [main]
+          selectable: true
+          enabled: true
+        - key: qwen-turbo
+          provider: dashscope-native
+          display-name: "Qwen Turbo · 轻量高速"
+          api-key-env: DASHSCOPE_API_KEY
+          temperature: 0.5
+          max-tokens: 2000
+          roles: [light]
+          selectable: true
+          enabled: true
+        - key: qwen3.7-plus
+          provider: openai-compatible
+          base-url: https://dashscope.aliyuncs.com/compatible-mode/v1
+          display-name: "Qwen3.7 Plus · 均衡"
+          api-key-env: DASHSCOPE_API_KEY
+          roles: []
+          selectable: true
+          enabled: true
+        - key: deepseek-chat
+          provider: openai-compatible
+          base-url: https://api.deepseek.com
+          display-name: "DeepSeek Chat · 通用"
+          api-key-env: DEEPSEEK_API_KEY
+          roles: []
+          selectable: true
+          enabled: true
   knowledge:
     base-url: ${KNOWLEDGE_BASE_URL:http://localhost:8082}
   memory:

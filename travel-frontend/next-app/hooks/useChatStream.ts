@@ -119,6 +119,7 @@ export function useChatStream(getCurrentSid: () => string | null) {
     sid: string,
     text: string,
     key: string,
+    model?: string,
   ): Promise<StreamedResult> => {
     const maxAttempts = 4;
     let acc = '';
@@ -166,7 +167,7 @@ export function useChatStream(getCurrentSid: () => string | null) {
             e.code = p.code;
             throw e;
           },
-        }, lastId || undefined);
+        }, lastId || undefined, model);
         // M6-5：流结束不代表展示结束——等逐字揭示完成后才返回最终文本
         await waitForRevealComplete();
         return { text: acc, sessionTitle: doneState.sessionTitle };

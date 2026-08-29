@@ -65,6 +65,8 @@ public class TravelSupervisorAgent {
     private final BudgetEstimationAgent budgetAgent;
 
     private final TokenUsageInterceptor tokenUsageInterceptor;
+    // M7 Batch 2：图流模型路由拦截器（Level 2，metadata 通道）
+    private final ModelRouteInterceptor modelRouteInterceptor;
     // M3-20：Prompt 模板外置（P1-17）
     private final PromptTemplates promptTemplates;
     // F91：熔断（LLM/Supervisor 调用保护）
@@ -103,6 +105,7 @@ public class TravelSupervisorAgent {
                                   RouteArrangementAgent routeAgent,
                                   BudgetEstimationAgent budgetAgent,
                                   TokenUsageInterceptor tokenUsageInterceptor,
+                                  ModelRouteInterceptor modelRouteInterceptor,
                                   CircuitBreaker.Registry circuitBreakerRegistry,
                                   PromptTemplates promptTemplates) {
         this.chatModel = chatModel;
@@ -111,6 +114,7 @@ public class TravelSupervisorAgent {
         this.routeAgent = routeAgent;
         this.budgetAgent = budgetAgent;
         this.tokenUsageInterceptor = tokenUsageInterceptor;
+        this.modelRouteInterceptor = modelRouteInterceptor;
         this.circuitBreakerRegistry = circuitBreakerRegistry;
         this.promptTemplates = promptTemplates;
         this.directAnswerExecutor =
@@ -127,14 +131,17 @@ public class TravelSupervisorAgent {
             // 创建 mainAgent（路由决策者）— Spring AI Alibaba 1.1.2.0 必须设置
             ReactAgent mainAgent = ReactAgent.builder()
                     .name("travel_supervisor_main")
-                    .model(chatModel)
+                    // M7-8：主代理路由输出经 RoutingChatClient 归一化——模型偶发在
+                    // 路由数组前输出散文时，框架 MainAgentNodeAction 整段解析会失败并
+                    // 回退 FINISH，导致子 Agent 流程被跳过；出口层提取末尾数组可根治
+                    .chatClient(RoutingChatClient.wrap(chatModel))
                     .description("旅游行程规划总协调器,负责路由决策")
                     .systemPrompt(promptTemplates.supervisorSystem())
                     .instruction("用户的请求是: {input}")
                     .outputKey("final_output")
                     // F27：注册 token 用量采集拦截器（与 4 个子 Agent 共用同一实例，
                     // 按请求 ID 累加 totalTokens，未 begin() 的流程自动跳过）。
-                    .interceptors(tokenUsageInterceptor)
+                    .interceptors(tokenUsageInterceptor, modelRouteInterceptor)
                     // F26：关闭 mainAgent 子图的默认 MemorySaver。
                     // MainAgentNodeAction 用常量 threadId 调用该子图；默认 saver 会导致
                     // 单次调用内每轮路由 checkpoint 与当前输入合并（消息重复累积），

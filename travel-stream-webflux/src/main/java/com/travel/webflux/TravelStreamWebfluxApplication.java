@@ -22,7 +22,9 @@ import org.springframework.context.annotation.Import;
 @EnableFeignClients(basePackages = "com.travel.planning.client")
 // M6-33：MyBatis-Plus 分页 + createdAt/updatedAt 自动填充（planning 经
 // com.travel.common 扫描获得；WebFlux 不扫描 common，需显式导入）
-@Import(com.travel.common.config.MybatisPlusConfig.class)
+// M7：模型网关装配（travel.ai.model-registry.enabled=true 时提供 chatModel/lightModel）
+@Import({com.travel.common.config.MybatisPlusConfig.class,
+        com.travel.aigateway.config.GatewayAutoConfig.class})
 public class TravelStreamWebfluxApplication {
 
     public static void main(String[] args) {

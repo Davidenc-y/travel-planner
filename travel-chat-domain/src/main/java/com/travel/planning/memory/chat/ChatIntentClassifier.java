@@ -4,6 +4,7 @@ import com.travel.common.util.JsonUtils;
 import com.travel.planning.prompt.PromptTemplates;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.model.ChatModel;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
 
 import java.nio.charset.StandardCharsets;
@@ -33,7 +34,9 @@ public class ChatIntentClassifier {
     /** 意图 LRU 缓存（access-order，容量由配置 cacheSize 控制） */
     private final Map<String, ChatIntent> cache;
 
-    public ChatIntentClassifier(ChatModel chatModel, ChatIntentProperties properties,
+    // M7-6：意图分类为高频短输出 → light 角色（注册表默认 qwen-turbo），避免旗舰模型成本浪费
+    public ChatIntentClassifier(@Qualifier("lightModel") ChatModel chatModel,
+                                ChatIntentProperties properties,
                                 PromptTemplates promptTemplates) {
         this.chatModel = chatModel;
         this.properties = properties;

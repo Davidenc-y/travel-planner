@@ -2,6 +2,7 @@ package com.travel.webflux.web;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.travel.common.exception.BusinessException;
+import com.travel.common.dto.ChatMessageRequest;
 import com.travel.core.stream.StreamEvent;
 import com.travel.core.stream.StreamMeta;
 import com.travel.core.stream.StreamPreflight;
@@ -26,7 +27,6 @@ import reactor.core.publisher.Flux;
 
 import java.time.Duration;
 import java.util.Map;
-
 /**
  * M6-30：WebFlux 聊天流式端点（对应 MVC ChatController.streamMessage）。
  *
@@ -50,17 +50,20 @@ public class ChatStreamWebfluxController {
     @PostMapping
     public Flux<ServerSentEvent<String>> stream(
             @PathVariable String sessionId,
-            @RequestBody Map<String, String> body,
+            @RequestBody ChatMessageRequest body,
             @RequestHeader(value = "Last-Event-ID", required = false) String lastEventId,
             ServerWebExchange exchange) {
         if (!props.isEnabled()) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "流式端点未启用");
         }
         Long userId = resolveUserId(exchange);
-        String message = body.get("message");
-        String clientMessageId = body.get("clientMessageId");
+        String message = body.getMessage();
+        String clientMessageId = body.getClientMessageId();
+        String model = body.getModel();
         StreamRequest request = new StreamRequest("chat", userId, sessionId,
-                message, clientMessageId, Map.of(), lastEventId);
+                message, clientMessageId,
+                model != null && !model.isBlank() ? Map.of("model", model) : Map.of(),
+                lastEventId);
         StreamPreflight preflight = chatStreamService.preflight(request);
         if (!preflight.ok()) {
             throw new BusinessException(preflight.code(), preflight.message());

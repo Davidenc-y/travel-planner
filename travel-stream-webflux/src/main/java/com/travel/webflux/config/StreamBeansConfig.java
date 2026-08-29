@@ -31,7 +31,13 @@ public class StreamBeansConfig {
         return new TokenAuthService(secret, expiration, refreshExpiration);
     }
 
+    /**
+     * M7-8：Noop 指标为默认兜底——真实 StreamMetrics 实现（如 planning 的
+     * MicrometerStreamMetrics @Component）存在时自动让位，避免 IDEA 静态分析
+     * 报告“more than one bean of StreamMetrics”歧义（两应用运行时各自只有一份）。
+     */
     @Bean
+    @ConditionalOnMissingBean(StreamMetrics.class)
     public StreamMetrics streamMetrics() {
         return NoopStreamMetrics.INSTANCE;
     }

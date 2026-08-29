@@ -50,7 +50,7 @@ public class ChatStreamService extends AbstractStreamingPipeline {
         try {
             ChatStreamExecutor.ChatStreamPrepared prepared = executor.prepareStream(
                     request.userId(), request.sessionId(), request.input(),
-                    request.clientMessageId());
+                    request.clientMessageId(), modelOf(request));
             return StreamPreflight.ok(prepared);
         } catch (BusinessException e) {
             return StreamPreflight.fail(e.getCode(), e.getMessage());
@@ -58,6 +58,12 @@ public class ChatStreamService extends AbstractStreamingPipeline {
             log.error("[ChatStream] preflight 意外异常: sessionId={}", request.sessionId(), e);
             return StreamPreflight.fail(50000, "流式处理失败，请稍后重试");
         }
+    }
+
+    /** M7 Batch 2：从 StreamRequest.attributes 读取请求级 model（无则 null）。 */
+    private static String modelOf(StreamRequest request) {
+        Object model = request.attributes().get("model");
+        return model instanceof String s && !s.isBlank() ? s : null;
     }
 
     @Override

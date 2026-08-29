@@ -30,6 +30,8 @@ public class AgentTraceCollector {
 
     private final TraceStore traceStore;
     private final TraceProperties properties;
+    // M7：实际路由模型（requestId 侧信道；end 时消费）
+    private final ModelRouteTracker modelRouteTracker;
 
     private LinkedBlockingQueue<AgentTrace> queue;
     private ScheduledExecutorService scheduler;
@@ -67,6 +69,10 @@ public class AgentTraceCollector {
         t.setTokenCompletion(safeInt(holder.completionTokens));
         t.setCallPath(holder.path.isEmpty() ? null
                 : com.travel.common.util.JsonUtils.toJson(holder.path));
+        String model = modelRouteTracker.take(holder.requestId);
+        if (model != null) {
+            t.setModelName(model);
+        }
         t.setStatus(status);
         t.setErrorMsg(errorMsg);
         if (!queue.offer(t)) {

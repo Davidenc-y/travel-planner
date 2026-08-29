@@ -2,6 +2,7 @@ package com.travel.planning.agent.preference;
 
 import com.travel.planning.agent.AbstractReactSubAgent;
 import com.travel.planning.agent.supervisor.TokenUsageInterceptor;
+import com.travel.planning.agent.supervisor.ModelRouteInterceptor;
 import com.travel.planning.memory.longterm.ProfileToolProvider;
 import com.travel.planning.prompt.PromptTemplates;
 import lombok.extern.slf4j.Slf4j;
@@ -21,15 +22,18 @@ public class PreferenceAnalysisAgent extends AbstractReactSubAgent {
 
     private final ChatModel lightModel;
     private final TokenUsageInterceptor tokenUsageInterceptor;
+    private final ModelRouteInterceptor modelRouteInterceptor;
     private final ProfileToolProvider profileToolProvider;
     private final PromptTemplates promptTemplates;
 
     public PreferenceAnalysisAgent(@Qualifier("lightModel") ChatModel lightModel,
                                    TokenUsageInterceptor tokenUsageInterceptor,
+                                   ModelRouteInterceptor modelRouteInterceptor,
                                    ProfileToolProvider profileToolProvider,
                                    PromptTemplates promptTemplates) {
         this.lightModel = lightModel;
         this.tokenUsageInterceptor = tokenUsageInterceptor;
+        this.modelRouteInterceptor = modelRouteInterceptor;
         this.profileToolProvider = profileToolProvider;
         this.promptTemplates = promptTemplates;
     }
@@ -72,5 +76,10 @@ public class PreferenceAnalysisAgent extends AbstractReactSubAgent {
     @Override
     protected TokenUsageInterceptor interceptor() {
         return tokenUsageInterceptor;
+    }
+
+    @Override
+    protected ModelRouteInterceptor modelRouteInterceptor() {
+        return modelRouteInterceptor;
     }
 }

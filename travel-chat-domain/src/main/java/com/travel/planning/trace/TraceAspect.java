@@ -32,8 +32,13 @@ public class TraceAspect {
     @Value("${travel.ai.models.main:qwen3.7-max}")
     private String modelName;
 
+    // M7-8：ItineraryService 位于 travel-planning 模块，travel-chat-domain 不依赖它，
+    // 切点字符串不能引用该符号（IDEA 静态分析报 Cannot resolve symbol；Maven 编译不校验
+    // 字符串）。用同包通配 *Service.generate(..) 等价匹配——当前该包仅有
+    // ItineraryService.generate，未来新增 generate 需确认是否应纳入追溯。
     @Around("execution(* com.travel.planning.service.ChatService.sendMessage(..))"
-            + " || execution(* com.travel.planning.service.ItineraryService.generate(..))")
+            + " || execution(* com.travel.planning.service.ChatService.runStream(..))"
+            + " || execution(* com.travel.planning.service.*Service.generate(..))")
     public Object around(ProceedingJoinPoint pjp) throws Throwable {
         sessionMemoryPort.beginRequest();
         TraceContext.Holder holder = null;
@@ -44,12 +49,16 @@ public class TraceAspect {
             String method = pjp.getSignature().getName();
             boolean isGenerate = "generate".equals(method);
             String type = isGenerate ? "itinerary" : "chat";
+            // M7-8：SSE/WebFlux 路径（runStream）单独标记流式端点；JSON 路径保持原样
+            String endpoint = isGenerate
+                    ? "POST /api/v1/itineraries/generate"
+                    : "runStream".equals(method)
+                            ? "POST /api/v1/chat/sessions/{id}/messages/stream"
+                            : "POST /api/v1/chat/sessions/{id}/messages";
             String requestId = UUID.randomUUID().toString();
             holder = TraceContext.begin(requestId);
             holder.trace.setTraceType(type);
-            holder.trace.setEndpoint(isGenerate
-                    ? "POST /api/v1/itineraries/generate"
-                    : "POST /api/v1/chat/sessions/{id}/messages");
+            holder.trace.setEndpoint(endpoint);
             holder.trace.setModelName(modelName);
             holder.path.add(type);
             Object result = pjp.proceed();
@@ -57,9 +66,13 @@ public class TraceAspect {
             collector.end(holder, "SUCCESS", null);
             return result;
         } catch (Throwable e) {
-            collector.end(holder, statusOf(e), e.getMessage() == null
-                    ? e.getClass().getSimpleName() : e.getMessage().substring(0,
-                    Math.min(500, e.getMessage().length())));
+            // M7-8：轮次中断（TurnInterruptedException）不记 FAILED trace——
+            // 与“中断不落库”语义一致；成功/其他异常照常记录
+            if (!(e instanceof com.travel.planning.service.TurnInterruptedException)) {
+                collector.end(holder, statusOf(e), e.getMessage() == null
+                        ? e.getClass().getSimpleName() : e.getMessage().substring(0,
+                        Math.min(500, e.getMessage().length())));
+            }
             throw e;
         } finally {
             sessionMemoryPort.endRequest();

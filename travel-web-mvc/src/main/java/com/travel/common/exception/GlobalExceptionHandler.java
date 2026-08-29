@@ -13,6 +13,7 @@ import org.springframework.web.method.annotation.MethodArgumentTypeMismatchExcep
 import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 import jakarta.validation.ConstraintViolationException;
+import java.util.Locale;
 
 /**
  * 全局异常处理器（M6-9 P2：自 travel-common 迁移至 travel-web-mvc，行为不变）。
@@ -116,9 +117,23 @@ public class GlobalExceptionHandler {
      */
     @ExceptionHandler(Exception.class)
     @ResponseStatus(HttpStatus.INTERNAL_SERVER_ERROR)
-    public R<Void> handleGeneric(Exception e) {
+    public R<Void> handleGeneric(Exception e, HttpServletResponse response) {
+        // M7-8：SSE 客户端断开（浏览器关闭/切页）会触发容器异步错误分发，
+        // 此时响应已提交且 Content-Type 为 text/event-stream，无法写回 R 对象；
+        // 直接降级为 DEBUG 并返回 null（@ResponseStatus 使 Spring 跳过响应体写入），
+        // 避免“系统异常 ERROR + No converter WARN + Servlet.service ERROR”日志噪音。
+        if (isSseResponse(response)) {
+            log.debug("[GlobalExceptionHandler] SSE 流客户端已断开，忽略异常: {}", e.getMessage());
+            return null;
+        }
         log.error("系统异常", e);
         return R.fail(50000, "系统异常，请稍后重试");
+    }
+
+    private boolean isSseResponse(HttpServletResponse response) {
+        String contentType = response.getContentType();
+        return contentType != null
+                && contentType.toLowerCase(Locale.ROOT).contains("text/event-stream");
     }
 
     private String formatFieldError(FieldError f) {

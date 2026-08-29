@@ -9,6 +9,7 @@ import com.travel.common.dto.ItineraryResponseDTO.*;
 import com.travel.common.entity.Itinerary;
 import com.travel.common.enums.ItineraryStatus;
 import com.travel.common.exception.BusinessException;
+import com.travel.common.exception.ErrorCode;
 import com.travel.common.exception.ItineraryGenerationException;
 import com.travel.common.result.PageResult;
 import com.travel.common.util.JsonUtils;
@@ -22,6 +23,9 @@ import com.travel.planning.prompt.PromptTemplates;
 import com.travel.planning.trace.TraceContext;
 import com.travel.planning.repository.ItineraryMapper;
 import com.travel.planning.workflow.TravelWorkflowBuilder;
+import com.travel.aigateway.core.GatewayException;
+import com.travel.aigateway.core.ModelRegistry;
+import com.travel.aigateway.route.ModelRoutingContext;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.messages.UserMessage;
@@ -93,11 +97,19 @@ public class ItineraryService {
     // M4-8：节点快照读取（resume 断点判定）与状态机配置
     private final com.travel.planning.workflow.ItineraryTaskSnapshotPort snapshotPort;
     private final com.travel.planning.workflow.ItineraryStateMachineProperties stateMachineProps;
+    // M7：模型注册表（D6：请求级 model 入口快速失败校验）
+    private final ModelRegistry modelRegistry;
 
     /**
      * 生成行程（调用 StateGraph 工作流 + 持久化 + 画像更新）
      */
     public ItineraryResponseDTO generate(ItineraryGenerateRequestDTO req, Long userId) {
+        validateModel(req.getModel());
+        return ModelRoutingContext.runWith(req.getModel(),
+                () -> generateInternal(req, userId));
+    }
+
+    private ItineraryResponseDTO generateInternal(ItineraryGenerateRequestDTO req, Long userId) {
         // F52：防御脏 userId（兜底 0 会导致 user_id=0 行程/画像）。
         if (userId == null || userId <= 0) {
             throw new BusinessException(40101, "用户未登录");
@@ -282,6 +294,10 @@ public class ItineraryService {
      * 进行中返回 40905）；快照缺失回退整图重跑（不抛错、幂等键沿用）。</p>
      */
     public ItineraryResponseDTO resume(Long id, Long userId) {
+        return ModelRoutingContext.runWith(null, () -> resumeInternal(id, userId));
+    }
+
+    private ItineraryResponseDTO resumeInternal(Long id, Long userId) {
         if (userId == null || userId <= 0) {
             throw new BusinessException(40101, "用户未登录");
         }
@@ -428,6 +444,19 @@ public class ItineraryService {
         String payload = snapshots.get(nodeKey);
         if (payload != null && !payload.isBlank()) {
             initialState.put(stateKey, payload);
+        }
+    }
+
+    /** M7 D6：未知/禁用/不可选模型 → 40005，不静默回退。 */
+    private void validateModel(String model) {
+        if (model == null || model.isBlank()) {
+            return;
+        }
+        try {
+            modelRegistry.requireSelectable(model);
+        } catch (GatewayException e) {
+            throw new BusinessException(ErrorCode.MODEL_NOT_FOUND.code(),
+                    ErrorCode.MODEL_NOT_FOUND.message() + ": " + model);
         }
     }
 
