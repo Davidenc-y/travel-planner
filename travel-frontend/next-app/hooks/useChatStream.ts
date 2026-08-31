@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useRef, useState } from 'react';
-import { chatApi } from '@/lib/api';
+import { chatApi, httpErrorCode, isAbortError } from '@/lib/api';
 
 // M6-5：逐字揭示节奏——后端可能一次性爆发式发送全部分块，
 // 前端按固定节奏消费待展示队列，保证“逐字直到完全展示”。
@@ -19,6 +19,8 @@ export interface StreamState {
 export interface StreamedResult {
   text: string;
   sessionTitle?: string;
+  /** B3/09 C-07：done 事件携带的本轮 token 数（后端已有字段，此前被丢弃） */
+  tokens?: number;
 }
 
 /**
@@ -35,6 +37,8 @@ export function useChatStream(getCurrentSid: () => string | null) {
   // M6-5：待展示文本队列与揭示定时器
   const pendingStreamRef = useRef('');
   const revealTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // B3/09 C-03：按会话采集 thinking 文案（ref 同步可读，供轮次完成后生成执行过程摘要）
+  const thinkingRef = useRef<Record<string, string[]>>({});
 
   const setStreamState = useCallback(
     (sid: string, updater: (prev: StreamState) => StreamState) => {
@@ -124,13 +128,20 @@ export function useChatStream(getCurrentSid: () => string | null) {
     const maxAttempts = 4;
     let acc = '';
     let lastId = '';
-    const doneState: { sessionTitle?: string } = {};
+    const doneState: { sessionTitle?: string; tokens?: number } = {};
+    thinkingRef.current[sid] = [];
     for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
       const controller = new AbortController();
       streamAbortRef.current = controller;
       try {
         await chatApi.sendMessageStream(sid, text, key, controller.signal, {
           onThinking: (p) => {
+            if (p.message) {
+              const prevLines = thinkingRef.current[sid] ?? [];
+              if (!prevLines.includes(p.message)) {
+                thinkingRef.current[sid] = [...prevLines, p.message];
+              }
+            }
             setStreamState(sid, (s) => ({
               ...s,
               phase: 'thinking',
@@ -158,6 +169,7 @@ export function useChatStream(getCurrentSid: () => string | null) {
           },
           onDone: (p) => {
             doneState.sessionTitle = p.sessionTitle;
+            doneState.tokens = p.tokens;
           },
           onId: (id) => {
             lastId = id;
@@ -170,10 +182,10 @@ export function useChatStream(getCurrentSid: () => string | null) {
         }, lastId || undefined, model);
         // M6-5：流结束不代表展示结束——等逐字揭示完成后才返回最终文本
         await waitForRevealComplete();
-        return { text: acc, sessionTitle: doneState.sessionTitle };
-      } catch (err: any) {
-        if (err?.name === 'AbortError') throw err;
-        const code = err?.response?.data?.code ?? err?.code;
+        return { text: acc, sessionTitle: doneState.sessionTitle, tokens: doneState.tokens };
+      } catch (err: unknown) {
+        if (isAbortError(err)) throw err;
+        const code = httpErrorCode(err);
         if (code === 40904 && attempt < maxAttempts - 1) {
           await new Promise((r) => setTimeout(r, 3000));
           continue;
@@ -204,11 +216,15 @@ export function useChatStream(getCurrentSid: () => string | null) {
     pendingStreamRef.current = '';
   }, [stopReveal]);
 
+  /** B3/09 C-03：读取指定会话本轮 thinking 文案（轮次完成后、clearStream 前调用） */
+  const getThinkingLines = useCallback((sid: string): string[] => thinkingRef.current[sid] ?? [], []);
+
   /** 轮次收尾清理：清流态 + 停揭示 + 清队列与 abort 引用 */
   const clearStream = useCallback((sid: string) => {
     clearStreamState(sid);
     stopReveal();
     pendingStreamRef.current = '';
+    delete thinkingRef.current[sid];
     streamAbortRef.current = null;
   }, [clearStreamState, stopReveal]);
 
@@ -227,5 +243,6 @@ export function useChatStream(getCurrentSid: () => string | null) {
     stopRevealForSwitch,
     clearStream,
     dispose,
+    getThinkingLines,
   };
 }

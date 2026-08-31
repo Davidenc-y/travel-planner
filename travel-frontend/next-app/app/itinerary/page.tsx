@@ -4,18 +4,28 @@ import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { toast } from 'sonner';
-import { MapPin, Calendar, DollarSign, Trash2, Plus, RotateCcw, Loader2 } from 'lucide-react';
+import { Plus } from 'lucide-react';
 import { itineraryApi, getErrorMessage } from '@/lib/api';
+import { ITINERARY_STATUS, ITINERARY_POLL_INTERVAL_MS } from '@/lib/constants';
 import { useAuth } from '@/lib/auth-context';
+import type { DialogOriginRect } from '@/components/ui/dialog';
 import type { ItineraryResponse, PageResult } from '@/types';
-import { formatCurrency, formatDate } from '@/lib/utils';
 import { ListState } from '@/components/ui/list-state';
 import { takePrefetch } from '@/lib/prefetch';
 import { ItineraryCardModal } from '@/components/feature/itinerary-card-modal';
+import { ItineraryCard } from '@/components/feature/itinerary-card';
+import { PageHeader } from '@/components/ui/page-header';
+import { Pagination } from '@/components/ui/pagination';
+import { Button } from '@/components/ui/button';
+import { useConfirm } from '@/components/ui/confirm-dialog';
+
+// F99：行程列表每页条数可选（默认 8）
+const PAGE_SIZE_OPTIONS = [8, 10, 20, 50];
 
 function ItineraryListContent() {
   const router = useRouter();
   const { userId, isAuthenticated } = useAuth();
+  const confirm = useConfirm();
   const [data, setData] = useState<PageResult<ItineraryResponse> | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -23,8 +33,9 @@ function ItineraryListContent() {
   const [totalPages, setTotalPages] = useState(1);
   const [pageSize, setPageSize] = useState(8);
   const [selectedId, setSelectedId] = useState<number | null>(null);
-// F99：行程列表每页条数可选（默认 8）
-const PAGE_SIZE_OPTIONS = [8, 10, 20, 50];
+  // C5：Container Transform 起点——被点击卡片的矩形
+  const [originRect, setOriginRect] = useState<DialogOriginRect | null>(null);
+  const [resumingId, setResumingId] = useState<number | null>(null);
 
   useEffect(() => {
     if (!isAuthenticated) {
@@ -36,21 +47,42 @@ const PAGE_SIZE_OPTIONS = [8, 10, 20, 50];
     }
   }, [userId, isAuthenticated]);
 
-  // M6-54：存在生成中（GENERATING）的行程时自动轮询刷新（3s），
-  // 生成完成后停止；避免用户停留在本页时状态一直停留在"生成中"
+  // M6-54：存在生成中（GENERATING）的行程时自动轮询刷新（3s），生成完成后停止；
+  // B3/PE-05（F-26）：页面不可见（切后台标签）时暂停轮询，回归可见时立即刷新一次
   useEffect(() => {
-    if (!data) return;
+    if (!data) return undefined;
     const hasGenerating =
-      data.list?.some((i) => i.status === 'GENERATING') ?? false;
-    if (!hasGenerating) return;
-    const timer = setTimeout(() => {
-      loadData(page, pageSize);
-    }, 3000);
-    return () => clearTimeout(timer);
+      data.list?.some((i) => i.status === ITINERARY_STATUS.GENERATING) ?? false;
+    if (!hasGenerating) return undefined;
+
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const schedule = () => {
+      timer = setTimeout(() => {
+        loadData(page, pageSize);
+      }, ITINERARY_POLL_INTERVAL_MS);
+    };
+    const onVisibility = () => {
+      if (document.visibilityState === 'hidden') {
+        if (timer) {
+          clearTimeout(timer);
+          timer = null;
+        }
+      } else if (!timer) {
+        loadData(page, pageSize);
+      }
+    };
+    if (document.visibilityState === 'visible') {
+      schedule();
+    }
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => {
+      if (timer) clearTimeout(timer);
+      document.removeEventListener('visibilitychange', onVisibility);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data, page, pageSize]);
 
-const loadData = async (targetPage = 1, size = pageSize) => {
+  const loadData = async (targetPage = 1, size = pageSize) => {
     // F102：命中预取缓存则直接展示（取走即删），避免切换卡顿
     const cached = takePrefetch<PageResult<ItineraryResponse>>(`itinerary:${targetPage}:${size}`);
     if (cached) {
@@ -70,7 +102,7 @@ const loadData = async (targetPage = 1, size = pageSize) => {
       setPage(targetPage);
       setPageSize(size);
       setTotalPages(Math.max(1, d?.totalPages || 1));
-    } catch (err: any) {
+    } catch (err: unknown) {
       const message = getErrorMessage(err);
       setError(message);
       toast.error('加载失败: ' + message);
@@ -79,8 +111,9 @@ const loadData = async (targetPage = 1, size = pageSize) => {
     }
   };
 
+  // B3（04 §4.4，F-08）：原生 confirm → useConfirm（文案保留原语义）
   const handleDelete = async (id: number) => {
-    if (!confirm('确定删除此行程？')) return;
+    if (!(await confirm({ title: '确定删除此行程？', danger: true, confirmText: '删除' }))) return;
     try {
       await itineraryApi.delete(id);
       toast.success('删除成功');
@@ -90,12 +123,10 @@ const loadData = async (targetPage = 1, size = pageSize) => {
     }
   };
 
-  const [resumingId, setResumingId] = useState<number | null>(null);
-
   /** M4-9：断点续跑（仅 FAILED/僵尸 GENERATING；同步等待同 generate 交互形态） */
   const handleResume = async (id: number) => {
     if (resumingId) return;
-    if (!confirm('从上次中断的位置继续生成？')) return;
+    if (!(await confirm({ title: '从上次中断的位置继续生成？', confirmText: '继续生成' }))) return;
     setResumingId(id);
     try {
       await itineraryApi.resume(id);
@@ -108,28 +139,21 @@ const loadData = async (targetPage = 1, size = pageSize) => {
     }
   };
 
-  /** M4-9：状态徽标（GENERATING 生成中/FAILED 失败可续） */
-  const statusBadge = (status?: string) => {
-    if (status === 'GENERATING') {
-      return <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300"><Loader2 className="h-3 w-3 animate-spin" />生成中</span>;
-    }
-    if (status === 'FAILED') {
-      return <span className="text-xs px-2 py-0.5 rounded-full bg-red-100 text-red-600 dark:bg-red-900/30 dark:text-red-300">失败·可续跑</span>;
-    }
-    return null;
-  };
-
   return (
     <div>
-      <div className="flex items-center justify-between mb-6">
-        <h1 className="text-2xl font-bold">我的行程</h1>
-        <Link
-          href="/plan"
-          className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-brand-500 text-white text-sm font-medium hover:bg-brand-600 magnetic"
-        >
-          <Plus className="h-4 w-4" /> 新建行程
-        </Link>
-      </div>
+      <PageHeader
+        title="我的行程"
+        actions={
+          <Link
+            href="/plan"
+            className="inline-flex"
+          >
+            <Button>
+              <Plus className="h-4 w-4" /> 新建行程
+            </Button>
+          </Link>
+        }
+      />
 
       <ListState
         loading={loading}
@@ -144,89 +168,34 @@ const loadData = async (targetPage = 1, size = pageSize) => {
       >
         <div className="grid gap-4 md:grid-cols-2">
           {(data?.list ?? []).map((item) => (
-            <div
+            <ItineraryCard
               key={item.id}
-              className="glass rounded-xl p-5 hover:shadow-lg transition-all magnetic cursor-pointer"
-              onClick={() => setSelectedId(item.id)}
-            >
-              <div className="flex items-start justify-between">
-                <div className="flex-1">
-                  <div className="flex items-center gap-2 mb-2">
-                    <h3 className="font-semibold text-lg">{item.title}</h3>
-                    {statusBadge(item.status)}
-                  </div>
-                  <div className="space-y-1 text-sm text-slate-500 dark:text-slate-400">
-                    <p className="flex items-center gap-1.5">
-                      <MapPin className="h-3.5 w-3.5" /> {item.destination}
-                    </p>
-                    <p className="flex items-center gap-1.5">
-                      <Calendar className="h-3.5 w-3.5" /> {item.days} 天
-                    </p>
-                    <p className="flex items-center gap-1.5">
-                      <DollarSign className="h-3.5 w-3.5" /> {formatCurrency(item.estimatedCost)}
-                    </p>
-                    <p className="text-xs">{formatDate(item.generatedAt)}</p>
-                  </div>
-                  {/* M4-9/M6-52：仅可续状态（FAILED/僵尸 GENERATING）显示继续生成；
-                      非僵尸 GENERATING 只显示"生成中"，避免与后台在途生成并发双跑 */}
-                  {item.resumable && (
-                    <button
-                      onClick={(e) => { e.stopPropagation(); handleResume(item.id); }}
-                      disabled={resumingId === item.id}
-                      className="mt-2 inline-flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-medium bg-brand-500 text-white hover:bg-brand-600 disabled:opacity-50"
-                    >
-                      {resumingId === item.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RotateCcw className="h-3.5 w-3.5" />}
-                      {resumingId === item.id ? '续跑中…' : '继续生成'}
-                    </button>
-                  )}
-                </div>
-                <button
-                  onClick={(e) => { e.stopPropagation(); handleDelete(item.id); }}
-                  className="p-1.5 rounded-lg hover:bg-red-50 dark:hover:bg-red-900/20 text-slate-400 hover:text-red-500 transition-colors"
-                >
-                  <Trash2 className="h-4 w-4" />
-                </button>
-              </div>
-            </div>
+              item={item}
+              resuming={resumingId === item.id}
+              onOpen={(rect) => {
+                setOriginRect(rect);
+                setSelectedId(item.id);
+              }}
+              onDelete={handleDelete}
+              onResume={handleResume}
+            />
           ))}
         </div>
       </ListState>
 
-      {/* F99：分页 + 每页条数可选（默认 8） */}
-      {totalPages > 1 && (
-        <div className="flex items-center justify-center gap-2 mt-6">
-          <label className="flex items-center gap-1 text-sm text-slate-500">
-            每页
-            <select
-              value={pageSize}
-              onChange={(e) => loadData(1, Number(e.target.value))}
-              className="px-1.5 py-1 rounded border border-slate-200 dark:border-slate-700 bg-transparent text-sm"
-            >
-              {PAGE_SIZE_OPTIONS.map((n) => (
-                <option key={n} value={n}>{n} 条</option>
-              ))}
-            </select>
-          </label>
-          <button
-            disabled={page <= 1 || loading}
-            onClick={() => loadData(page - 1)}
-            className="px-3 py-1.5 rounded-lg text-sm bg-slate-100 dark:bg-slate-800 disabled:opacity-40"
-          >
-            上一页
-          </button>
-          <span className="text-sm text-slate-500">{page} / {totalPages}</span>
-          <button
-            disabled={page >= totalPages || loading}
-            onClick={() => loadData(page + 1)}
-            className="px-3 py-1.5 rounded-lg text-sm bg-slate-100 dark:bg-slate-800 disabled:opacity-40"
-          >
-            下一页
-          </button>
-        </div>
-      )}
+      {/* F99 + B3：统一分页组件（含每页条数） */}
+      <Pagination
+        page={page}
+        totalPages={totalPages}
+        onChange={(p) => loadData(p)}
+        onPageSizeChange={(size) => loadData(1, size)}
+        pageSize={pageSize}
+        pageSizeOptions={PAGE_SIZE_OPTIONS}
+        disabled={loading}
+      />
 
-      {/* F103：行程名片弹窗（点击遮罩或右上角 × 关闭） */}
-      <ItineraryCardModal itineraryId={selectedId} onClose={() => setSelectedId(null)} />
+      {/* F103 + C5：行程名片弹窗（以被点击卡片为起点的容器变换转场） */}
+      <ItineraryCardModal itineraryId={selectedId} onClose={() => setSelectedId(null)} originRect={originRect} />
     </div>
   );
 }

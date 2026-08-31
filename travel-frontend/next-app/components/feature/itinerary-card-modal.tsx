@@ -1,15 +1,16 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import { X, MapPin, Calendar, DollarSign, Clock } from 'lucide-react';
+import { MapPin, Calendar, DollarSign, Clock } from 'lucide-react';
 import { itineraryApi, getErrorMessage } from '@/lib/api';
 import type { ItineraryResponse } from '@/types';
 import { formatCurrency, formatDate } from '@/lib/utils';
 import { Skeleton } from '@/components/ui/skeleton';
 import { ErrorState } from '@/components/ui/error-state';
+import { Dialog, type DialogOriginRect } from '@/components/ui/dialog';
 import dynamic from 'next/dynamic';
 
-const BudgetPie = dynamic(() => import('@/components/feature/budget-pie').then((m) => m.BudgetPie), {
+const BudgetSection = dynamic(() => import('@/components/feature/budget-section').then((m) => m.BudgetSection), {
   ssr: false,
   loading: () => <Skeleton className="h-56 w-full" />,
 });
@@ -21,10 +22,12 @@ const MarkmapView = dynamic(() => import('@/components/markmap-view').then((m) =
 interface Props {
   itineraryId: number | null;
   onClose: () => void;
+  /** C5：Container Transform 起点矩形（被点击卡片的位置），由列表页捕获传入 */
+  originRect?: DialogOriginRect | null;
 }
 
-/** 行程名片弹窗（F103）：展示行程完整详情；右上角 × 或点击遮罩关闭 */
-export function ItineraryCardModal({ itineraryId, onClose }: Props) {
+/** 行程名片弹窗（F103）+ C5 容器变换：以被点击卡片为起点展开/收回；×/遮罩/Esc 关闭 */
+export function ItineraryCardModal({ itineraryId, onClose, originRect }: Props) {
   const [data, setData] = useState<ItineraryResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -53,41 +56,24 @@ export function ItineraryCardModal({ itineraryId, onClose }: Props) {
     }
   }, [itineraryId, load]);
 
-  if (itineraryId == null) return null;
-
+  /** 行程名片弹窗（F103）+ B3 迁移 ui/dialog 基座（F-09：Esc/滚动锁/焦点圈禁/进出动画）；
+      关闭方式保持：× / 点击遮罩 / Esc */
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4 backdrop-blur-sm"
-      onClick={onClose}
-      role="dialog"
-      aria-modal="true"
-    >
-      <div
-        className="relative w-full max-w-2xl max-h-[85vh] overflow-y-auto rounded-2xl bg-white dark:bg-slate-900 p-6 shadow-2xl"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <button
-          onClick={onClose}
-          aria-label="关闭"
-          className="absolute right-3 top-3 flex h-8 w-8 items-center justify-center rounded-full text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 hover:text-slate-600"
-        >
-          <X className="h-5 w-5" />
-        </button>
+    <Dialog open={itineraryId != null} onClose={onClose} ariaLabel="行程详情" originRect={originRect}>
+      {loading && (
+        <div className="space-y-3">
+          <Skeleton className="h-7 w-1/2" />
+          <Skeleton className="h-24 w-full" />
+          <Skeleton className="h-48 w-full" />
+        </div>
+      )}
 
-        {loading && (
-          <div className="space-y-3">
-            <Skeleton className="h-7 w-1/2" />
-            <Skeleton className="h-24 w-full" />
-            <Skeleton className="h-48 w-full" />
-          </div>
-        )}
+      {!loading && error && (
+        <ErrorState message={error} onReset={load} />
+      )}
 
-        {!loading && error && (
-          <ErrorState message={error} onReset={load} />
-        )}
-
-        {!loading && !error && data && (
-          <div>
+      {!loading && !error && data && (
+          <>
             <h2 className="text-xl font-bold mb-4">{data.title}</h2>
 
             <div className="grid grid-cols-2 gap-3 mb-5 md:grid-cols-4">
@@ -148,17 +134,14 @@ export function ItineraryCardModal({ itineraryId, onClose }: Props) {
               </div>
             )}
 
-            {data.estimatedCost != null && (
-              <div>
-                <h3 className="font-semibold mb-2">预算概览</h3>
-                <div className="rounded-xl border border-slate-200 dark:border-slate-700 p-3">
-                  <BudgetPie estimatedCost={data.estimatedCost} />
-                </div>
-              </div>
-            )}
-          </div>
-        )}
-      </div>
-    </div>
+            {/* R3：预算概览统一组件（含空态） */}
+            <BudgetSection
+              estimatedCost={data.estimatedCost}
+              dayPlans={data.dayPlans}
+              bodyClassName="rounded-xl border border-line p-3"
+            />
+        </>
+      )}
+    </Dialog>
   );
 }

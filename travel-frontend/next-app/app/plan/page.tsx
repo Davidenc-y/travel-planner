@@ -6,8 +6,8 @@ import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import { toast } from 'sonner';
-import { Loader2, MapPin, Calendar, DollarSign, Users, Sparkles } from 'lucide-react';
-import { itineraryApi, getErrorMessage } from '@/lib/api';
+import { Loader2, MapPin, Calendar, DollarSign, Users, Sparkles, Check } from 'lucide-react';
+import { itineraryApi, getErrorMessage, isAbortError, httpErrorCode } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 import { generateUUID } from '@/lib/utils';
 import { buildItineraryUrl } from '@/lib/url-guard';
@@ -16,6 +16,11 @@ import { FormShell } from '@/components/ui/form-shell';
 import { DestinationAutocomplete } from '@/components/plan/DestinationAutocomplete';
 import { ModelSelector } from '@/components/model/ModelSelector';
 import { useModelPreference } from '@/hooks/useModelPreference';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { ChatMessageContent } from '@/components/feature/chat-message-content';
+import { useThrottledValue } from '@/lib/use-throttled-value';
+import { cn } from '@/lib/utils';
 
 const schema = z.object({
   destination: z.string().min(1, '目的地不能为空'),
@@ -31,6 +36,15 @@ type FormData = z.infer<typeof schema>;
 const interestOptions = ['文化', '自然', '美食', '购物', '亲子', '休闲'];
 const partyOptions = ['独行', '情侣', '家庭', '朋友'];
 
+// B3（04 §4.2 / D-11）：生成进度阶段条——thinking 文案按关键词本地归入三阶段（纯展示）
+const PLAN_STAGES = ['理解偏好', '检索知识', '编排行程'] as const;
+
+function classifyStage(message: string): number {
+  if (/知识|检索|召回|景点|向量/.test(message)) return 1;
+  if (/行程|编排|导图|快照|汇总|整理/.test(message)) return 2;
+  return 0;
+}
+
 function PlanPageContent() {
   const router = useRouter();
   const { isAuthenticated } = useAuth();
@@ -44,6 +58,8 @@ function PlanPageContent() {
   const [thinkingLines, setThinkingLines] = useState<string[]>([]);
   const [streamingText, setStreamingText] = useState('');
   const streamAbortRef = useRef<AbortController | null>(null);
+  // D-11：流式预览 Markdown 渲染节流（与聊天 C-02 同守卫，09 §4.3）
+  const throttledStreamText = useThrottledValue(streamingText, 120);
 
   useEffect(() => () => streamAbortRef.current?.abort(), []);
 
@@ -118,10 +134,10 @@ function PlanPageContent() {
       }
       toast.success('行程生成成功！');
       router.push(buildItineraryUrl(doneId));
-    } catch (err: any) {
-      if (err?.name === 'AbortError') return;
+    } catch (err: unknown) {
+      if (isAbortError(err)) return;
       // M7 Batch 3：所选模型不可用 → 提示并回退智能默认（跳过同模型 JSON 重试）
-      const code = err?.response?.data?.code ?? err?.code;
+      const code = httpErrorCode(err);
       if (code === 40005) {
         toast.error('所选模型不可用，已切换回智能默认');
         modelPref.select('');
@@ -132,7 +148,7 @@ function PlanPageContent() {
         const res = await itineraryApi.generate(payload);
         toast.success('行程生成成功！');
         router.push(buildItineraryUrl(res.data.data.id));
-      } catch (err2: any) {
+      } catch (err2: unknown) {
         toast.error('生成失败: ' + getErrorMessage(err2));
       }
     } finally {
@@ -150,6 +166,11 @@ function PlanPageContent() {
     );
   };
 
+  const stageIndex = thinkingLines.reduce(
+    (acc, line) => Math.max(acc, classifyStage(line)),
+    0
+  );
+
   return (
     <div className="max-w-2xl mx-auto">
       <div className="text-center mb-8 animate-slide-up">
@@ -158,16 +179,19 @@ function PlanPageContent() {
           AI 驱动的智能行程规划
         </div>
         <h1 className="text-3xl font-bold mb-2">规划你的下一次旅行</h1>
-        <p className="text-slate-500 dark:text-slate-400">输入偏好，AI 为你生成个性化行程</p>
+        <p className="text-ink-secondary">输入偏好，AI 为你生成个性化行程</p>
       </div>
 
       <form onSubmit={handleSubmit(onSubmit)}>
+        {/* B3（04 §4.2）：生成中禁用表单区，避免成功跳转前的歧义修改 */}
+        <fieldset disabled={loading} className="min-w-0 disabled:opacity-60">
         <FormShell
           footer={
-            <button
+            <Button
               type="submit"
               disabled={loading}
-              className="w-full py-3 rounded-lg bg-brand-500 text-white font-medium hover:bg-brand-600 disabled:opacity-50 transition-all magnetic flex items-center justify-center gap-2"
+              size="lg"
+              className="w-full"
             >
               {loading ? (
                 <>
@@ -178,7 +202,7 @@ function PlanPageContent() {
                   <Sparkles className="h-5 w-5" /> 生成行程
                 </>
               )}
-            </button>
+            </Button>
           }
         >
         <div className="space-y-5">
@@ -199,7 +223,7 @@ function PlanPageContent() {
             onChange={(v) => setValue('destination', v, { shouldValidate: true })}
             placeholder="例如：北京"
           />
-          {errors.destination && <p className="text-red-500 text-xs mt-1">{errors.destination.message}</p>}
+          {errors.destination && <p className="text-danger text-xs mt-1">{errors.destination.message}</p>}
         </div>
 
         <div className="grid grid-cols-2 gap-4">
@@ -207,24 +231,22 @@ function PlanPageContent() {
             <label className="flex items-center gap-2 text-sm font-medium mb-1.5">
               <Calendar className="h-4 w-4 text-brand-500" /> 天数
             </label>
-            <input
+            <Input
               type="number"
               {...register('days', { valueAsNumber: true })}
-              className="w-full px-4 py-2.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-transparent focus:ring-2 focus:ring-brand-500 outline-none"
             />
-            {errors.days && <p className="text-red-500 text-xs mt-1">{errors.days.message}</p>}
+            {errors.days && <p className="text-danger text-xs mt-1">{errors.days.message}</p>}
           </div>
           <div>
             <label className="flex items-center gap-2 text-sm font-medium mb-1.5">
               <DollarSign className="h-4 w-4 text-brand-500" /> 预算（元）
             </label>
-            <input
+            <Input
               type="number"
               {...register('budget', { valueAsNumber: true })}
               min={0}
               onBlur={handleBudgetBlur}
               placeholder="不限"
-              className="w-full px-4 py-2.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-transparent focus:ring-2 focus:ring-brand-500 outline-none"
             />
           </div>
         </div>
@@ -257,39 +279,63 @@ function PlanPageContent() {
 
         <div>
           <label className="text-sm font-medium mb-1.5 block">开始日期（选填）</label>
-          <input
+          <Input
             type="date"
             {...register('startDate')}
-            className="w-full px-4 py-2.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-transparent focus:ring-2 focus:ring-brand-500 outline-none"
           />
         </div>
 
         </div>
         </FormShell>
+        </fieldset>
       </form>
 
-      {/* M6-16：行程流式生成进度与内容预览 */}
+      {/* M6-16 + 04 §4.2：生成进度——阶段步骤条 + 最新阶段文案 + Markdown 流式预览（打字光标） */}
       {streamPhase !== 'idle' && (
-        <div className="mt-4 glass rounded-xl p-4">
-          {streamPhase === 'thinking' && (
-            <div className="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400">
-              <Loader2 className="h-4 w-4 animate-spin" />
-              行程规划中…
-            </div>
-          )}
+        <div className="card mt-4 p-4">
+          <div className="flex items-center gap-1.5" aria-label="生成进度">
+            {PLAN_STAGES.map((stage, idx) => (
+              <div key={stage} className="flex items-center gap-1.5">
+                <span
+                  className={cn(
+                    'flex h-5 w-5 items-center justify-center rounded-full text-[10px] font-bold transition-colors duration-base',
+                    idx < stageIndex
+                      ? 'bg-success-soft text-success'
+                      : idx === stageIndex
+                        ? 'bg-brand-500 text-white'
+                        : 'bg-surface-2 text-ink-faint'
+                  )}
+                >
+                  {idx < stageIndex ? <Check className="h-3 w-3" /> : idx + 1}
+                </span>
+                <span
+                  className={cn(
+                    'text-xs',
+                    idx === stageIndex ? 'text-ink font-medium' : 'text-ink-faint'
+                  )}
+                >
+                  {stage}
+                </span>
+                {idx < PLAN_STAGES.length - 1 && (
+                  <span aria-hidden className="mx-1 h-px w-6 bg-line" />
+                )}
+              </div>
+            ))}
+          </div>
+
           {thinkingLines.length > 0 && (
-            <div className="mt-2 space-y-1">
-              {thinkingLines.map((line, idx) => (
-                <p key={idx} className="text-xs text-slate-500/80 dark:text-slate-400/80">
-                  {line}
-                </p>
-              ))}
+            <div className="mt-3 flex items-center gap-2 text-sm text-ink-secondary">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              {thinkingLines[thinkingLines.length - 1]}
             </div>
           )}
           {streamingText && (
-            <pre className="mt-3 whitespace-pre-wrap text-sm max-h-72 overflow-y-auto">
-              {streamingText}
-            </pre>
+            <div className="mt-3 max-h-72 overflow-y-auto rounded-lg bg-surface-2/60 p-3">
+              <div className="text-sm prose prose-sm dark:prose-invert max-w-none prose-p:my-1 prose-ul:my-1">
+                <ChatMessageContent content={throttledStreamText} />
+                <span aria-hidden className="ml-0.5 inline-block h-4 w-0.5 bg-brand-500 animate-blink align-text-bottom" />
+              </div>
+            </div>
           )}
         </div>
       )}

@@ -46,13 +46,27 @@ public class MindmapGenerator {
             dayItems.add("预算：" + budget + " 元");
         }
         // 尝试从 contentJson 解析每日摘要
+        // C4/F3（清偿 struct/13 §10.2 #2）：实际结构为 routePlan.days（顶层无 days），
+        // 原实现读顶层键导致每日摘要永远缺失；此处双路径兼容（优先 routePlan.days）
         try {
             Map<String, Object> content = JsonUtils.fromJson(contentJson, Map.class);
-            if (content != null && content.containsKey("days")) {
-                List<?> dayPlans = (List<?>) content.get("days");
+            List<?> dayPlans = null;
+            if (content != null && content.containsKey("routePlan")) {
+                Object routePlan = content.get("routePlan");
+                if (routePlan instanceof Map) {
+                    Object daysField = ((Map<?, ?>) routePlan).get("days");
+                    if (daysField instanceof List) {
+                        dayPlans = (List<?>) daysField;
+                    }
+                }
+            } else if (content != null && content.get("days") instanceof List) {
+                dayPlans = (List<?>) content.get("days");
+            }
+            if (dayPlans != null) {
                 for (int i = 0; i < dayPlans.size(); i++) {
-                    Map<String, Object> day = (Map<String, Object>) dayPlans.get(i);
-                    String summary = (String) day.getOrDefault("summary", "第" + (i + 1) + "天");
+                    Map<?, ?> day = (Map<?, ?>) dayPlans.get(i);
+                    Object summaryObj = day.get("summary");
+                    String summary = summaryObj != null ? String.valueOf(summaryObj) : "第" + (i + 1) + "天";
                     dayItems.add("第" + (i + 1) + "天：" + summary);
                 }
             }

@@ -67,6 +67,14 @@ export interface PageResult<T> {
 }
 
 // 聊天相关
+/** B3（09 C-03/C-07）：轮次执行过程（前端本地采集，非后端字段） */
+export interface MessageProcess {
+  /** thinking 事件文案（按到达顺序） */
+  stages: string[];
+  /** thinking 首事件到 done 的前端耗时（ms） */
+  elapsedMs: number;
+}
+
 export interface ChatMessage {
   id?: number;
   sessionId: string;
@@ -74,6 +82,12 @@ export interface ChatMessage {
   content: string;
   tokens?: number;
   createdAt?: string;
+  /** PE-03/F-13：乐观消息的本地稳定 key（后端 id 到达前用作 React key） */
+  localKey?: string;
+  /** B3/09 C-03：已完成轮次的执行过程（折叠摘要用） */
+  process?: MessageProcess;
+  /** B3/09 C-09：JSON 兜底路径返回的行程 id（SSE done 暂无该字段，就绪后自动获得） */
+  itineraryId?: number;
 }
 
 export interface ChatSession {
@@ -81,7 +95,8 @@ export interface ChatSession {
   sessionId: string;
   userId: number;
   title: string;
-  status: string;
+  /** R2/A5：会话状态（t_chat_session 仅写入 ACTIVE/ARCHIVED，struct/14 核验） */
+  status: 'ACTIVE' | 'ARCHIVED';
   createdAt: string;
 }
 
@@ -157,6 +172,34 @@ export interface R<T> {
   message: string;
   data: T;
   timestamp: number;
+}
+
+// U1：个人中心使用统计（GET /api/v1/users/me/usage-stats，数据源 t_agent_trace）
+export interface DailyToken {
+  date: string; // yyyy-MM-dd
+  tokens: number;
+}
+
+export interface DailyModelToken {
+  date: string;
+  model: string;
+  tokens: number;
+}
+
+export interface ModelUsage {
+  model: string;
+  tokens: number;
+}
+
+export interface UsageStats {
+  totalTokens: number;
+  peakDayTokens: number;
+  longestTurnMs: number;
+  currentStreakDays: number;
+  longestStreakDays: number;
+  daily: DailyToken[]; // 近 365 天逐日总量（热力图）
+  trend: DailyModelToken[]; // 近 range 天逐日×模型（趋势图）
+  modelUsage: ModelUsage[]; // 近 range 天按模型（环形图）
 }
 
 /** M7 Batch 3：前端模型清单条目（GET /api/v1/models，仅 enabled+selectable） */

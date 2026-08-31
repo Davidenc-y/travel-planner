@@ -20,6 +20,12 @@ interface PagedOptionsProps {
   multiple?: boolean;
   /** M7-7：面板向上展开（底部输入区/贴边场景防溢出视口） */
   dropUp?: boolean;
+  /**
+   * C1（聊天界面视觉改造）：紧凑文本形态——无边框、仅显示当前选中项文案，
+   * 用于聊天 Composer 内的模型选择（参照参考稿"DeepSeek-V4-Flash"文本样式）。
+   * 默认 false，既有调用（规划页/景点页）行为与样式不变。
+   */
+  compact?: boolean;
 }
 
 /**
@@ -35,6 +41,7 @@ export function PagedOptions({
   pageSizeOptions = [10, 20, 50],
   multiple = true,
   dropUp = false,
+  compact = false,
 }: PagedOptionsProps) {
   const [open, setOpen] = useState(false);
   const [page, setPage] = useState(1);
@@ -56,6 +63,10 @@ export function PagedOptions({
   const totalPages = Math.max(1, Math.ceil(options.length / pageSize));
   const currentPage = Math.min(page, totalPages);
   const slice = options.slice((currentPage - 1) * pageSize, currentPage * pageSize);
+  // compact 形态：触发器仅显示当前选中项文案
+  const selectedLabel = selected.length > 0
+    ? (options.find((o) => o.value === selected[0])?.label ?? selected[0])
+    : null;
 
   const changePageSize = (size: number) => {
     setPageSize(size);
@@ -63,7 +74,17 @@ export function PagedOptions({
   };
 
   return (
-    <div ref={rootRef} className="relative">
+    <div ref={rootRef} className={cn('relative', compact && 'w-full')}>
+      {compact ? (
+        <button
+          type="button"
+          onClick={() => setOpen((o) => !o)}
+          className="flex w-full items-center gap-1 rounded-lg px-2 h-8 text-xs text-ink-secondary transition-colors hover:bg-surface-2 hover:text-ink focus-ring"
+        >
+          <span className="min-w-0 flex-1 truncate text-left">{selectedLabel ?? placeholder}</span>
+          <ChevronDown className={cn('h-3 w-3 shrink-0 transition-transform', open && 'rotate-180')} />
+        </button>
+      ) : (
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
@@ -99,6 +120,7 @@ export function PagedOptions({
         </span>
         <ChevronDown className={cn('h-4 w-4 shrink-0 transition-transform', open && 'rotate-180')} />
       </button>
+      )}
 
       {open && (
         // F100：下拉面板改不透明（原 glass 半透明透出背景，妨碍选择）

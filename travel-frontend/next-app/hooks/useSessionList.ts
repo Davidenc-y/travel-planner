@@ -1,10 +1,23 @@
 'use client';
 
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { chatApi, getErrorMessage } from '@/lib/api';
 import type { ChatSession } from '@/types';
 import { takePrefetch } from '@/lib/prefetch';
+
+// C2：会话置顶——后端暂无置顶契约，前端本地持久化（localStorage），仅影响展示排序
+const PINNED_KEY = 'travel.chat.pinned';
+
+function loadPinnedIds(): string[] {
+  try {
+    const raw = localStorage.getItem(PINNED_KEY);
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? parsed.filter((x) => typeof x === 'string') : [];
+  } catch {
+    return [];
+  }
+}
 
 /**
  * M6-58/T10：会话列表领域 hook（CRUD + 置顶 + 标题 + 断点恢复依赖列表）。
@@ -16,6 +29,8 @@ import { takePrefetch } from '@/lib/prefetch';
 export function useSessionList(userId: number | null) {
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [loading, setLoading] = useState(true);
+  // C2：置顶会话 id（localStorage 持久化，仅影响展示排序）
+  const [pinnedIds, setPinnedIds] = useState<string[]>([]);
   // M5-1：标题编辑态
   const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
   const [editingTitle, setEditingTitle] = useState('');
@@ -24,6 +39,35 @@ export function useSessionList(userId: number | null) {
   const cancelEditRef = useRef(false);
   // M6-50：首条消息发送中才真实创建的会话（完成后再拉取列表，避免提前出现）
   const pendingNewSessionRef = useRef<string | null>(null);
+
+  // C2：挂载时读取本地置顶偏好
+  useEffect(() => {
+    setPinnedIds(loadPinnedIds());
+  }, []);
+
+  // C2：置顶/取消置顶（持久化；取消置顶后会话回到后端自然排序位置）
+  const togglePin = useCallback((sid: string) => {
+    setPinnedIds((prev) => {
+      const next = prev.includes(sid)
+        ? prev.filter((id) => id !== sid)
+        : [sid, ...prev];
+      try {
+        localStorage.setItem(PINNED_KEY, JSON.stringify(next));
+      } catch {
+        // localStorage 不可用时仅本会话生效
+      }
+      return next;
+    });
+  }, []);
+
+  // C2：展示排序——置顶会话在最前（组内保持后端自然顺序），其余按原顺序
+  const sortedSessions = useMemo(() => {
+    if (pinnedIds.length === 0) return sessions;
+    const pinnedSet = new Set(pinnedIds);
+    const pinned = sessions.filter((s) => pinnedSet.has(s.sessionId));
+    const rest = sessions.filter((s) => !pinnedSet.has(s.sessionId));
+    return [...pinned, ...rest];
+  }, [sessions, pinnedIds]);
 
   const loadSessions = useCallback(async (force = false) => {
     if (!userId) return;
@@ -88,7 +132,7 @@ export function useSessionList(userId: number | null) {
         }, ...prev];
       });
       return sid;
-    } catch (err: any) {
+    } catch (err: unknown) {
       toast.error('创建会话失败: ' + getErrorMessage(err));
       return null;
     }
@@ -140,7 +184,7 @@ export function useSessionList(userId: number | null) {
       setSessions((prev) => prev.map((s) =>
         s.sessionId === sid ? { ...s, title } : s));
       toast.success('标题已更新');
-    } catch (err: any) {
+    } catch (err: unknown) {
       setEditingSessionId(sid);
       setEditingTitle(title);
       toast.error('标题更新失败: ' + getErrorMessage(err));
@@ -157,15 +201,17 @@ export function useSessionList(userId: number | null) {
       toast.success('会话已结束');
       loadSessions(true);
       return true;
-    } catch (err: any) {
+    } catch (err: unknown) {
       toast.error('结束会话失败: ' + getErrorMessage(err));
       return false;
     }
   }, [loadSessions]);
 
   return {
-    sessions,
+    sessions: sortedSessions,
     loading,
+    pinnedIds,
+    togglePin,
     editingSessionId,
     editingTitle,
     loadSessions,

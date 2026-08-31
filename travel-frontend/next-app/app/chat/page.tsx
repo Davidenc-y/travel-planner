@@ -1,37 +1,79 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
-import { ArrowDown, MessageSquare, Send, Square } from 'lucide-react';
-import { chatApi, getErrorMessage } from '@/lib/api';
+import { ArrowDown, MessagesSquare } from 'lucide-react';
+import { chatApi, getErrorMessage, httpErrorCode, isAbortError } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 import type { ChatMessage, ChatResponse } from '@/types';
+import { generateUUID } from '@/lib/utils';
+import { ERROR_CODE } from '@/lib/constants';
 import { Skeleton } from '@/components/ui/skeleton';
+import { Dialog } from '@/components/ui/dialog';
 import { SessionList } from '@/components/chat/SessionList';
+import { TurnScrollbar } from '@/components/chat/TurnScrollbar';
+import { Composer } from '@/components/chat/Composer';
+import { ChatHeader } from '@/components/chat/ChatHeader';
 import {
   InterruptedBubble,
   MessageBubble,
   StreamingBubble,
-  ThinkingBubble,
+  ThinkingTimeline,
 } from '@/components/chat/MessageBubble';
 import { useChatStream } from '@/hooks/useChatStream';
 import { useSessionList } from '@/hooks/useSessionList';
 import { useModelPreference } from '@/hooks/useModelPreference';
 import { ModelSelector } from '@/components/model/ModelSelector';
+import { SUGGESTED_PROMPTS } from '@/lib/suggested-prompts';
 
 interface InterruptedTurn {
   clientMessageId: string;
   text: string;
 }
 
+// B3/09 C-12：日期分隔（本地日期粒度）
+function sameDay(a?: string, b?: string): boolean {
+  if (!a || !b) return false;
+  const da = new Date(a);
+  const db = new Date(b);
+  if (Number.isNaN(da.getTime()) || Number.isNaN(db.getTime())) return false;
+  return da.getFullYear() === db.getFullYear()
+    && da.getMonth() === db.getMonth()
+    && da.getDate() === db.getDate();
+}
+
+function DateSeparator({ iso }: { iso: string }) {
+  const d = new Date(iso);
+  const now = new Date();
+  const sameDayNow = d.getFullYear() === now.getFullYear()
+    && d.getMonth() === now.getMonth()
+    && d.getDate() === now.getDate();
+  const label = sameDayNow
+    ? '今天'
+    : `${d.getMonth() + 1} 月 ${d.getDate()} 日`;
+  return (
+    <div className="flex items-center gap-3 py-1" aria-hidden>
+      <span className="h-px flex-1 bg-line" />
+      <span className="text-[10px] text-ink-faint">{label}</span>
+      <span className="h-px flex-1 bg-line" />
+    </div>
+  );
+}
+
 /**
- * M6-58/T10：聊天页布局编排。
+ * M6-58/T10 + B3（09）：聊天页布局编排。
  *
  * <p>会话列表/消息气泡纯展示组件在 components/chat（SessionList、MessageBubble）；
  * SSE 流式与 reveal 队列在 hooks/useChatStream；会话 CRUD/置顶/标题在
  * hooks/useSessionList。本文件仅保留跨域状态装配（消息、草稿、当前会话、
  * 中断轮次、发送编排）与 M5-1/M6-47/M6-48 竞态防护。</p>
+ *
+ * <p>09 增量：C-01 多行 Composer（Enter 发送/Shift+Enter 换行/Esc 清草稿/自动增高）、
+ * C-02 流式 Markdown（守卫在 StreamingBubble）、C-03 执行过程块（thinkingRef 采集）、
+ * C-04 重新生成/编辑重发（asNew 语义：新 key 新轮次，历史不删改）、C-05 侧栏搜索分组
+ * 与会话头部/窄屏抽屉、C-06 空态推荐词、C-07 tokens/耗时、C-11 键盘、C-12 日期分隔。
+ * 停止按钮仍仅 thinking 阶段（M6-49 现状，C-08/D-18 待后端确认）。</p>
  */
 function ChatContent() {
   const router = useRouter();
@@ -44,8 +86,10 @@ function ChatContent() {
   const [creatingSession, setCreatingSession] = useState(false);
   // M5-1：滚动状态（回到底部按钮）
   const [isNearBottom, setIsNearBottom] = useState(true);
+  const [drawerOpen, setDrawerOpen] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
   const instantScrollRef = useRef(true);
   const nearBottomRef = useRef(true);
   const creatingRef = useRef(false);
@@ -62,6 +106,13 @@ function ChatContent() {
   const interruptedRef = useRef<Record<string, InterruptedTurn>>({});
   const activeTurnRef = useRef<{ sid: string; key: string; text: string } | null>(null);
   const stopRequestedRef = useRef(false);
+  // B3/09 C-03/C-07：本轮执行耗时起点（success 时与 thinkingRef 一起生成 process）
+  const turnStartRef = useRef<number>(0);
+  // B3/09 C-04：消息镜像（regenerate 取最后一条 user 文本用，避免闭包过期）
+  const messagesRef = useRef<ChatMessage[]>([]);
+  useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
 
   const sessionList = useSessionList(userId ?? null);
   const chatStream = useChatStream(() => currentSessionRef.current);
@@ -72,6 +123,7 @@ function ChatContent() {
   const input = drafts[activeDraftKey] ?? '';
   const currentStreamState = currentSessionId
     ? chatStream.streamStates[currentSessionId] : undefined;
+  const currentSession = sessionList.sessions.find((s) => s.sessionId === currentSessionId);
 
   const setInterruptedMap = (
     updater: (prev: Record<string, InterruptedTurn>) => Record<string, InterruptedTurn>,
@@ -143,12 +195,18 @@ function ChatContent() {
     chatStream.dispose();
   }, []);
 
+  // B3/PE-05（F-26）：onScroll 经 rAF 节流，避免高频 setState
+  const scrollRafRef = useRef<number | null>(null);
   const updateNearBottom = () => {
-    const el = scrollRef.current;
-    if (!el) return;
-    const near = el.scrollHeight - el.scrollTop - el.clientHeight <= 40;
-    nearBottomRef.current = near;
-    setIsNearBottom(near);
+    if (scrollRafRef.current !== null) return;
+    scrollRafRef.current = requestAnimationFrame(() => {
+      scrollRafRef.current = null;
+      const el = scrollRef.current;
+      if (!el) return;
+      const near = el.scrollHeight - el.scrollTop - el.clientHeight <= 40;
+      nearBottomRef.current = near;
+      setIsNearBottom(near);
+    });
   };
 
   const loadHistory = async (sid: string) => {
@@ -234,8 +292,8 @@ function ChatContent() {
           throw new Error(res.data.message || `发送失败(${res.data.code})`);
         }
         return res.data.data;
-      } catch (err: any) {
-        const code = err?.response?.data?.code;
+      } catch (err: unknown) {
+        const code = httpErrorCode(err);
         if (code === 40904 && attempt < maxAttempts - 1) {
           await new Promise((r) => setTimeout(r, 3000));
           continue;
@@ -246,14 +304,25 @@ function ChatContent() {
     throw new Error('发送超时，请稍后重试');
   };
 
-  const handleSend = async (retrySid?: string, retryText?: string, retryKey?: string) => {
-    const isRetry = retrySid != null;
-    const text = isRetry ? retryText! : input.trim();
+  /**
+   * 发送编排（M4-9/M5-1/M6 系列语义保留）。
+   * B3/09 C-04：新增 asNew 模式——retrySid + asNew=true 表示"以既有会话发起一轮全新发送"
+   * （重新生成/编辑重发）：乐观追加 user 消息 + 清旧断点 + 全新 clientMessageId（新轮次，
+   * 非断点续跑，历史不删改）。retryKey 传入时也不作幂等续跑使用（asNew 固定生成新键）。
+   */
+  const handleSend = async (
+    retrySid?: string,
+    retryText?: string,
+    retryKey?: string,
+    asNew = false,
+  ) => {
+    const isRetry = retrySid != null && !asNew;
+    const text = retrySid != null ? retryText! : input.trim();
     if (!text || sendingRef.current || creatingRef.current) return;
     const hadNoSession = !isRetry && !currentSessionId;
 
     // M5-1：初始界面直接发送 → 自动创建会话并进入
-    let sid = isRetry ? retrySid! : currentSessionId;
+    let sid = retrySid != null ? retrySid : currentSessionId;
     if (!sid && !isRetry) {
       creatingRef.current = true;
       setCreatingSession(true);
@@ -293,6 +362,7 @@ function ChatContent() {
         role: 'user',
         content: text,
         createdAt: new Date().toISOString(),
+        localKey: `u-${crypto.randomUUID()}`,
       };
       // M5-1：使新建会话的 getHistory 空响应失效，避免覆盖乐观追加的用户消息
       historySidRef.current = null;
@@ -312,6 +382,7 @@ function ChatContent() {
       thinkingLines: ['已收到，Agent 正在思考…'],
       streamingText: '',
     }));
+    turnStartRef.current = Date.now();
 
     // M4-9：消息幂等键——超时/40904 重试携带同键，杜绝重复追加/双跑
     const clientMessageId = isRetry ? retryKey! : crypto.randomUUID();
@@ -320,31 +391,41 @@ function ChatContent() {
       // M6：优先 SSE 流式；失败自动回退 JSON 端点
       const streamed = await chatStream.sendStreamWithRetry(
         sid!, text, clientMessageId, modelPref.model);
+      const stages = chatStream.getThinkingLines(sid!);
       const aiMsg: ChatMessage = {
         sessionId: sid!,
         role: 'assistant',
         content: streamed.text,
         createdAt: new Date().toISOString(),
+        localKey: `a-${clientMessageId}`,
+        tokens: streamed.tokens,
+        process: {
+          stages: stages.length > 0
+            ? stages
+            : ['已收到，Agent 正在思考…'],
+          elapsedMs: Date.now() - turnStartRef.current,
+        },
       };
       appendAssistantOrNotify(sid!, aiMsg);
       if (streamed.sessionTitle) {
         sessionList.updateSessionTitle(sid!, streamed.sessionTitle);
       }
-    } catch (err: any) {
-      if (err?.name === 'AbortError') return; // 主动取消（切换会话/卸载）
-      const code = err?.response?.data?.code ?? err?.code;
+    } catch (err: unknown) {
+      if (isAbortError(err)) return; // 主动取消（切换会话/卸载）
+      const code = httpErrorCode(err);
       // M7 Batch 3：所选模型不可用 → 提示并回退智能默认（不重复尝试同模型）
-      if (code === 40005) {
+      if (code === ERROR_CODE.MODEL_NOT_FOUND) {
         toast.error('所选模型不可用，已切换回智能默认');
         modelPref.select('');
         return;
       }
-      if (code === 40904) {
+      if (code === ERROR_CODE.MESSAGE_PROCESSING) {
         toast.error('发送超时，请稍后重试');
         const fallbackMsg: ChatMessage = {
           sessionId: sid!,
           role: 'assistant',
           content: '抱歉，处理您的请求时出现错误，请稍后重试。',
+          localKey: `a-${crypto.randomUUID()}`,
         };
         appendAssistantOrNotify(sid!, fallbackMsg);
       } else {
@@ -355,17 +436,21 @@ function ChatContent() {
             sessionId: sid!,
             role: 'assistant',
             content: data.response,
+            tokens: data.tokens,
+            itineraryId: data.itineraryId,
+            localKey: `a-${clientMessageId}`,
           };
           appendAssistantOrNotify(sid!, aiMsg);
           if (data.sessionTitle) {
             sessionList.updateSessionTitle(sid!, data.sessionTitle);
           }
-        } catch (jsonErr: any) {
+        } catch (jsonErr: unknown) {
           toast.error('发送失败: ' + getErrorMessage(jsonErr));
           const fallbackMsg: ChatMessage = {
             sessionId: sid!,
             role: 'assistant',
             content: '抱歉，处理您的请求时出现错误，请稍后重试。',
+            localKey: `a-${crypto.randomUUID()}`,
           };
           appendAssistantOrNotify(sid!, fallbackMsg);
         }
@@ -379,7 +464,7 @@ function ChatContent() {
     }
   };
 
-  /** M6-36：停止当前思考/回复 → 显示“执行已中断”+ 重试按钮 */
+  /** M6-36：停止当前思考/回复 → 显示“执行已中断”+ 重试按钮（C-08/D-18：流式阶段待后端确认后扩展） */
   const handleStop = () => {
     const sid = currentSessionId;
     const turn = activeTurnRef.current;
@@ -407,6 +492,27 @@ function ChatContent() {
     handleSend(sid, turn.text, turn.clientMessageId);
   };
 
+  /** B3/09 C-04：重新生成——对最后一条 assistant 回复，以同文本发起新轮次（新 key，历史不删改）。
+   *  经 handleSendRef 调用最新 handleSend，避免 useCallback 捕获过期 modelPref（R11）。 */
+  const handleSendRef = useRef(handleSend);
+  useEffect(() => {
+    handleSendRef.current = handleSend;
+  });
+
+  const handleRegenerate = useCallback((sid: string) => {
+    const list = messagesRef.current;
+    const lastUser = [...list].reverse().find((m) => m.role === 'user');
+    if (!lastUser) return;
+    handleSendRef.current(sid, lastUser.content, undefined, true);
+  }, []);
+
+  /** B3/09 C-04：编辑并重发——user 消息编辑后以新文本发起新轮次（原消息与历史不删改） */
+  const handleEditResend = useCallback((text: string) => {
+    const sid = currentSessionRef.current;
+    if (!sid) return;
+    handleSendRef.current(sid, text, undefined, true);
+  }, []);
+
   /** M4-9：显式结束会话（归档+收口摘要；不挂 beforeunload——刷新会误归档） */
   const handleCloseSession = async (sid: string) => {
     const closed = await sessionList.closeSession(sid);
@@ -431,6 +537,21 @@ function ChatContent() {
       delete next[sid];
       return next;
     });
+    setDrawerOpen(false);
+  };
+
+  // B3/09 C-01：textarea 自动增高（1~8 行）
+  useEffect(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    el.style.height = `${Math.min(el.scrollHeight, 192)}px`;
+  }, [input]);
+
+  // B3/09 C-06：推荐提示词——填充草稿不发送
+  const applySuggestion = (prompt: string) => {
+    setDrafts((prev) => ({ ...prev, [activeDraftKey]: prompt }));
+    textareaRef.current?.focus();
   };
 
   if (sessionList.loading) {
@@ -442,50 +563,95 @@ function ChatContent() {
     );
   }
 
+  const streaming = currentStreamState?.phase === 'thinking'
+    || currentStreamState?.phase === 'streaming';
+
   return (
     <div className="flex h-[calc(100vh-8rem)] gap-4">
-      {/* 会话列表 */}
-      <SessionList
-        sessions={sessionList.sessions}
-        currentSessionId={currentSessionId}
-        creatingSession={creatingSession}
-        streamStates={chatStream.streamStates}
-        completedTurns={completedTurns}
-        editingSessionId={sessionList.editingSessionId}
-        editingTitle={sessionList.editingTitle}
-        onNewSession={handleNewSession}
-        onSelect={handleSelectSession}
-        onEnterSelect={(sid) => setCurrentSessionId(sid)}
-        onStartEdit={sessionList.startEdit}
-        onTitleChange={sessionList.changeEditingTitle}
-        onSaveTitle={sessionList.saveTitle}
-        onCancelEdit={sessionList.cancelEdit}
-        onCloseSession={handleCloseSession}
-      />
+      {/* 会话列表（窄屏收进抽屉，C-05） */}
+      <div className="hidden md:flex flex-shrink-0">
+        <SessionList
+          sessions={sessionList.sessions}
+          currentSessionId={currentSessionId}
+          creatingSession={creatingSession}
+          streamStates={chatStream.streamStates}
+          completedTurns={completedTurns}
+          editingSessionId={sessionList.editingSessionId}
+          editingTitle={sessionList.editingTitle}
+          pinnedIds={sessionList.pinnedIds}
+          onTogglePin={sessionList.togglePin}
+          onNewSession={handleNewSession}
+          onSelect={handleSelectSession}
+          onEnterSelect={(sid) => setCurrentSessionId(sid)}
+          onStartEdit={sessionList.startEdit}
+          onTitleChange={sessionList.changeEditingTitle}
+          onSaveTitle={sessionList.saveTitle}
+          onCancelEdit={sessionList.cancelEdit}
+          onCloseSession={handleCloseSession}
+        />
+      </div>
 
-      {/* 消息区 */}
-      <div className="flex-1 flex flex-col glass rounded-xl overflow-hidden">
+      {/* 消息区（C1 参考稿对齐：去卡片化，平铺在页面背景上） */}
+      <div className="flex-1 flex flex-col overflow-hidden">
+        {/* R2/C-2：会话头部纯展示组件 */}
+        <ChatHeader
+          title={currentSession?.title ?? '新会话'}
+          streaming={streaming}
+          onOpenDrawer={() => setDrawerOpen(true)}
+        />
+
         <div className="relative flex-1 overflow-hidden">
           <div
             ref={scrollRef}
             onScroll={updateNearBottom}
-            className="h-full overflow-y-auto p-4 space-y-4"
+            className="relative h-full overflow-y-auto py-4 pl-9 pr-4 space-y-5"
           >
-            {messages.length === 0 ? (
-              <div className="flex flex-col items-center justify-center h-full text-slate-400">
-                <MessageSquare className="h-12 w-12 mb-3 opacity-50" />
-                <p>开始一段新的旅游规划对话</p>
+            {messages.length === 0 && !currentStreamState ? (
+              /* B3/09 C-06：空态——能力说明 + 推荐提示词（点击填充草稿，不自动发送） */
+              <div className="flex flex-col items-center justify-center h-full px-4 text-ink-faint">
+                <MessagesSquare className="h-12 w-12 mb-3 opacity-50" />
+                <p className="text-sm">开始一段新的旅游规划对话</p>
+                <p className="mt-1 text-xs">我可以规划行程、检索景点，并记住你的旅行偏好</p>
+                <div className="mt-6 grid w-full max-w-md grid-cols-1 sm:grid-cols-2 gap-2">
+                  {SUGGESTED_PROMPTS.map((prompt) => (
+                    <button
+                      key={prompt}
+                      type="button"
+                      onClick={() => applySuggestion(prompt)}
+                      className="rounded-xl border border-line bg-surface px-3 py-2 text-left text-xs text-ink-secondary transition-colors hover:border-brand-400 hover:text-ink focus-ring"
+                    >
+                      {prompt}
+                    </button>
+                  ))}
+                </div>
               </div>
             ) : (
-              messages.map((msg, idx) => (
-                <MessageBubble key={idx} message={msg} />
-              ))
+              messages.map((msg, idx) => {
+                const showSeparator = idx === 0 || !sameDay(messages[idx - 1].createdAt, msg.createdAt);
+                const isLastAssistant = !isLastMessageUser(messages)
+                  && idx === messages.length - 1 && msg.role === 'assistant';
+                const key = msg.id ?? msg.localKey ?? `i-${idx}`;
+                return (
+                  <div
+                    key={key}
+                    data-user-turn={msg.role === 'user' ? key : undefined}
+                    className="space-y-4"
+                  >
+                    {showSeparator && msg.createdAt && <DateSeparator iso={msg.createdAt} />}
+                    <MessageBubble
+                      message={msg}
+                      onRegenerate={isLastAssistant ? () => handleRegenerate(currentSessionId!) : undefined}
+                      onEditResend={msg.role === 'user' ? handleEditResend : undefined}
+                    />
+                  </div>
+                );
+              })
             )}
-            {/* M6：思考气泡（spinner + 浅灰半透明阶段提示） */}
+            {/* M6：执行过程时间线（C-03，替代原 ThinkingBubble） */}
             {currentStreamState?.phase === 'thinking' && (
-              <ThinkingBubble lines={currentStreamState.thinkingLines} />
+              <ThinkingTimeline lines={currentStreamState.thinkingLines} />
             )}
-            {/* M6：流式输出（思考完成后替换思考气泡） */}
+            {/* M6：流式输出（思考完成后替换时间线；C-02 Markdown 增量渲染） */}
             {currentStreamState?.phase === 'streaming' && (
               <StreamingBubble text={currentStreamState.streamingText} />
             )}
@@ -495,7 +661,11 @@ function ChatContent() {
             )}
             <div ref={messagesEndRef} />
           </div>
-          {/* M5-1：非底部时显示“回到底部”，点击立刻直达 */}
+
+          {/* C1：左缘记录式滚动条（悬停才可滑动；刻度悬停显示该轮内容预览） */}
+          <TurnScrollbar containerRef={scrollRef} messages={messages} />
+
+          {/* M5-1 + C1：非底部时显示圆形回底按钮（参考稿 ↓ 圆钮样式） */}
           {!isNearBottom && (
             <button
               type="button"
@@ -506,55 +676,66 @@ function ChatContent() {
                   updateNearBottom();
                 }
               }}
-              className="absolute bottom-3 left-1/2 -translate-x-1/2 z-10 flex items-center gap-1 px-3 py-1.5 rounded-full bg-brand-500 text-white text-xs shadow-lg hover:bg-brand-600"
+              aria-label="回到底部"
+              className="absolute bottom-3 left-1/2 -translate-x-1/2 z-10 flex h-9 w-9 items-center justify-center rounded-full border border-line bg-surface text-ink-secondary shadow-1 transition-colors hover:text-ink animate-rise focus-ring"
             >
-              <ArrowDown className="h-3.5 w-3.5" /> 回到底部
+              <ArrowDown className="h-4 w-4" />
             </button>
           )}
         </div>
 
-        {/* 输入区 */}
-        <div className="border-t border-slate-200 dark:border-slate-800 p-3 flex gap-2 items-center">
-          {/* M7 Batch 3：模型选择（智能默认=不传 model） */}
-          <div className="w-36 flex-shrink-0">
-            {/* M7-7：输入区贴底 → 模型下拉向上展开，避免溢出视口无法选择 */}
-            <ModelSelector value={modelPref.model} onChange={modelPref.select} dropUp />
-          </div>
-          <input
-            value={input}
-            onChange={(e) =>
-              setDrafts((prev) => ({ ...prev, [activeDraftKey]: e.target.value }))
-            }
-            onKeyDown={(e) => e.key === 'Enter' && handleSend()}
-            placeholder="输入消息..."
-            className="flex-1 px-4 py-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-transparent focus:ring-2 focus:ring-brand-500 outline-none"
-          />
-          {/* M6-49：思考阶段可停止；流式回复阶段显示不可点击的发送按钮 */}
-          {sending && activeTurnRef.current?.sid === currentSessionId
-            && currentStreamState?.phase === 'thinking' ? (
-            <button
-              type="button"
-              onClick={handleStop}
-              title="停止"
-              aria-label="停止"
-              className="px-4 py-2 rounded-lg bg-red-500 text-white hover:bg-red-600 magnetic"
-            >
-              <Square className="h-4 w-4" />
-            </button>
-          ) : (
-            <button
-              type="button"
-              onClick={() => handleSend()}
-              disabled={!input.trim() || sending || creatingSession}
-              className="px-4 py-2 rounded-lg bg-brand-500 text-white hover:bg-brand-600 disabled:opacity-50 magnetic"
-            >
-              <Send className="h-4 w-4" />
-            </button>
-          )}
-        </div>
+        {/* 输入区（R2/C-2：Composer 纯展示组件；模型选择槽由 page 注入——
+            模型选择语义不变：localStorage travel.model / dropUp / 40005 拦截，R11） */}
+        <Composer
+          value={input}
+          onChange={(v) => setDrafts((prev) => ({ ...prev, [activeDraftKey]: v }))}
+          onSend={() => handleSend()}
+          onStop={handleStop}
+          showStop={
+            sending
+            && activeTurnRef.current?.sid === currentSessionId
+            && currentStreamState?.phase === 'thinking'
+          }
+          canSend={!!input.trim() && !sending && !creatingSession}
+          modelSlot={
+            <ModelSelector value={modelPref.model} onChange={modelPref.select} dropUp compact />
+          }
+          textareaRef={textareaRef}
+        />
       </div>
+
+      {/* 窄屏会话抽屉（C-05） */}
+      <Dialog open={drawerOpen} onClose={() => setDrawerOpen(false)} className="max-w-xs p-3" ariaLabel="会话列表">
+        <SessionList
+          sessions={sessionList.sessions}
+          currentSessionId={currentSessionId}
+          creatingSession={creatingSession}
+          streamStates={chatStream.streamStates}
+          completedTurns={completedTurns}
+          editingSessionId={sessionList.editingSessionId}
+          editingTitle={sessionList.editingTitle}
+          pinnedIds={sessionList.pinnedIds}
+          onTogglePin={sessionList.togglePin}
+          onNewSession={handleNewSession}
+          onSelect={handleSelectSession}
+          onEnterSelect={(sid) => setCurrentSessionId(sid)}
+          onStartEdit={sessionList.startEdit}
+          onTitleChange={sessionList.changeEditingTitle}
+          onSaveTitle={(sid) => {
+            sessionList.saveTitle(sid);
+            setDrawerOpen(false);
+          }}
+          onCancelEdit={sessionList.cancelEdit}
+          onCloseSession={handleCloseSession}
+        />
+      </Dialog>
     </div>
   );
+}
+
+/** B3：消息列表是否以 user 消息结尾（用于判断最后一条 assistant） */
+function isLastMessageUser(list: ChatMessage[]): boolean {
+  return list.length > 0 && list[list.length - 1].role === 'user';
 }
 
 export default function ChatPage() {

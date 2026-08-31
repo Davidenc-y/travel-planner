@@ -94,7 +94,8 @@ export async function consumeSseStream(
   }
 }
 
-function handleFrame(raw: string, handlers: SseStreamHandlers): void {
+/** B0/PE-01：导出供单测（行为不变，仅可见性） */
+export function handleFrame(raw: string, handlers: SseStreamHandlers): void {
   let event = 'message';
   let data = '';
   let id = '';

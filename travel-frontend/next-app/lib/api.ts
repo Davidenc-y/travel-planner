@@ -20,6 +20,14 @@ const KNOWLEDGE_BASE = process.env.NEXT_PUBLIC_API_KNOWLEDGE || 'http://localhos
 // M6-34：聊天 SSE 灰度切换——NEXT_PUBLIC_STREAM_BASE 指向 WebFlux(8083) 时聊天流走
 // 响应式传输层，其余会话/消息 JSON API 仍走 planning(8081)；未配置时回退 PLANNING_BASE
 const STREAM_BASE = process.env.NEXT_PUBLIC_STREAM_BASE || PLANNING_BASE;
+// R3（02-11 §10.2-R7）：灰度目标网络级失败后的降级记忆（会话级，刷新后重试灰度）
+let sseFallbackToLocal = false;
+
+/** R3：业务码错误（HTTP 非 2xx 但带业务 code）视为正常响应语义，不触发灰度降级 */
+function isBusinessError(err: unknown): boolean {
+  const e = err as { response?: { data?: { code?: number } } } | undefined;
+  return typeof e?.response?.data?.code === 'number';
+}
 
 // ==================== 认证辅助（F87） ====================
 
@@ -128,11 +136,26 @@ export const knowledgeApi = createClient(KNOWLEDGE_BASE);
 
 /**
  * 统一错误信息提取（F87）：优先后端 message，其次 axios 错误文本。
+ * R2/S5：40301 限流统一为固定友好文案（后端 message 可能含内部细节）。
  * 页面 toast 一律使用本函数，避免重复拼装。
  */
 export function getErrorMessage(err: unknown): string {
-  const e = err as { response?: { data?: { message?: string } }; message?: string };
+  const e = err as { response?: { data?: { message?: string; code?: number } }; message?: string } | undefined;
+  if (e?.response?.data?.code === 40301) {
+    return '操作过于频繁，请稍后再试';
+  }
   return e?.response?.data?.message || e?.message || '请求失败，请稍后重试';
+}
+
+/** R4：从未知错误中安全提取 HTTP/业务错误码（兼容 axios 双形态：HTTP 对齐 / 业务码双轨） */
+export function httpErrorCode(err: unknown): number | undefined {
+  const e = err as { response?: { data?: { code?: number } }; code?: number } | undefined;
+  return e?.response?.data?.code ?? e?.code;
+}
+
+/** R4：请求是否被主动中止（AbortController） */
+export function isAbortError(err: unknown): boolean {
+  return (err as { name?: string } | null)?.name === 'AbortError';
 }
 
 // ==================== Auth ====================
@@ -158,6 +181,11 @@ export const userApi = {
   /** M5-1：绑定邮箱（注册未填时后补；格式与唯一性由后端校验） */
   updateEmail: (email: string) =>
     planningApi.put<R<void>>('/api/v1/users/email', { email }),
+  /** U1：个人中心使用统计（rangeDays：7|30，作用于趋势图/模型用量） */
+  usageStats: (rangeDays: 7 | 30) =>
+    planningApi.get<R<import('@/types').UsageStats>>('/api/v1/users/me/usage-stats', {
+      params: { rangeDays },
+    }),
 };
 
 // ==================== Itinerary ====================
@@ -232,7 +260,9 @@ export const chatApi = {
   getLatestInterruptedTurn: (sessionId: string) =>
     planningApi.get<R<import('@/types').LatestInterruptedTurn>>(
       `/api/v1/chat/sessions/${sessionId}/interrupted-turn`),
-  /** M6：流式发送（SSE）——POST /messages/stream，事件回调驱动思考气泡与流式文本 */
+  /** M6：流式发送（SSE）——POST /messages/stream，事件回调驱动思考气泡与流式文本。
+   *  R3（02-11 §10.2-R7）：灰度目标网络级失败时自动回退 planning(8081) 并记忆降级
+   *  （仅网络错误/5xx，业务码 40904/40005 等属于正常响应语义，不触发降级）。 */
   sendMessageStream: (
     sessionId: string,
     message: string,
@@ -251,13 +281,28 @@ export const chatApi = {
     }
     // P1：断线续传——携带最近收到的事件 id（仅 COMPLETED 重放生效）
     if (lastEventId) headers['Last-Event-ID'] = lastEventId;
-    return consumeSseStream(
-      `${STREAM_BASE}/api/v1/chat/sessions/${sessionId}/messages/stream`,
-      { message, clientMessageId, ...(model ? { model } : {}) },
-      headers,
-      signal,
-      handlers,
+
+    const attempt = (base: string) =>
+      consumeSseStream(
+        `${base}/api/v1/chat/sessions/${sessionId}/messages/stream`,
+        { message, clientMessageId, ...(model ? { model } : {}) },
+        headers,
+        signal,
+        handlers,
     );
+
+    // R3：未配置灰度目标、或已降级记忆 → 直接走 planning（无回退逻辑参与）
+    if (STREAM_BASE === PLANNING_BASE || sseFallbackToLocal) {
+      return attempt(PLANNING_BASE);
+    }
+    return attempt(STREAM_BASE).catch(async (err: unknown) => {
+      if (signal.aborted || isAbortError(err)) throw err; // 主动取消不回退
+      if (isBusinessError(err)) throw err; // 业务码=正常响应语义（40904 重试/40005 换模型等）
+      // 网络级失败（连接拒绝/DNS/非 2xx 无业务码）→ 记忆降级并回退 planning
+      console.warn('[api] SSE 灰度目标不可用，本次及后续聊天流回退 planning(8081)');
+      sseFallbackToLocal = true;
+      return attempt(PLANNING_BASE);
+    });
   },
 };
 

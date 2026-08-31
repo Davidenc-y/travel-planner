@@ -1,13 +1,14 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
-import { Loader2, LogIn } from 'lucide-react';
-import { useEffect } from 'react';
+import { Loader2, LogIn, Eye, EyeOff } from 'lucide-react';
 import { authApi, getErrorMessage } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 import { FormShell } from '@/components/ui/form-shell';
+import { Input } from '@/components/ui/input';
+import { Button } from '@/components/ui/button';
 
 function LoginContent() {
   const router = useRouter();
@@ -15,6 +16,10 @@ function LoginContent() {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
+  // B3（04 §4.8，D-14）：错误内联到 FormShell error 槽（保留 toast 移除双通道）
+  const [error, setError] = useState<string | null>(null);
+  // 密码可见性切换（纯前端）
+  const [showPassword, setShowPassword] = useState(false);
 
   // F93：已登录（localStorage 有 token）时自动回跳原目标页（middleware 307 带 from 参数）
   useEffect(() => {
@@ -26,10 +31,11 @@ function LoginContent() {
 
   const handleLogin = async () => {
     if (!username || !password) {
-      toast.error('请输入用户名和密码');
+      setError('请输入用户名和密码');
       return;
     }
     setLoading(true);
+    setError(null);
     try {
       const res = await authApi.login(username, password);
       const data = res.data.data;
@@ -40,8 +46,9 @@ function LoginContent() {
       const from = new URLSearchParams(window.location.search).get('from');
       const target = from && from.startsWith('/') ? from : '/';
       window.location.href = target;
-    } catch (err: any) {
-      toast.error('登录失败: ' + getErrorMessage(err));
+    } catch (err: unknown) {
+      const message = '登录失败: ' + getErrorMessage(err);
+      setError(message);
     } finally {
       setLoading(false);
     }
@@ -54,16 +61,18 @@ function LoginContent() {
           icon={<LogIn className="h-7 w-7" />}
           title="登录"
           description="旅游行程智能规划助手"
+          error={error}
           footer={
             <>
-              <button
+              <Button
                 onClick={handleLogin}
                 disabled={loading}
-                className="w-full py-2.5 rounded-lg bg-brand-500 text-white font-medium hover:bg-brand-600 disabled:opacity-50 magnetic flex items-center justify-center gap-2"
+                size="lg"
+                className="w-full"
               >
                 {loading ? <Loader2 className="h-5 w-5 animate-spin" /> : '登录'}
-              </button>
-              <p className="text-center text-sm text-slate-400 mt-4">
+              </Button>
+              <p className="text-center text-sm text-ink-faint mt-4">
                 没有账号？{' '}
                 <a href="/register" className="text-brand-500 hover:underline">注册</a>
               </p>
@@ -71,27 +80,40 @@ function LoginContent() {
           }
         >
           <div className="space-y-4">
-          <div>
-            <label className="text-sm font-medium mb-1 block">用户名</label>
-            <input
-              value={username}
-              onChange={(e) => setUsername(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && handleLogin()}
-              className="w-full px-4 py-2.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-transparent focus:ring-2 focus:ring-brand-500 outline-none"
-              placeholder="输入用户名"
-            />
-          </div>
-          <div>
-            <label className="text-sm font-medium mb-1 block">密码</label>
-            <input
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && handleLogin()}
-              className="w-full px-4 py-2.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-transparent focus:ring-2 focus:ring-brand-500 outline-none"
-              placeholder="输入密码"
-            />
-          </div>
+            <div>
+              <label htmlFor="login-username" className="text-sm font-medium mb-1 block">用户名</label>
+              <Input
+                id="login-username"
+                value={username}
+                onChange={(e) => setUsername(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && handleLogin()}
+                placeholder="输入用户名"
+                autoComplete="username"
+              />
+            </div>
+            <div>
+              <label htmlFor="login-password" className="text-sm font-medium mb-1 block">密码</label>
+              <div className="relative">
+                <Input
+                  id="login-password"
+                  type={showPassword ? 'text' : 'password'}
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && handleLogin()}
+                  placeholder="输入密码"
+                  autoComplete="current-password"
+                  className="pr-10"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword((v) => !v)}
+                  aria-label={showPassword ? '隐藏密码' : '显示密码'}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-ink-faint hover:text-ink-secondary focus-ring rounded"
+                >
+                  {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                </button>
+              </div>
+            </div>
           </div>
         </FormShell>
       </div>

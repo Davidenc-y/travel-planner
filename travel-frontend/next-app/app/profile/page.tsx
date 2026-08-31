@@ -2,11 +2,31 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { User, LogOut, MapPin, Calendar, Route, Camera } from 'lucide-react';
+import { User, LogOut, MapPin, Mail, Camera } from 'lucide-react';
 import { toast } from 'sonner';
+import dynamic from 'next/dynamic';
 import { itineraryApi, userApi, getErrorMessage } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 import { UserAvatar } from '@/components/ui/user-avatar';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { useCountUp } from '@/lib/use-count-up';
+import { Skeleton } from '@/components/ui/skeleton';
+
+// U1：使用统计（recharts 图表按需加载，refetch 随 range 切换）
+const UsageStats = dynamic(
+  () => import('@/components/feature/usage-stats').then((m) => m.UsageStats),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="space-y-4">
+        <Skeleton className="h-8 w-40" />
+        <Skeleton className="h-24 w-full" />
+        <Skeleton className="h-40 w-full" />
+      </div>
+    ),
+  }
+);
 
 // M5-1：邮箱格式校验（与后端一致）
 const EMAIL_RE = /^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/;
@@ -23,6 +43,8 @@ function ProfileContent() {
   // M3-21：头像上传本地预览（上传成功/失败后清除，回退服务端头像）
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  // B3（04 §4.7）：行程数数字滚动
+  const tripCountDisplay = useCountUp(tripCount ?? undefined);
 
   useEffect(() => {
     if (!isAuthenticated || userId == null) return;
@@ -36,9 +58,11 @@ function ProfileContent() {
       .catch(() => {});
   }, [isAuthenticated, userId]);
 
+  const [avatarUploading, setAvatarUploading] = useState(false);
   const handleAvatarChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (!file) return;
+    if (!file || avatarUploading) return; // S5：上传进行中防连点重复上传
+    setAvatarUploading(true);
     setPreviewUrl(URL.createObjectURL(file));
     try {
       await userApi.uploadAvatar(file);
@@ -49,6 +73,7 @@ function ProfileContent() {
       setPreviewUrl(null);
       toast.error('头像上传失败: ' + getErrorMessage(err));
     } finally {
+      setAvatarUploading(false);
       if (fileRef.current) fileRef.current.value = '';
     }
   };
@@ -83,16 +108,18 @@ function ProfileContent() {
     }
   };
 
-  if (!isAuthenticated) {
-    router.replace('/');
-    return null;
-  }
+  // B3（04 §4.7）：登录守卫移入 useEffect（渲染期副作用反模式在 PE-02 后会于预渲染期报错）
+  useEffect(() => {
+    if (!isAuthenticated) {
+      router.replace('/');
+    }
+  }, [isAuthenticated, router]);
 
   return (
-    <div className="max-w-2xl mx-auto">
+    <div className="max-w-3xl mx-auto">
       <h1 className="text-2xl font-bold mb-6">个人中心</h1>
 
-      <div className="glass rounded-2xl p-6 mb-4">
+      <div className="card p-6 mb-4">
         <div className="flex items-center gap-4 mb-6">
           {/* F121：真实头像 + 悬浮相机图标上传 */}
           <button
@@ -115,13 +142,13 @@ function ProfileContent() {
           />
           <div>
             <h2 className="text-xl font-semibold">{username}</h2>
-            <p className="text-sm text-slate-400">用户 ID: {userId}</p>
+            <p className="text-sm text-ink-faint">用户 ID: {userId}</p>
             {email ? (
-              <p className="text-sm text-slate-400">{email}</p>
+              <p className="text-sm text-ink-faint">{email}</p>
             ) : (
               <div className="mt-1 max-w-sm">
                 <div className="flex gap-2">
-                  <input
+                  <Input
                     type="email"
                     value={emailInput}
                     onChange={(e) => handleEmailChange(e.target.value)}
@@ -132,63 +159,68 @@ function ProfileContent() {
                     }}
                     placeholder="your@email.com"
                     aria-label="绑定邮箱"
-                    className="flex-1 px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-transparent focus:ring-2 focus:ring-brand-500 outline-none text-sm"
+                    error={emailError}
+                    className="flex-1 px-3 py-1.5 text-sm"
                   />
-                  <button
-                    type="button"
+                  <Button
                     onClick={handleBindEmail}
                     disabled={emailSaving || !emailInput.trim() || !EMAIL_RE.test(emailInput.trim())}
-                    className="px-3 py-1.5 rounded-lg bg-brand-500 text-white text-sm hover:bg-brand-600 disabled:opacity-50 magnetic"
+                    size="sm"
+                    className="self-start mt-1"
                   >
                     {emailSaving ? '绑定中…' : '绑定邮箱'}
-                  </button>
+                  </Button>
                 </div>
-                {emailError && (
-                  <p className="text-xs text-red-500 mt-1" role="alert">{emailError}</p>
-                )}
               </div>
             )}
           </div>
         </div>
 
-          <div className="grid grid-cols-2 gap-3">
-            <div className="bg-slate-50 dark:bg-slate-800/50 rounded-lg p-4">
-              <Route className="h-5 w-5 text-brand-500 mb-1" />
-              <p className="text-xs text-slate-400">我的行程</p>
-              <p className="font-medium">{tripCount ?? '—'}</p>
-            </div>
-            <div className="bg-slate-50 dark:bg-slate-800/50 rounded-lg p-4">
-              <Calendar className="h-5 w-5 text-brand-500 mb-1" />
-              <p className="text-xs text-slate-400">账号状态</p>
-              <p className="font-medium">活跃</p>
-            </div>
+        {/* B3（04 §4.7）：统计卡真实化——行程数（数字滚动）+ 邮箱绑定态（替代假数据"活跃"） */}
+        <div className="grid grid-cols-2 gap-3">
+          <div className="bg-surface-2 rounded-lg p-4">
+            <MapPin className="h-5 w-5 text-brand-500 mb-1" />
+            <p className="text-xs text-ink-faint">我的行程</p>
+            <p className="font-medium">{tripCount == null ? '—' : tripCountDisplay}</p>
           </div>
+          <div className="bg-surface-2 rounded-lg p-4">
+            <Mail className="h-5 w-5 text-brand-500 mb-1" />
+            <p className="text-xs text-ink-faint">邮箱</p>
+            <p className="font-medium">{email ? '已绑定' : '未绑定'}</p>
+          </div>
+        </div>
       </div>
 
-      <div className="glass rounded-2xl p-6">
+      {/* U1：使用统计（个人名片与快捷操作之间，参考 Z.ai 应用用量样式） */}
+      <div className="mb-4">
+        <UsageStats />
+      </div>
+
+      <div className="card p-6">
         <h3 className="font-semibold mb-3">快捷操作</h3>
         <div className="space-y-2">
           <button
             onClick={() => router.push('/itinerary')}
-            className="w-full flex items-center gap-2 px-4 py-2.5 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors text-left"
+            className="w-full flex items-center gap-2 px-4 py-2.5 rounded-lg hover:bg-surface-2 transition-colors text-left focus-ring"
           >
             <MapPin className="h-4 w-4 text-brand-500" />
             <span>我的行程</span>
           </button>
           <button
             onClick={() => router.push('/chat')}
-            className="w-full flex items-center gap-2 px-4 py-2.5 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors text-left"
+            className="w-full flex items-center gap-2 px-4 py-2.5 rounded-lg hover:bg-surface-2 transition-colors text-left focus-ring"
           >
             <User className="h-4 w-4 text-brand-500" />
             <span>规划对话</span>
           </button>
-          <button
+          <Button
+            variant="danger-ghost"
             onClick={logout}
-            className="w-full flex items-center gap-2 px-4 py-2.5 rounded-lg hover:bg-red-50 dark:hover:bg-red-900/20 text-red-500 transition-colors text-left"
+            className="w-full justify-start px-4 py-2.5"
           >
             <LogOut className="h-4 w-4" />
             <span>退出登录</span>
-          </button>
+          </Button>
         </div>
       </div>
     </div>

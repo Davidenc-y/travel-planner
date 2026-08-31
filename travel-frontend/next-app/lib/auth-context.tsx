@@ -29,6 +29,8 @@ interface AuthContextType {
   avatar: string | null;
   token: string | null;
   isAuthenticated: boolean;
+  /** PE-02（F-23）：挂载标记——Provider 不再拦截渲染，消费方用它渲染中性占位 */
+  mounted: boolean;
   login: (token: string, refreshToken: string, userId: number, username: string) => void;
   refreshUser: () => Promise<void>;
   logout: () => void;
@@ -132,10 +134,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     window.location.assign('/');
   };
 
-  if (!mounted) {
-    return null;
-  }
-
+  // PE-02（F-23）白闪修复：挂载前不再 return null（原实现使根布局 children 在
+  // SSR 与首次客户端渲染中均为空 → 硬刷新整站白屏一帧）。始终渲染 children，
+  // 未挂载时 isAuthenticated=false（与"未登录"初始态一致，页面守卫逻辑不受影响，
+  // 服务端 middleware 守卫不受影响——R2）；消费方用 mounted 渲染占位。
   return (
     <AuthContext.Provider value={{
       userId,
@@ -143,6 +145,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       avatar,
       token,
       isAuthenticated: !!token,
+      mounted,
       login,
       refreshUser,
       logout,

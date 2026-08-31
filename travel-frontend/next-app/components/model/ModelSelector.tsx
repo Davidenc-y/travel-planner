@@ -12,6 +12,8 @@ interface ModelSelectorProps {
   onChange: (value: string) => void;
   /** M7-7：面板向上展开（聊天输入区贴底时使用） */
   dropUp?: boolean;
+  /** C1：紧凑文本形态（聊天 Composer 内"模型名 + 下拉"样式） */
+  compact?: boolean;
 }
 
 /**
@@ -20,7 +22,7 @@ interface ModelSelectorProps {
  * <p>数据源 GET /api/v1/models（后端仅返回 enabled+selectable）；首项“智能默认”
  * 表示不传 model（走后端角色默认）；加载失败 toast 并仅保留默认项，不阻断页面。</p>
  */
-export function ModelSelector({ value, onChange, dropUp = false }: ModelSelectorProps) {
+export function ModelSelector({ value, onChange, dropUp = false, compact = false }: ModelSelectorProps) {
   const [options, setOptions] = useState<{ value: string; label: string }[]>([SMART_OPTION]);
 
   useEffect(() => {
@@ -54,6 +56,7 @@ export function ModelSelector({ value, onChange, dropUp = false }: ModelSelector
       placeholder="智能默认"
       defaultPageSize={8}
       dropUp={dropUp}
+      compact={compact}
     />
   );
 }
