@@ -23,6 +23,8 @@ public class RagRoutingMetrics {
     private final Counter rerankTotal;
     private final Timer rerankElapsed;
     private final Counter rerankFallback;
+    /** M8-2：检索降级计数（es_fail / milvus_fail / empty_relax / enrich_fail） */
+    private final Counter degraded;
 
     public RagRoutingMetrics(MeterRegistry registry) {
         this.registry = registry;
@@ -42,6 +44,9 @@ public class RagRoutingMetrics {
                 .register(registry);
         this.rerankFallback = Counter.builder("rag.rerank.fallback")
                 .description("Rerank fail-open 次数（失败按原顺序截断）")
+                .register(registry);
+        this.degraded = Counter.builder("rag.routing.degraded")
+                .description("检索链路降级次数（按 reason 分桶）")
                 .register(registry);
     }
 
@@ -74,5 +79,19 @@ public class RagRoutingMetrics {
      */
     public void recordRerankFallback() {
         rerankFallback.increment();
+    }
+
+    /**
+     * M8-2：记录一次检索链路降级事件（reason：es_fail/milvus_fail/empty_relax/enrich_fail）。
+     *
+     * <p>背景：检索失败静默降级空数组时系统「看起来正常」，LLM 实际处于无约束编造状态；
+     * 本计数让降级事件可观测（Actuator /metrics + 日志），与 t_agent_trace DEGRADED 互补。</p>
+     */
+    public void recordDegraded(String reason) {
+        Counter.builder("rag.routing.degraded")
+                .tag("reason", reason)
+                .register(registry)
+                .increment();
+        degraded.increment();
     }
 }

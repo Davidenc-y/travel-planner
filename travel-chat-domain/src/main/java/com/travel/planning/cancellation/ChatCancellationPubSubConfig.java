@@ -28,10 +28,33 @@ public class ChatCancellationPubSubConfig {
     public ChatCancellationListenerLifecycle chatCancellationListenerLifecycle(
             RedisConnectionFactory connectionFactory,
             TurnCancellationSubscriber subscriber,
-            ChatCancellationPubSubProperties props) {
-        RedisMessageListenerContainer container = new RedisMessageListenerContainer();
-        container.setConnectionFactory(connectionFactory);
-        container.addMessageListener(subscriber, new ChannelTopic(props.getChannel()));
+            ChatCancellationPubSubProperties props) throws Exception {
+        RedisMessageListenerContainer container =
+                buildContainer(connectionFactory, subscriber, props.getChannel());
         return new ChatCancellationListenerLifecycle(container);
+    }
+
+    /**
+     * M8-9c 修复：容器是手动 new 出来的、不作为 Spring bean 注册，
+     * Spring 不会自动调用 {@code afterPropertiesSet()}，而
+     * {@link RedisMessageListenerContainer#start()} 又不会代为初始化，
+     * 直接启动会报 “Subscriber not created; ... afterPropertiesSet() has been called”。
+     * 因此在创建后显式初始化一次。
+     */
+    RedisMessageListenerContainer buildContainer(
+            RedisConnectionFactory connectionFactory,
+            TurnCancellationSubscriber subscriber,
+            String channel) throws Exception {
+        RedisMessageListenerContainer container = createContainer();
+        container.setConnectionFactory(connectionFactory);
+        container.addMessageListener(subscriber, new ChannelTopic(channel));
+        container.afterPropertiesSet();
+        return container;
+    }
+
+    /** 容器创建钩子（测试可覆写以断言 afterPropertiesSet 已调用） */
+    RedisMessageListenerContainer createContainer() {
+        RedisMessageListenerContainer container = new RedisMessageListenerContainer();
+        return container;
     }
 }

@@ -21,6 +21,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -153,7 +154,14 @@ public class RagSupervisorAgent {
 
     private static Optional<OverAllState> invokeSafely(SupervisorAgent supervisor, String input) {
         try {
-            return supervisor.invoke(input, RunnableConfig.builder().build());
+            // M8-1（F51 同构修复）：每次调用使用唯一 threadId，父图 checkpoint 按调用隔离。
+            // 否则父图默认 MemorySaver + 固定默认 threadId 会跨调用累积 state，
+            // 上一查询的子 Agent 输出（hybrid_result 等）被后续查询复用——
+            // 实证：RAG 评测中 auto 路径 Q044/Q045 返回 Q043 的陈旧结果、
+            // 或主代理在污染上下文中直接 FINISH 导致 0 条（chat 域 F51 同型已修）。
+            return supervisor.invoke(input, RunnableConfig.builder()
+                    .threadId("rag_supervisor_" + UUID.randomUUID())
+                    .build());
         } catch (Exception e) {
             throw new RuntimeException("RagSupervisor 执行失败", e);
         }

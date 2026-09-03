@@ -27,6 +27,8 @@ export type SessionStatus = (typeof SESSION_STATUS)[keyof typeof SESSION_STATUS]
 export const ERROR_CODE = {
   /** 模型未找到（前端已选模型被禁用/未注册） */
   MODEL_NOT_FOUND: 40005,
+  /** 模型额度不足（DashScope 403 Free quota exhausted） */
+  MODEL_QUOTA_EXCEEDED: 40303,
   /** 未登录 */
   UNAUTHORIZED: 40101,
   /** 限流 */

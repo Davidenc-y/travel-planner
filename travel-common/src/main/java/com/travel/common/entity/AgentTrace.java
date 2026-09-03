@@ -65,6 +65,18 @@ public class AgentTrace implements Serializable {
     /** RUNNING / SUCCESS / FAILED / TIMEOUT / SKIPPED */
     private String status;
 
+    /** M8-2：生成端引用校验通过率（0~1；null=未校验/无景点输出） */
+    private Double groundingRate;
+
+    /** M8-2：未命中候选集的景点名 JSON 数组（空=全部有据；null=未校验） */
+    private String groundingUnmatched;
+
+    /** M8-6：REFINE 保留性校验通过率（0~1；null=未校验/非 REFINE） */
+    private Double retentionRate;
+
+    /** M8-6：静默丢失景点名 JSON 数组（null=未校验） */
+    private String retentionLost;
+
     private String errorMsg;
 
     private LocalDateTime createdAt;

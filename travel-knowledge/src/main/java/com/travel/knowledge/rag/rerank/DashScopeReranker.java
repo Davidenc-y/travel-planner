@@ -29,7 +29,8 @@ import java.util.concurrent.TimeUnit;
  * {@code spring.ai.dashscope.api-key}，model=gte-rerank-v2，return_documents=false），
  * 读响应 {@code output.results[].index} 映射回原候选列表。设计要点：</p>
  * <ul>
- *   <li><b>fail-open</b>：HTTP/超时/限频/解析任何失败按原顺序截断 topK 返回 + WARN +
+ *   <li>M8-9d：<b>只重排、不截断</b>（top_n=候选池大小），最终 topK 由模板出口统一截断；</li>
+ *   <li><b>fail-open</b>：HTTP/超时/限频/解析任何失败按原顺序返回完整候选池 + WARN +
  *       fallback 计数（不做熔断，保持简单）；</li>
  *   <li>2s 硬性超时（{@link CompletableFuture#orTimeout}，虚拟线程）；</li>
  *   <li>{@code Semaphore(2)} 限频（tryAcquire 带超时等待，防并发穿透）；</li>
@@ -72,35 +73,35 @@ public class DashScopeReranker implements Reranker {
     }
 
     @Override
-    public List<SearchResult> rerank(String query, List<SearchResult> candidates, int topK) {
-        if (candidates == null || candidates.isEmpty() || topK <= 0) {
+    public List<SearchResult> rerank(String query, List<SearchResult> candidates) {
+        if (candidates == null || candidates.isEmpty()) {
             return List.of();
         }
         try {
             if (!CONCURRENCY.tryAcquire(properties.getTimeoutMs(), TimeUnit.MILLISECONDS)) {
-                return failOpen(candidates, topK, "并发限频等待超时");
+                return failOpen(candidates, "并发限频等待超时");
             }
             try {
                 return CompletableFuture
-                        .supplyAsync(() -> doRerank(query, candidates, topK), RERANK_EXECUTOR)
+                        .supplyAsync(() -> doRerank(query, candidates), RERANK_EXECUTOR)
                         .orTimeout(properties.getTimeoutMs(), TimeUnit.MILLISECONDS)
                         .join();
             } finally {
                 CONCURRENCY.release();
             }
         } catch (Exception e) {
-            return failOpen(candidates, topK, e.getMessage());
+            return failOpen(candidates, e.getMessage());
         }
     }
 
-    private List<SearchResult> doRerank(String query, List<SearchResult> candidates, int topK) {
+    private List<SearchResult> doRerank(String query, List<SearchResult> candidates) {
         List<String> documents = candidates.stream()
                 .map(r -> (safe(r.getTitle()) + "\n" + safe(r.getSnippet())).strip())
                 .toList();
         Map<String, Object> body = Map.of(
                 "model", model,
                 "input", Map.of("query", query == null ? "" : query, "documents", documents),
-                "parameters", Map.of("return_documents", false, "top_n", topK));
+                "parameters", Map.of("return_documents", false, "top_n", documents.size()));
         String response = exchange(JsonUtils.toJson(body));
         JsonNode results = parseResults(response);
         List<SearchResult> out = new ArrayList<>(results.size());
@@ -110,7 +111,8 @@ public class DashScopeReranker implements Reranker {
                 out.add(candidates.get(idx));
             }
         }
-        return out.size() <= topK ? out : out.subList(0, topK);
+        // M8-9d：只重排不截断（API 已按 top_n=池大小返回全部排序结果）
+        return out;
     }
 
     private static JsonNode parseResults(String response) {
@@ -138,11 +140,12 @@ public class DashScopeReranker implements Reranker {
                 .body(String.class);
     }
 
-    /** fail-open：原顺序截断 topK + WARN + fallback 计数 */
-    private List<SearchResult> failOpen(List<SearchResult> candidates, int topK, String reason) {
+    /** fail-open：原顺序返回完整候选池 + WARN + fallback 计数 */
+    private List<SearchResult> failOpen(List<SearchResult> candidates, String reason) {
         metrics.recordRerankFallback();
-        log.warn("[DashScopeReranker] rerank 失败，fail-open 原顺序截断 topK={}: {}", topK, reason);
-        return candidates.stream().limit(topK).toList();
+        log.warn("[DashScopeReranker] rerank 失败，fail-open 原顺序返回候选池({} 条): {}",
+                candidates.size(), reason);
+        return candidates;
     }
 
     private static String safe(String v) {

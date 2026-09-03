@@ -63,4 +63,16 @@ public class MemoryController {
                 sessionId, seqPrefix, limit);
         return R.ok(sessionContextService.findBySeqPrefix(sessionId, seqPrefix, limit));
     }
+
+    /**
+     * M8-9：按 seq 前缀删除会话切片（REFINE/重生成覆盖旧版本）。
+     */
+    @DeleteMapping("/session-context/by-prefix")
+    public R<Integer> deleteSessionContextByPrefix(
+            @RequestParam String sessionId,
+            @RequestParam String seqPrefix) {
+        log.info("[MemoryController] 按前缀删除会话切片: sessionId={}, seqPrefix={}",
+                sessionId, seqPrefix);
+        return R.ok(sessionContextService.deleteBySeqPrefix(sessionId, seqPrefix));
+    }
 }

@@ -13,6 +13,9 @@
 
 正常流程为顺序执行 preference_analysis → attraction_filter → route_arrangement → budget_estimation。
 若预算估算超出用户预算 1.2 倍,回到 attraction_filter 重新筛选(最多重试 2 次)。
+## 修改纪律（M8-6）
+当用户要求修改已有行程（REFINE）时，子 Agent 输出必须显式区分：保留项（沿用原 timeSlot）、
+调整项（原 → 新 + 一句原因）、新增项、删除项；未提及的景点默认保留，不得静默丢失既有安排。
 ## 输出行约束（M7-8）
 路由决策数组必须是助手消息的唯一内容：一行 JSON 数组，前后不允许出现任何
 解释性文字、JSON 对象或代码块标记；任何多余输出都会导致系统路由失败。

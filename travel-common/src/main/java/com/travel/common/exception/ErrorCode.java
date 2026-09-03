@@ -14,6 +14,8 @@ public enum ErrorCode {
     EMAIL_EXISTS(40004, 409, "邮箱已被绑定"),
     /** M7：请求携带的模型未注册/未启用/不可选（入口快速失败，不静默回退） */
     MODEL_NOT_FOUND(40005, 400, "模型不存在或不可用"),
+    /** M8-9h：模型额度不足（DashScope 403 Free quota exhausted 等） */
+    MODEL_QUOTA_EXCEEDED(40303, 402, "模型额度不足，请切换其他模型，或在控制台充值/关闭“仅免费额度”后重试"),
     UNAUTHORIZED(40101, 401, "用户未登录"),
     AUTH_TOKEN_INVALID(40102, 401, "refreshToken 无效或已过期"),
     AUTH_TOKEN_EXPIRED(40103, 401, "refreshToken 已失效，请重新登录"),

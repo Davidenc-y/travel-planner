@@ -29,20 +29,6 @@ public class QueryUnderstandingService {
     /** 意图 LRU 缓存（access-order，容量由配置 cacheSize 控制） */
     private final Map<String, QueryIntent> cache;
 
-    /**
-     * M7-8：LLM type 校验同义词表（在配置 typeKeywords 基础上补充口语/场景词）。
-     * 仅用于“LLM 抽取的 type 是否被原始查询支撑”的校验，防止 qwen-turbo 幻觉
-     * 把“帮我规划重庆一日游”抽成 FOOD 导致过滤后检索为空。
-     */
-    private static final Map<String, List<String>> TYPE_SYNONYMS = Map.of(
-            "CULTURE", List.of("文物", "遗址", "民俗", "展览", "古迹", "博物馆"),
-            "NATURE", List.of("爬山", "风景", "森林", "海边", "湖泊"),
-            "FOOD", List.of("好吃", "火锅", "烧烤", "美食街", "小吃街", "吃", "菜"),
-            "SHOPPING", List.of("购物街", "买"),
-            "FAMILY", List.of("孩子", "带娃", "儿童"),
-            "LEISURE", List.of("温泉", "慢生活")
-    );
-
     // M7 Batch 4：高频短输出 → light 角色（注册表默认 qwen-turbo；RAG 评测硬门禁守护质量）
     public QueryUnderstandingService(@Qualifier("lightModel") ChatModel chatModel,
                                      QueryUnderstandingProperties properties) {
@@ -195,10 +181,30 @@ public class QueryUnderstandingService {
         }
         List<String> triggers = new ArrayList<>(
                 properties.getTypeKeywords().getOrDefault(t, List.of()));
-        triggers.addAll(TYPE_SYNONYMS.getOrDefault(t, List.of()));
+        // M8-2：同义词表并入配置单源（默认值与迁移前逐字一致，行为等价）
+        triggers.addAll(properties.getTypeSynonyms().getOrDefault(t, List.of()));
         if (!containsAny(query, triggers.toArray(new String[0]))) {
             log.debug("[QueryUnderstanding] LLM 推断 type={} 但原始查询无对应关键词，置为 null: query={}",
                     t, query);
+            return null;
+        }
+        // M8-7：查询同时表达多个类型（如“文化+美食”“美食和购物”）→ 置 null。
+        // 背景：真实冒烟中“帮我规划成都3日游，预算3000元，喜欢文化和美食”被 LLM 抽成
+        // 单一 CULTURE，type 过滤后成都候选仅剩 1 条，下游路线只能靠模型自身知识补景点
+        // （武侯祠/杜甫草堂等不在候选集）。heuristic 路径已有多类型置 null 规则，
+        // LLM 路径补上同一确定性规则（prompt 虽要求 LLM 输出 null，但校验不能依赖 LLM 自觉）。
+        int matchedTypes = 0;
+        for (String typeKey : properties.getTypeKeywords().keySet()) {
+            List<String> words = new ArrayList<>(
+                    properties.getTypeKeywords().getOrDefault(typeKey, List.of()));
+            words.addAll(properties.getTypeSynonyms().getOrDefault(typeKey, List.of()));
+            if (containsAny(query, words.toArray(new String[0]))) {
+                matchedTypes++;
+            }
+        }
+        if (matchedTypes > 1) {
+            log.debug("[QueryUnderstanding] 查询命中 {} 个类型类别，LLM 单类型 {} 置为 null: query={}",
+                    matchedTypes, t, query);
             return null;
         }
         return t;

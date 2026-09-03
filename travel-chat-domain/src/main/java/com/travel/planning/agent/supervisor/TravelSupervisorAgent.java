@@ -67,6 +67,8 @@ public class TravelSupervisorAgent {
     private final TokenUsageInterceptor tokenUsageInterceptor;
     // M7 Batch 2：图流模型路由拦截器（Level 2，metadata 通道）
     private final ModelRouteInterceptor modelRouteInterceptor;
+    // M8-9m：额度不足短路拦截器（注册在链最外层）
+    private final QuotaShortCircuitInterceptor quotaShortCircuitInterceptor;
     // M3-20：Prompt 模板外置（P1-17）
     private final PromptTemplates promptTemplates;
     // F91：熔断（LLM/Supervisor 调用保护）
@@ -106,6 +108,8 @@ public class TravelSupervisorAgent {
                                   BudgetEstimationAgent budgetAgent,
                                   TokenUsageInterceptor tokenUsageInterceptor,
                                   ModelRouteInterceptor modelRouteInterceptor,
+                                  QuotaShortCircuitInterceptor quotaShortCircuitInterceptor,
+                                  QuotaTripwire quotaTripwire,
                                   CircuitBreaker.Registry circuitBreakerRegistry,
                                   PromptTemplates promptTemplates) {
         this.chatModel = chatModel;
@@ -120,9 +124,12 @@ public class TravelSupervisorAgent {
         this.directAnswerExecutor =
                 new DirectAnswerExecutor(chatModel, promptTemplates, circuitBreakerRegistry);
         this.graphExecutor = new SupervisorGraphExecutor(
-                tokenUsageInterceptor, circuitBreakerRegistry, promptTemplates, directAnswerExecutor);
+                tokenUsageInterceptor, circuitBreakerRegistry, promptTemplates,
+                directAnswerExecutor, quotaTripwire);
         this.streamExecutor = new SupervisorStreamExecutor(
-                tokenUsageInterceptor, circuitBreakerRegistry, promptTemplates, directAnswerExecutor);
+                tokenUsageInterceptor, circuitBreakerRegistry, promptTemplates,
+                directAnswerExecutor, quotaTripwire);
+        this.quotaShortCircuitInterceptor = quotaShortCircuitInterceptor;
     }
 
     @PostConstruct
@@ -141,7 +148,10 @@ public class TravelSupervisorAgent {
                     .outputKey("final_output")
                     // F27：注册 token 用量采集拦截器（与 4 个子 Agent 共用同一实例，
                     // 按请求 ID 累加 totalTokens，未 begin() 的流程自动跳过）。
-                    .interceptors(tokenUsageInterceptor, modelRouteInterceptor)
+                    // M8-9m：quota 短路拦截器必须在链最外层（最后注册），
+                    // 先检查短路再发起模型调用，并捕获同步/流式 403 后置位
+                    .interceptors(tokenUsageInterceptor, modelRouteInterceptor,
+                            quotaShortCircuitInterceptor)
                     // F26：关闭 mainAgent 子图的默认 MemorySaver。
                     // MainAgentNodeAction 用常量 threadId 调用该子图；默认 saver 会导致
                     // 单次调用内每轮路由 checkpoint 与当前输入合并（消息重复累积），
@@ -200,8 +210,17 @@ public class TravelSupervisorAgent {
         return graphExecutor.executePlanningWithUsage(supervisor, userInput, userId, cancellation);
     }
 
-    /** F27：行程规划结果（回答 + 本次真实 token 消耗）。 */
-    public record PlanningResult(String answer, long totalTokens) {
+    /**
+     * F27：行程规划结果（回答 + 本次真实 token 消耗）。
+     *
+     * @param routePlanJson M8-9：最终 state 的 routePlan JSON（可为 null；
+     *                      供会话知识 itinerary_day 切片写入，解锁 RECALL/REFINE retention）
+     */
+    public record PlanningResult(String answer, long totalTokens, String routePlanJson) {
+        /** 兼容既有调用方（无 routePlanJson 场景） */
+        public PlanningResult(String answer, long totalTokens) {
+            this(answer, totalTokens, null);
+        }
     }
 
     // ==================== F85 第二步：入口直答 / 回顾管线 ====================
@@ -265,7 +284,12 @@ public class TravelSupervisorAgent {
     }
 
     /** M6-18：图流规划结果 */
-    public record StreamPlanningResult(String answer, long totalTokens, boolean fallback) {
+    /** M8-9：同 {@link PlanningResult}，图流路径附带 routePlanJson */
+    public record StreamPlanningResult(String answer, long totalTokens, boolean fallback,
+                                       String routePlanJson) {
+        public StreamPlanningResult(String answer, long totalTokens, boolean fallback) {
+            this(answer, totalTokens, fallback, null);
+        }
     }
 
     /** M6-58/T9：最终回答组装静态委托（实现已迁至 SupervisorResponseSupport，供同包测试复用）。 */

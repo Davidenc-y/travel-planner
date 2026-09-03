@@ -40,6 +40,16 @@ spring:
   ai:
     dashscope:
       api-key: ${DASHSCOPE_API_KEY:}
+    # M8-9b：禁用 Spring AI MCP client 自动装配——启动期 initialize 失败会直接终止应用
+    # （实测 20s 超时后抛异常），无法满足“web-search 灰度不阻断启动”。
+    # 联网搜索由 McpWebSearchAdapter 后台自行建立 MCP stdio 连接（MCP Java SDK），
+    # 连接失败仅降级为空搜索工具；LLM 仍无自由搜索工具，注入面不扩大。
+    mcp:
+      client:
+        enabled: false
+        type: SYNC
+        toolcallback:
+          enabled: false
 
   # ============ Elasticsearch ============
   elasticsearch:
@@ -92,7 +102,9 @@ travel:
           enabled: true
         - key: qwen3.7-plus
           provider: openai-compatible
-          base-url: https://dashscope.aliyuncs.com/compatible-mode/v1
+          # M8-9g 修复：不能带结尾 /v1（Spring AI OpenAiApi 会自动追加 /v1/chat/completions，
+          # 否则拼出 /v1/v1/chat/completions → 404）
+          base-url: https://dashscope.aliyuncs.com/compatible-mode
           display-name: "Qwen3.7 Plus · 均衡"
           api-key-env: DASHSCOPE_API_KEY
           roles: []
@@ -158,6 +170,25 @@ travel:
         SHOPPING: [购物, 逛街, 商场]
         FAMILY: [亲子, 家庭, 乐园, 儿童]
         LEISURE: [休闲, 度假, 放松]
+      # M8-2：type 同义词表（M7-8 幻觉校验用；与 type-keywords 合并为单源，yml 可覆盖扩展）
+      type-synonyms:
+        CULTURE: [文物, 遗址, 民俗, 展览, 古迹, 博物馆]
+        NATURE: [爬山, 风景, 森林, 海边, 湖泊]
+        FOOD: [好吃, 火锅, 烧烤, 美食街, 小吃街, 吃, 菜]
+        SHOPPING: [购物街, 买]
+        FAMILY: [孩子, 带娃, 儿童]
+        LEISURE: [温泉, 慢生活]
+    # M8-1：检索结果结构化补全（false 时 AttractionEnricher 直通，行为回到 M8-1 之前）
+    enrichment:
+      enabled: true
+    # M8-4：MCP 联网搜索兜底（默认关；灰度开启后仅本地缺失字段触发，限频+熔断+超时）
+    web-search:
+      enabled: false
+      timeout-ms: 1500
+      rate-limit-per-minute: 10
+      daily-quota: 100
+      enrich-fields: [openHours, ticketPrice]
+      writeback-enabled: false
     # M4-6：Rerank SPI（none=直通默认；dashscope 启用 gte-rerank-v2，失败 fail-open）
     rerank:
       type: none
@@ -165,6 +196,24 @@ travel:
       timeout-ms: 2000
       # M7 Batch 4：rerank 模型配置化（默认不变）
       model: gte-rerank-v2
+    # M8-9d：候选质量感知选择（默认关=顺序截断，行为与现状一致；灰度开启见 local）
+    quality:
+      enabled: false
+      candidate-pool: 20
+      weight: 0.35
+      description-weight: 0.35
+      rating-weight: 0.25
+      image-weight: 0.10
+      tags-weight: 0.10
+      empty-description-penalty: 0.20
+      zero-rating-penalty: 0.10
+    # M8-9e：检索层修复（city 参与评分 + PLANNING 规则化扩展）
+    retrieval:
+      city-score-boost: 0.5
+      # 生产保守默认关；local 灰度开启，验证后可转正
+      planning-expansion-enabled: false
+      planning-trigger-keywords: [规划, 安排, 行程, 攻略, 几日游, 一日游, 两日游, 三日游, 旅游, 路线, 推荐]
+      planning-expansion-words: [旅游, 景点, 推荐, 攻略]
   # ETL 配置
   etl:
     batch-size: 100

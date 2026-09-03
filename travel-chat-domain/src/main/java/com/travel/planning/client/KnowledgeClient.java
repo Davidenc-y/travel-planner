@@ -2,6 +2,7 @@ package com.travel.planning.client;
 
 import com.travel.common.result.R;
 import org.springframework.cloud.openfeign.FeignClient;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -61,4 +62,12 @@ public interface KnowledgeClient {
             @RequestParam("sessionId") String sessionId,
             @RequestParam("seqPrefix") String seqPrefix,
             @RequestParam("limit") int limit);
+
+    /**
+     * M8-9：按 seq 前缀删除会话切片（REFINE/重生成覆盖旧版本）。
+     */
+    @DeleteMapping("/api/v1/memory/session-context/by-prefix")
+    R<Integer> deleteSessionContextByPrefix(
+            @RequestParam("sessionId") String sessionId,
+            @RequestParam("seqPrefix") String seqPrefix);
 }

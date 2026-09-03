@@ -79,7 +79,8 @@ public class ChatModelFactory {
 
     private ChatModel createOpenAiCompatible(ModelDescriptor d, int timeoutSeconds) {
         OpenAiApi api = OpenAiApi.builder()
-                .baseUrl(d.baseUrl())
+                // M8-9g：OpenAI 兼容端点规范化，避免结尾 /v1 被客户端再次追加导致 /v1/v1 404
+                .baseUrl(normalizeOpenAiBaseUrl(d.baseUrl()))
                 .apiKey(resolveKey(d))
                 .restClientBuilder(restClientBuilder(timeoutSeconds))
                 .webClientBuilder(webClientBuilder(timeoutSeconds))
@@ -95,6 +96,31 @@ public class ChatModelFactory {
                 .openAiApi(api)
                 .defaultOptions(options.build())
                 .build();
+    }
+
+    /**
+     * M8-9g：OpenAI 兼容 baseUrl 规范化。
+     *
+     * <p>Spring AI OpenAiApi 会在 baseUrl 后自动追加 {@code /v1/chat/completions}，
+     * 若配置里已带结尾 {@code /v1}（如 DashScope compatible-mode/v1）会拼出
+     * {@code /v1/v1/chat/completions} 导致 404。这里统一去掉结尾 {@code /v1}
+     * （同时容忍结尾斜杠），使 {@code .../compatible-mode/v1} 与
+     * {@code .../compatible-mode} 等价。</p>
+     *
+     * @return 规范化后的 baseUrl（null/空原样返回）
+     */
+    static String normalizeOpenAiBaseUrl(String baseUrl) {
+        if (baseUrl == null || baseUrl.isBlank()) {
+            return baseUrl;
+        }
+        String url = baseUrl.trim();
+        while (url.endsWith("/")) {
+            url = url.substring(0, url.length() - 1);
+        }
+        if (url.endsWith("/v1")) {
+            url = url.substring(0, url.length() - 3);
+        }
+        return url.isEmpty() ? baseUrl : url;
     }
 
     private String resolveKey(ModelDescriptor d) {

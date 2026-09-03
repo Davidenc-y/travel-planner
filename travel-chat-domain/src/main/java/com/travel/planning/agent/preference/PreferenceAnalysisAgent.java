@@ -3,6 +3,7 @@ package com.travel.planning.agent.preference;
 import com.travel.planning.agent.AbstractReactSubAgent;
 import com.travel.planning.agent.supervisor.TokenUsageInterceptor;
 import com.travel.planning.agent.supervisor.ModelRouteInterceptor;
+import com.travel.planning.agent.supervisor.QuotaShortCircuitInterceptor;
 import com.travel.planning.memory.longterm.ProfileToolProvider;
 import com.travel.planning.prompt.PromptTemplates;
 import lombok.extern.slf4j.Slf4j;
@@ -23,17 +24,20 @@ public class PreferenceAnalysisAgent extends AbstractReactSubAgent {
     private final ChatModel lightModel;
     private final TokenUsageInterceptor tokenUsageInterceptor;
     private final ModelRouteInterceptor modelRouteInterceptor;
+    private final QuotaShortCircuitInterceptor quotaShortCircuitInterceptor;
     private final ProfileToolProvider profileToolProvider;
     private final PromptTemplates promptTemplates;
 
     public PreferenceAnalysisAgent(@Qualifier("lightModel") ChatModel lightModel,
                                    TokenUsageInterceptor tokenUsageInterceptor,
                                    ModelRouteInterceptor modelRouteInterceptor,
+                                   QuotaShortCircuitInterceptor quotaShortCircuitInterceptor,
                                    ProfileToolProvider profileToolProvider,
                                    PromptTemplates promptTemplates) {
         this.lightModel = lightModel;
         this.tokenUsageInterceptor = tokenUsageInterceptor;
         this.modelRouteInterceptor = modelRouteInterceptor;
+        this.quotaShortCircuitInterceptor = quotaShortCircuitInterceptor;
         this.profileToolProvider = profileToolProvider;
         this.promptTemplates = promptTemplates;
     }
@@ -81,5 +85,10 @@ public class PreferenceAnalysisAgent extends AbstractReactSubAgent {
     @Override
     protected ModelRouteInterceptor modelRouteInterceptor() {
         return modelRouteInterceptor;
+    }
+
+    @Override
+    protected QuotaShortCircuitInterceptor quotaShortCircuitInterceptor() {
+        return quotaShortCircuitInterceptor;
     }
 }

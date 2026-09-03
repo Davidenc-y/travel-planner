@@ -3,6 +3,7 @@ package com.travel.aigateway.route;
 import com.travel.aigateway.core.ChatModelFactory;
 import com.travel.aigateway.core.ModelDescriptor;
 import com.travel.aigateway.core.ModelRegistry;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.prompt.ChatOptions;
@@ -22,6 +23,7 @@ import reactor.core.publisher.Flux;
  * 未注册/未启用/不可选的目标 → {@link com.travel.aigateway.core.GatewayException}
  * （D6：入口快速失败，不静默回退）。</p>
  */
+@Slf4j
 public final class RoleRoutingChatModel implements ChatModel {
 
     private final String role;
@@ -51,6 +53,11 @@ public final class RoleRoutingChatModel implements ChatModel {
         String target = fromOptions != null
                 ? fromOptions
                 : (fromContext != null ? fromContext : registry.defaultOf(role).key());
+        // M8-9k：请求级模型生效时的可观测点（fromContext/fromOptions 命中即打印）
+        if (fromContext != null || fromOptions != null) {
+            log.info("[RoleRouting] role={}, optionsModel={}, contextModel={}, target={}",
+                    role, fromOptions, fromContext, target);
+        }
         ModelDescriptor descriptor = registry.requireSelectable(target);
         ModelRoutingContext.recordRouted(descriptor.key());
         return factory.obtain(descriptor);

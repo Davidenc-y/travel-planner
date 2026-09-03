@@ -63,7 +63,13 @@ public class TraceAspect {
             holder.path.add(type);
             Object result = pjp.proceed();
             holder.trace.setOutputLength(outputLengthOf(result));
-            collector.end(holder, "SUCCESS", null);
+            // M8-2：检索链路降级（如预检索失败返回 "[]"）时，成功响应标注 DEGRADED，
+            // 让“知识库不可用但回答正常”的事件可观测（FAILED 会误伤用户面成功率）
+            if (holder.degradedReason != null) {
+                collector.end(holder, "DEGRADED", "DEGRADED:" + holder.degradedReason);
+            } else {
+                collector.end(holder, "SUCCESS", null);
+            }
             return result;
         } catch (Throwable e) {
             // M7-8：轮次中断（TurnInterruptedException）不记 FAILED trace——

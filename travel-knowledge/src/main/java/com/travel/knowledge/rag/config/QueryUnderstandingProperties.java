@@ -41,4 +41,22 @@ public class QueryUnderstandingProperties {
         typeKeywords.put("FAMILY", List.of("亲子", "家庭", "乐园", "儿童"));
         typeKeywords.put("LEISURE", List.of("休闲", "度假", "放松"));
     }
+
+    /**
+     * M8-2：type 同义词表（M7-8 幻觉校验用，与 typeKeywords 单源合并）。
+     *
+     * <p>消除「配置 + 代码硬编码」双源词表：原 QueryUnderstandingService.TYPE_SYNONYMS
+     * 静态 Map 迁入本配置（默认值与迁移前逐字一致），yml 可覆盖扩展。
+     * 仅用于「LLM 抽取的 type 是否被原始查询支撑」的校验，防止 qwen-turbo 幻觉。</p>
+     */
+    private Map<String, List<String>> typeSynonyms = new LinkedHashMap<>();
+
+    {
+        typeSynonyms.put("CULTURE", List.of("文物", "遗址", "民俗", "展览", "古迹", "博物馆"));
+        typeSynonyms.put("NATURE", List.of("爬山", "风景", "森林", "海边", "湖泊"));
+        typeSynonyms.put("FOOD", List.of("好吃", "火锅", "烧烤", "美食街", "小吃街", "吃", "菜"));
+        typeSynonyms.put("SHOPPING", List.of("购物街", "买"));
+        typeSynonyms.put("FAMILY", List.of("孩子", "带娃", "儿童"));
+        typeSynonyms.put("LEISURE", List.of("温泉", "慢生活"));
+    }
 }

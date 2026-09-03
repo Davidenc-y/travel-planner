@@ -4,6 +4,7 @@ import com.travel.common.util.JsonUtils;
 import com.travel.planning.agent.AbstractReactSubAgent;
 import com.travel.planning.agent.supervisor.TokenUsageInterceptor;
 import com.travel.planning.agent.supervisor.ModelRouteInterceptor;
+import com.travel.planning.agent.supervisor.QuotaShortCircuitInterceptor;
 import com.travel.planning.client.KnowledgeClient;
 import com.travel.planning.memory.longterm.ProfileToolProvider;
 import com.travel.planning.prompt.PromptTemplates;
@@ -28,6 +29,7 @@ public class AttractionFilterAgent extends AbstractReactSubAgent {
     private final ChatModel chatModel;
     private final TokenUsageInterceptor tokenUsageInterceptor;
     private final ModelRouteInterceptor modelRouteInterceptor;
+    private final QuotaShortCircuitInterceptor quotaShortCircuitInterceptor;
     private final KnowledgeClient knowledgeClient;
     private final ProfileToolProvider profileToolProvider;
     private final PromptTemplates promptTemplates;
@@ -35,12 +37,14 @@ public class AttractionFilterAgent extends AbstractReactSubAgent {
     public AttractionFilterAgent(@Qualifier("chatModel") ChatModel chatModel,
                                  TokenUsageInterceptor tokenUsageInterceptor,
                                  ModelRouteInterceptor modelRouteInterceptor,
+                                 QuotaShortCircuitInterceptor quotaShortCircuitInterceptor,
                                  KnowledgeClient knowledgeClient,
                                  ProfileToolProvider profileToolProvider,
                                  PromptTemplates promptTemplates) {
         this.chatModel = chatModel;
         this.tokenUsageInterceptor = tokenUsageInterceptor;
         this.modelRouteInterceptor = modelRouteInterceptor;
+        this.quotaShortCircuitInterceptor = quotaShortCircuitInterceptor;
         this.knowledgeClient = knowledgeClient;
         this.profileToolProvider = profileToolProvider;
         this.promptTemplates = promptTemplates;
@@ -98,6 +102,11 @@ public class AttractionFilterAgent extends AbstractReactSubAgent {
     @Override
     protected ModelRouteInterceptor modelRouteInterceptor() {
         return modelRouteInterceptor;
+    }
+
+    @Override
+    protected QuotaShortCircuitInterceptor quotaShortCircuitInterceptor() {
+        return quotaShortCircuitInterceptor;
     }
 
     /** 调用知识库检索；失败降级返回空数组（不阻断行程生成） */

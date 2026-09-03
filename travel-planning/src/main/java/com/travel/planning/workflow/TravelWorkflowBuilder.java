@@ -16,7 +16,11 @@ import com.travel.planning.agent.attraction.AttractionFilterAgent;
 import com.travel.planning.agent.budget.BudgetEstimationAgent;
 import com.travel.planning.agent.preference.PreferenceAnalysisAgent;
 import com.travel.planning.agent.route.RouteArrangementAgent;
+import com.travel.planning.agent.support.AttractionGroundingChecker;
+import com.travel.planning.config.ItineraryConflictCheckProperties;
 import com.travel.planning.memory.knowledge.KnowledgeRetrievalService;
+import com.travel.planning.workflow.validation.ItineraryConflictValidator;
+import com.travel.planning.workflow.validation.BudgetJsonParser;
 import com.fasterxml.jackson.databind.JsonNode;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.messages.AssistantMessage;
@@ -71,6 +75,10 @@ public class TravelWorkflowBuilder {
     private final KnowledgeRetrievalService knowledgeRetrievalService;
     // M4-8：关键产物节点快照（resume 断点依据）
     private final ItineraryTaskSnapshotPort snapshotPort;
+    /** M8-3：时间冲突确定性校验器（规则链） */
+    private final ItineraryConflictValidator conflictValidator;
+    /** M8-3：冲突校验配置（enabled=false 回到现图） */
+    private final ItineraryConflictCheckProperties conflictProperties;
 
     /**
      * M3-9 → M4-8：预编译缓存从单例升级为<b>前缀子图缓存</b>。
@@ -86,13 +94,17 @@ public class TravelWorkflowBuilder {
             RouteArrangementAgent routeAgent,
             BudgetEstimationAgent budgetAgent,
             KnowledgeRetrievalService knowledgeRetrievalService,
-            ItineraryTaskSnapshotPort snapshotPort) {
+            ItineraryTaskSnapshotPort snapshotPort,
+            ItineraryConflictValidator conflictValidator,
+            ItineraryConflictCheckProperties conflictProperties) {
         this.prefAgent = prefAgent;
         this.attrAgent = attrAgent;
         this.routeAgent = routeAgent;
         this.budgetAgent = budgetAgent;
         this.knowledgeRetrievalService = knowledgeRetrievalService;
         this.snapshotPort = snapshotPort;
+        this.conflictValidator = conflictValidator;
+        this.conflictProperties = conflictProperties;
     }
 
     /** 正常全图（M3-9 语义不变） */
@@ -140,6 +152,9 @@ public class TravelWorkflowBuilder {
             map.put("itinerary", new ReplaceStrategy());
             map.put("mindmap", new ReplaceStrategy());
             map.put("retryCount", new ReplaceStrategy());
+            map.put("routeRetryCount", new ReplaceStrategy());
+            map.put("candidates", new ReplaceStrategy());
+            map.put("conflictViolations", new ReplaceStrategy());
             map.put("userId", new ReplaceStrategy());
             map.put("retrievalQuery", new ReplaceStrategy());
             // M4-8：快照包装器读取任务 id
@@ -158,6 +173,9 @@ public class TravelWorkflowBuilder {
         // budget_retry 回跳目标 attraction_filter 必须在子图内才保留重试语义；
         // 断点在 route/budget/optimize 时退化为直边（resume 模式的行为差异，见 M4-8 记录）
         boolean hasRetry = hasAttraction;
+        // M8-3：冲突校验环仅在 route 段完整（route_arrangement + snapshot_route 均在子图内）
+        // 且开关开启时挂载；断点在 route/budget 之后的子图无冲突重试（与 budget_retry 同语义）
+        boolean hasConflict = hasRoute && conflictProperties.isEnabled();
 
         // 节点定义 — agent.asNode(true, false) 框架标准用法 + M6-51 快照状态节点
         //   includeContents=true:  传递父图 messages 给子 Agent（对话历史携带上下文）
@@ -182,6 +200,10 @@ public class TravelWorkflowBuilder {
             workflow.addNode("route_arrangement", routeAgent.getAgent().asNode(true, false));
             workflow.addNode("snapshot_route",
                     SnapshotStateNode.action("route_arrangement", "routePlan", snapshotPort));
+        }
+        if (hasConflict) {
+            workflow.addNode("conflict_check", AsyncNodeAction.node_async(new ConflictCheckNode()));
+            workflow.addNode("conflict_retry", AsyncNodeAction.node_async(new RouteRetryCounterNode()));
         }
         if (hasBudget) {
             workflow.addNode("budget_estimation", budgetAgent.getAgent().asNode(true, false));
@@ -216,7 +238,19 @@ public class TravelWorkflowBuilder {
         }
         if (hasRoute && hasBudget) {
             workflow.addEdge("route_arrangement", "snapshot_route");
-            workflow.addEdge("snapshot_route", "budget_estimation");
+            if (hasConflict) {
+                // M8-3：快照后进入冲突校验节点；时间冲突 → conflict_retry 回退
+                // route_arrangement（与 budget_retry→attraction_filter 同构）
+                workflow.addEdge("snapshot_route", "conflict_check");
+                workflow.addConditionalEdges(
+                        "conflict_check",
+                        AsyncEdgeAction.edge_async(this::conflictEdgeDecision),
+                        Map.of("conflict_retry", "conflict_retry",
+                                "budget_estimation", "budget_estimation"));
+                workflow.addEdge("conflict_retry", "route_arrangement");
+            } else {
+                workflow.addEdge("snapshot_route", "budget_estimation");
+            }
         }
 
         if (hasBudget) {
@@ -255,15 +289,39 @@ public class TravelWorkflowBuilder {
 
         int nodeCount = 2 + (full ? 2 : 0)
                 + (hasPreference ? 2 : 0) + (hasAttraction ? 2 : 0)
-                + (hasRoute ? 2 : 0) + (hasBudget ? 2 : 0) + (hasRetry ? 1 : 0);
+                + (hasRoute ? 2 : 0) + (hasBudget ? 2 : 0) + (hasRetry ? 1 : 0)
+                + (hasConflict ? 2 : 0);
         log.info("TravelWorkflow 构建完成: {} 节点, resumeFrom={}（快照状态节点×{}）",
                 nodeCount, resumeFrom,
                 (hasPreference ? 1 : 0) + (hasAttraction ? 1 : 0) + (hasRoute ? 1 : 0) + (hasBudget ? 1 : 0));
-        // recursionLimit=30：M6-51 增加 4 个快照状态节点后，full 图正常路径 13 次
-        // 节点执行；预算超支重试每次额外 7 次（budget_retry→attraction→snapshot→
-        // route→snapshot→budget→snapshot→条件），2 次重试最多 27 次——30 为含余量的
-        // 硬性循环上限（默认值 100 在 LLM 调用下耗时过长）
-        return workflow.compile(CompileConfig.builder().recursionLimit(30).build());
+        // recursionLimit：M8-3 冲突环新增 2 节点。full 图正常路径 15 次；
+        // 时间冲突重试每次额外 4 次（conflict_retry→route→snapshot→conflict_check），
+        // 2 次重试 +8；预算重试每次额外 7 次，2 次 +14 → 上限 37。开关关闭时维持 30。
+        int recursionLimit = hasConflict ? 40 : 30;
+        return workflow.compile(CompileConfig.builder().recursionLimit(recursionLimit).build());
+    }
+
+    /**
+     * M8-3：conflict_check 条件边——存在 ERROR 级违规且 routeRetryCount 未达上限
+     * → conflict_retry；否则进入 budget_estimation。
+     */
+    private String conflictEdgeDecision(OverAllState state) {
+        if (!conflictProperties.isEnabled()) {
+            return "budget_estimation";
+        }
+        List<ItineraryConflictValidator.Violation> violations = safeViolations(conflictValidator.validate(
+                toText(state.value("routePlan")), toText(state.value("candidates"))));
+        int routeRetry = readRouteRetryCount(state);
+        int maxRetry = Math.max(0, conflictProperties.getMaxRouteRetry());
+        boolean hasError = ItineraryConflictValidator.hasError(violations);
+        boolean canRetry = routeRetry < maxRetry;
+        log.info("冲突判定: routeRetry={}/{}, violations={}, hasError={}, canRetry={}",
+                routeRetry, maxRetry, violations.size(), hasError, canRetry);
+        if (hasError && canRetry) {
+            log.info("时间冲突，进入重试计数节点 (routeRetry {} -> {})", routeRetry, routeRetry + 1);
+            return "conflict_retry";
+        }
+        return "budget_estimation";
     }
 
     // ==================== 工具方法 ====================
@@ -319,39 +377,18 @@ public class TravelWorkflowBuilder {
 
     /**
      * 从预算估算 JSON 中提取 totalCost 数值。
+     * M8-3：委托 {@link BudgetJsonParser}（JsonUtils readTree + 异常兜底，取代字符串手工解析）。
      */
     private static double extractTotalCost(String budgetJson) {
-        if (budgetJson == null || budgetJson.isBlank()) return 0;
-        int idx = budgetJson.indexOf("\"totalCost\"");
-        if (idx < 0) idx = budgetJson.indexOf("totalCost");
-        if (idx < 0) return 0;
-        int colonIdx = budgetJson.indexOf(":", idx);
-        if (colonIdx < 0) return 0;
-        String afterColon = budgetJson.substring(colonIdx + 1).trim();
-        try {
-            return Double.parseDouble(afterColon.replaceAll("[^0-9.].*", ""));
-        } catch (Exception e) {
-            return 0;
-        }
+        return BudgetJsonParser.extractTotalCost(budgetJson);
     }
 
     /**
      * 从偏好 JSON 中提取 budget 数值（用户预算上限）。
+     * M8-3：委托 {@link BudgetJsonParser}。
      */
     private static double parseBudgetFromPreference(String preference) {
-        if (preference == null || preference.isBlank()) return Double.MAX_VALUE;
-        int idx = preference.indexOf("\"budget\"");
-        if (idx < 0) idx = preference.indexOf("budget");
-        if (idx < 0) return Double.MAX_VALUE;
-        int colonIdx = preference.indexOf(":", idx);
-        if (colonIdx < 0) return Double.MAX_VALUE;
-        String afterColon = preference.substring(colonIdx + 1).trim();
-        if (afterColon.startsWith("null")) return Double.MAX_VALUE;
-        try {
-            return Double.parseDouble(afterColon.replaceAll("[^0-9.].*", ""));
-        } catch (Exception e) {
-            return Double.MAX_VALUE;
-        }
+        return BudgetJsonParser.parseBudget(preference);
     }
 
     /**
@@ -361,6 +398,19 @@ public class TravelWorkflowBuilder {
     @SuppressWarnings("unchecked")
     private static int readRetryCount(OverAllState state) {
         Object value = state.value("retryCount").orElse(0);
+        if (value instanceof Number n) {
+            return n.intValue();
+        }
+        try {
+            return Integer.parseInt(String.valueOf(value));
+        } catch (Exception e) {
+            return 0;
+        }
+    }
+
+    /** M8-3：防御性读取 routeRetryCount（时间冲突重试计数，独立于预算 retryCount） */
+    private static int readRouteRetryCount(OverAllState state) {
+        Object value = state.value("routeRetryCount").orElse(0);
         if (value instanceof Number n) {
             return n.intValue();
         }
@@ -413,9 +463,107 @@ public class TravelWorkflowBuilder {
             Map<String, Object> result = new HashMap<>();
             if (candidates != null && !candidates.isBlank() && !"[]".equals(candidates)) {
                 result.put("messages", new UserMessage("【知识库检索候选景点】\n" + candidates));
+                // M8-3：结构化候选同步写 state（供 conflict_check 按名匹配开放时间/时长）；
+                // 剥离 M8-2 数据来源说明段，只存 JSON 数组（state 内保持纯结构化）
+                String candidatesJson = AttractionGroundingChecker.extractJsonArray(candidates);
+                result.put("candidates", candidatesJson != null ? candidatesJson : candidates);
             }
             return result;
         }
+    }
+
+    /**
+     * M8-3：冲突校验节点——规则链判定时间冲突，违规写 state 供日志/反馈消费；
+     * 条件边重新校验并决定回退（与 budget 条件边同构，判定器为规则而非 LLM）。
+     */
+    class ConflictCheckNode implements NodeAction {
+        @Override
+        public Map<String, Object> apply(OverAllState state) {
+            String routePlan = toText(state.value("routePlan"));
+            String candidates = toText(state.value("candidates"));
+            List<ItineraryConflictValidator.Violation> violations =
+                    conflictValidator.validate(routePlan, candidates);
+            log.info("[Node:conflict_check] 违规 {} 条: {}", violations.size(), violations);
+            // M8-2 挂载（行程侧）：生成端引用校验（观测；无 TraceContext 时仅日志）
+            recordGroundingToLog(candidates, routePlan);
+            Map<String, Object> result = new HashMap<>();
+            result.put("conflictViolations", JsonUtils.toJson(violations));
+            return result;
+        }
+
+        private void recordGroundingToLog(String candidatesJson, String attractionsText) {
+            try {
+                // M8-7：routePlan 是嵌套 days 结构（name 在 attractions[].name），
+                // 且最终回答可能被渲染成文本——统一用 checkText（递归 JSON + 文本行提取）
+                var report = new AttractionGroundingChecker().checkText(
+                        extractCandidateNames(candidatesJson), attractionsText);
+                if (report.checked()) {
+                    log.info("[Node:conflict_check] groundingRate={} ({}/{}), unmatched={}",
+                            String.format("%.2f", report.rate()), report.matched(),
+                            report.total(), report.unmatchedNames());
+                }
+            } catch (Exception e) {
+                log.debug("[Node:conflict_check] grounding 观测失败（不阻断）: {}", e.getMessage());
+            }
+        }
+
+        private static java.util.Set<String> extractCandidateNames(String candidatesJson) {
+            String json = AttractionGroundingChecker.extractJsonArray(candidatesJson);
+            if (json == null) {
+                return java.util.Set.of();
+            }
+            try {
+                List<?> list = JsonUtils.fromJson(json, List.class);
+                java.util.Set<String> names = new java.util.LinkedHashSet<>();
+                if (list != null) {
+                    for (Object o : list) {
+                        if (o instanceof Map<?, ?> m && m.get("name") != null) {
+                            names.add(String.valueOf(m.get("name")).trim());
+                        }
+                    }
+                }
+                return names;
+            } catch (Exception e) {
+                return java.util.Set.of();
+            }
+        }
+    }
+
+    /**
+     * M8-3：时间冲突重试计数节点——routeRetryCount 递增 + 冲突反馈 SystemMessage
+     * （与 RetryCounterNode/budget_retry 同构：计数防死循环 + 反馈防重试白跑）。
+     */
+    class RouteRetryCounterNode implements NodeAction {
+        @Override
+        public Map<String, Object> apply(OverAllState state) {
+            int current = readRouteRetryCount(state);
+            int next = current + 1;
+            log.info("[Node:conflict_retry] routeRetryCount {} -> {}", current, next);
+            Map<String, Object> result = new HashMap<>();
+            result.put("routeRetryCount", next);
+
+            List<ItineraryConflictValidator.Violation> violations = safeViolations(conflictValidator.validate(
+                    toText(state.value("routePlan")), toText(state.value("candidates"))));
+            if (!violations.isEmpty()) {
+                StringBuilder feedback = new StringBuilder();
+                feedback.append("【行程冲突反馈】上一版路线存在 ").append(violations.size())
+                        .append(" 处冲突：\n");
+                int idx = 1;
+                for (ItineraryConflictValidator.Violation v : violations) {
+                    feedback.append(idx++).append(". ").append(v.message()).append("；\n");
+                }
+                feedback.append("请重新编排：消除重叠、将 timeSlot 调整至各景点开放时间内，")
+                        .append("并控制每日总时长在可用时间窗内。");
+                log.info("[Node:conflict_retry] 追加冲突反馈: {}", feedback);
+                result.put("messages", new SystemMessage(feedback.toString()));
+            }
+            return result;
+        }
+    }
+
+    private static List<ItineraryConflictValidator.Violation> safeViolations(
+            List<ItineraryConflictValidator.Violation> violations) {
+        return violations == null ? List.of() : violations;
     }
 
     /**
@@ -468,8 +616,18 @@ public class TravelWorkflowBuilder {
             String routePlan = toText(state.value("routePlan"));
             String budgetEstimate = toText(state.value("budgetEstimate"));
             String preference = toText(state.value("preference"));
+            String candidates = toText(state.value("candidates"));
             log.info("[Node:itinerary_optimize] 整合路线+预算, routeLen={}, budgetLen={}",
                     routePlan.length(), budgetEstimate.length());
+            // M8-3：费用一致性（WARNING 级，不触发重试；随日志观测）
+            if (!candidates.isBlank()) {
+                List<ItineraryConflictValidator.Violation> budgetWarnings =
+                        conflictValidator.validateBudgetConsistency(
+                                routePlan, candidates, budgetEstimate);
+                if (budgetWarnings != null && !budgetWarnings.isEmpty()) {
+                    log.warn("[Node:itinerary_optimize] 预算一致性警告: {}", budgetWarnings);
+                }
+            }
             Map<String, Object> body = new LinkedHashMap<>();
             body.put("routePlan", toJsonValue(routePlan));
             body.put("budgetEstimate", toJsonValue(budgetEstimate));

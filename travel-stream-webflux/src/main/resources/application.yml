@@ -55,7 +55,8 @@ travel:
           enabled: true
         - key: qwen3.7-plus
           provider: openai-compatible
-          base-url: https://dashscope.aliyuncs.com/compatible-mode/v1
+          # M8-9g 修复：不能带结尾 /v1（Spring AI OpenAiApi 会自动追加 /v1/chat/completions）
+          base-url: https://dashscope.aliyuncs.com/compatible-mode
           display-name: "Qwen3.7 Plus · 均衡"
           api-key-env: DASHSCOPE_API_KEY
           roles: []

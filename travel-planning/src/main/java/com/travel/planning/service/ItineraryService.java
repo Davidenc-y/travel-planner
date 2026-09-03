@@ -258,6 +258,9 @@ public class ItineraryService {
 
             // Phase C/F78（C1）：行程知识按天切片异步写入会话知识库（req.sessionId 存在时）
             if (req.getSessionId() != null && !req.getSessionId().isBlank()) {
+                // M8-9：先按行程 id 前缀删除旧版本（resume/重生成覆盖，避免新旧天块混叠）
+                sessionKnowledgeWriter.deleteBySeqPrefix(
+                        req.getSessionId(), "itin:" + entity.getId() + ":");
                 sessionKnowledgeWriter.writeAsync(req.getSessionId(),
                         sessionContextChunker.chunkItinerary(req.getSessionId(), itineraryJson, entity.getId()));
             }

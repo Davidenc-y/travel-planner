@@ -3,12 +3,14 @@ package com.travel.planning.agent;
 import com.alibaba.cloud.ai.graph.agent.ReactAgent;
 import com.alibaba.cloud.ai.graph.agent.interceptor.ModelInterceptor;
 import com.travel.planning.agent.supervisor.ModelRouteInterceptor;
+import com.travel.planning.agent.supervisor.QuotaShortCircuitInterceptor;
 import com.travel.planning.agent.supervisor.TokenUsageInterceptor;
 import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.tool.ToolCallback;
 
+import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -36,12 +38,21 @@ public abstract class AbstractReactSubAgent {
             }
             ModelInterceptor tokenInterceptor = interceptor();
             ModelInterceptor routeInterceptor = modelRouteInterceptor();
-            if (tokenInterceptor != null && routeInterceptor != null) {
-                builder.interceptors(tokenInterceptor, routeInterceptor);
-            } else if (tokenInterceptor != null) {
-                builder.interceptors(tokenInterceptor);
-            } else if (routeInterceptor != null) {
-                builder.interceptors(routeInterceptor);
+            QuotaShortCircuitInterceptor quotaInterceptor = quotaShortCircuitInterceptor();
+            // M8-9m：quota 必须处于链最外层（最后加入）——先检查短路再发起模型调用，
+            // 且能捕获同步异常/流式 onError 后置位，短路后续并发节点
+            List<ModelInterceptor> interceptors = new ArrayList<>(3);
+            if (tokenInterceptor != null) {
+                interceptors.add(tokenInterceptor);
+            }
+            if (routeInterceptor != null) {
+                interceptors.add(routeInterceptor);
+            }
+            if (quotaInterceptor != null) {
+                interceptors.add(quotaInterceptor);
+            }
+            if (!interceptors.isEmpty()) {
+                builder.interceptors(interceptors.toArray(new ModelInterceptor[0]));
             }
             this.agent = builder.build();
             log.info("{} 初始化完成", getClass().getSimpleName());
@@ -79,6 +90,11 @@ public abstract class AbstractReactSubAgent {
 
     /** M7：图流模型路由拦截器（子类注入共享 Bean；null=不挂载）。 */
     protected ModelRouteInterceptor modelRouteInterceptor() {
+        return null;
+    }
+
+    /** M8-9m：额度不足短路拦截器（子类注入共享 Bean；null=不挂载）。 */
+    protected QuotaShortCircuitInterceptor quotaShortCircuitInterceptor() {
         return null;
     }
 }

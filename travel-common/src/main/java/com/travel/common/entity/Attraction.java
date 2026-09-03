@@ -6,6 +6,7 @@ import lombok.Data;
 import lombok.EqualsAndHashCode;
 
 import java.math.BigDecimal;
+import java.time.LocalDateTime;
 
 /**
  * 景点实体（t_attraction）
@@ -75,4 +76,12 @@ public class Attraction extends BaseEntity {
 
     /** 是否已索引到 Milvus/ES */
     private Integer indexed;
+
+    /** M8-5：补充来源标记（web_enrich/wikidata；与主 source 语义分离） */
+    @TableField("enrich_source")
+    private String enrichSource;
+
+    /** M8-5：补充来源更新时间（7 天防抖依据） */
+    @TableField("enrich_updated_at")
+    private LocalDateTime enrichUpdatedAt;
 }

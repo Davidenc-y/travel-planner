@@ -419,6 +419,19 @@ function ChatContent() {
         modelPref.select('');
         return;
       }
+      // M8-9h：模型额度不足——不重试、不回退 JSON，直接给出明确提示
+      if (code === ERROR_CODE.MODEL_QUOTA_EXCEEDED) {
+        const quotaText = getErrorMessage(err);
+        toast.error(quotaText);
+        const quotaMsg: ChatMessage = {
+          sessionId: sid!,
+          role: 'assistant',
+          content: `⚠️ ${quotaText}`,
+          localKey: `a-${crypto.randomUUID()}`,
+        };
+        appendAssistantOrNotify(sid!, quotaMsg);
+        return;
+      }
       if (code === ERROR_CODE.MESSAGE_PROCESSING) {
         toast.error('发送超时，请稍后重试');
         const fallbackMsg: ChatMessage = {

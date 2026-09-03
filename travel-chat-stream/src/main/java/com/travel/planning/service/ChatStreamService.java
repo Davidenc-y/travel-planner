@@ -134,8 +134,14 @@ public class ChatStreamService extends AbstractStreamingPipeline {
                         String.valueOf(tokenSeq.get() + 1)));
                 sink.complete();
             } catch (Exception e) {
-                sink.next(StreamEvent.error(meta, 50000,
-                        e.getMessage() == null ? "流式处理失败" : e.getMessage()));
+                // M8-9h：业务异常（如模型额度不足 40303）透传业务码与友好文案，
+                // 前端据此展示“模型额度不足”明确提示；其余异常仍按 50000 原始信息
+                if (e instanceof BusinessException be) {
+                    sink.next(StreamEvent.error(meta, be.getCode(), be.getMessage()));
+                } else {
+                    sink.next(StreamEvent.error(meta, 50000,
+                            e.getMessage() == null ? "流式处理失败" : e.getMessage()));
+                }
                 sink.complete();
             }
         }, reactor.core.publisher.FluxSink.OverflowStrategy.BUFFER)

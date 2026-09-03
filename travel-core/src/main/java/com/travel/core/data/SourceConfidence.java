@@ -1,10 +1,11 @@
 package com.travel.core.data;
 
 /**
- * 字段来源置信度（F110-B）：MANUAL > ENRICH > API。
+ * 字段来源置信度（F110-B + M8-5）：MANUAL > ENRICH > API > WEB。
  * 合并策略：新值非空且来源置信度不低于现有值时覆盖。
  */
 public enum SourceConfidence {
+    WEB(0),     // M8-5：联网搜索抽取（最低置信度，仅能填充 null 字段）
     API(1),
     ENRICH(2),
     MANUAL(3);
@@ -28,6 +29,7 @@ public enum SourceConfidence {
         return switch (s) {
             case "manual" -> MANUAL;
             case "enrich" -> ENRICH;
+            case "web_enrich" -> WEB;
             default -> API;
         };
     }

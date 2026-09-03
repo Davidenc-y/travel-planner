@@ -78,8 +78,13 @@ public class AttractionImportService {
             throw new IllegalArgumentException("文件不存在: " + normalizedPath);
         }
 
-        List<Attraction> attractions = JsonUtils.getMapper().readValue(file,
-                JsonUtils.getMapper().getTypeFactory().constructCollectionType(List.class, Attraction.class));
+        // M8-1 附带加固：显式 try-with-resources 关闭输入流，避免任何平台上
+        // 文件句柄延迟释放（Windows 文件锁/扫描器场景下影响临时目录清理）。
+        List<Attraction> attractions;
+        try (java.io.InputStream in = java.nio.file.Files.newInputStream(file.toPath())) {
+            attractions = JsonUtils.getMapper().readValue(in,
+                    JsonUtils.getMapper().getTypeFactory().constructCollectionType(List.class, Attraction.class));
+        }
 
         int success = 0;
         int updated = 0;

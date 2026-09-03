@@ -79,6 +79,12 @@ public class ChatStreamWebfluxController {
                 .timeout(Duration.ofMillis(props.getTimeoutMs()), Flux.empty())
                 .onErrorResume(e -> {
                     log.warn("[WebFluxStream] 流式异常: {}", e.getMessage());
+                    // M8-9h：业务异常（如模型额度不足 40303）透传业务码与友好文案
+                    if (e instanceof BusinessException be) {
+                        return Flux.just(toSse(StreamEvent.error(
+                                new StreamMeta("", sessionId, clientMessageId, "chat",
+                                        be.getCode(), false), be.getCode(), be.getMessage())));
+                    }
                     return Flux.just(toSse(StreamEvent.error(
                             new StreamMeta("", sessionId, clientMessageId, "chat",
                                     50000, false), 50000,

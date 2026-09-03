@@ -37,15 +37,18 @@ final class SupervisorStreamExecutor {
     private final CircuitBreaker.Registry circuitBreakerRegistry;
     private final PromptTemplates promptTemplates;
     private final DirectAnswerExecutor directAnswerExecutor;
+    private final QuotaTripwire quotaTripwire;
 
     SupervisorStreamExecutor(TokenUsageInterceptor tokenUsageInterceptor,
                              CircuitBreaker.Registry circuitBreakerRegistry,
                              PromptTemplates promptTemplates,
-                             DirectAnswerExecutor directAnswerExecutor) {
+                             DirectAnswerExecutor directAnswerExecutor,
+                             QuotaTripwire quotaTripwire) {
         this.tokenUsageInterceptor = tokenUsageInterceptor;
         this.circuitBreakerRegistry = circuitBreakerRegistry;
         this.promptTemplates = promptTemplates;
         this.directAnswerExecutor = directAnswerExecutor;
+        this.quotaTripwire = quotaTripwire;
     }
 
     /**
@@ -66,6 +69,9 @@ final class SupervisorStreamExecutor {
         TurnCancellation cancel = cancellation == null ? TurnCancellation.NOOP : cancellation;
         String requestId = TraceContext.active() ? TraceContext.current().requestId
                 : UUID.randomUUID().toString();
+        // M8-9m：短路作用域优先轮次 key（图流重试复用），缺失回退 requestId
+        String scopeKey = cancel.clientMessageId() != null && !cancel.clientMessageId().isBlank()
+                ? cancel.clientMessageId() : requestId;
         tokenUsageInterceptor.begin(requestId);
         try {
             RunnableConfig.Builder configBuilder = RunnableConfig.builder()
@@ -75,6 +81,13 @@ final class SupervisorStreamExecutor {
             String model = ModelRoutingContext.current();
             if (model != null && !model.isBlank()) {
                 configBuilder.addMetadata(ModelRouteInterceptor.MODEL_KEY, model);
+                log.info("[ModelRoute] 图流模型已注入 metadata: requestId={}, model={}",
+                        requestId, model);
+            } else {
+                // M8-9j：请求级模型缺失时图流将走注册表默认 main——
+                // 明确告警，避免“选了模型却没生效”被静默吞掉
+                log.warn("[ModelRoute] 图流请求级模型为空，将使用角色默认 main: requestId={}",
+                        requestId);
             }
             ReactiveBlockSupport.addCancellationMetadata(configBuilder, cancel);
             if (userId != null) {
@@ -201,10 +214,15 @@ final class SupervisorStreamExecutor {
             long cost = System.currentTimeMillis() - start;
             log.info("行程规划完成(图流), 耗时={}ms, 结果长度={}, tokens={}", cost,
                     result == null ? 0 : result.length(), totalTokens);
-            return new TravelSupervisorAgent.StreamPlanningResult(result, totalTokens, false);
+            // M8-9：最终 state 的 routePlan JSON 随结果返回（供会话知识 itinerary_day 切片写入）
+            String routePlanJson = SupervisorResponseSupport.toText(finalState.value("routePlan"));
+            return new TravelSupervisorAgent.StreamPlanningResult(result, totalTokens, false, routePlanJson);
         } catch (Exception e) {
             tokenUsageInterceptor.endAndGet(requestId);
             throw e;
+        } finally {
+            // M8-9m：请求结束清理额度短路状态（与 token 采集 endAndGet 对称）
+            quotaTripwire.clear(scopeKey);
         }
     }
 

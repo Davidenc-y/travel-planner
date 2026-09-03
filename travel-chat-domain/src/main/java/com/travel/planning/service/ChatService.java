@@ -31,7 +31,6 @@ import io.lettuce.core.RedisCommandInterruptedException;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
-
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -323,10 +322,18 @@ public class ChatService implements ChatStreamExecutor {
     @Override
     public ChatStreamExecutor.ChatStreamResult runStream(
             ChatStreamExecutor.ChatStreamPrepared prepared, ChatProgressListener listener) {
+        // M8-9j：可观测性——请求级模型在流式入口的真实值（前端是否携带模型的关键证据）
+        log.info("[ChatModel] 请求模型: sessionId={}, key={}, model={}",
+                prepared.sessionId(), prepared.clientMessageId(), prepared.model());
         return ModelRoutingContext.runWith(prepared.model(), () -> {
-            ChatStreamExecutor.ChatStreamResult result = runStreamInternal(prepared, listener);
-            recordRoutedModel();
-            return result;
+            try {
+                return runStreamInternal(prepared, listener);
+            } finally {
+                // M8-9j：异常（如额度 403）也必须记录实际路由模型——
+                // 否则 t_agent_trace.model_name 停留在默认值，无法区分“请求未带模型”
+                // 与“带了模型但路由失败”
+                recordRoutedModel();
+            }
         });
     }
 
@@ -439,11 +446,12 @@ public class ChatService implements ChatStreamExecutor {
             ChatRoutingStep.StreamRouteResult routed;
             if (l == ChatProgressListener.NOOP) {
                 ChatRoutingStep.RouteResult blocking =
-                        chatRoutingStep.route(intent, composed, userId, sessionHits, cancellation);
+                        chatRoutingStep.route(intent, composed, userId, sessionId,
+                                sessionHits, cancellation);
                 routed = new ChatRoutingStep.StreamRouteResult(blocking.response(),
                         blocking.aiTokens(), blocking.fallback(), false);
             } else {
-                routed = chatRoutingStep.routeStream(intent, composed, userId,
+                routed = chatRoutingStep.routeStream(intent, composed, userId, sessionId,
                         sessionHits, cancellation, l::onToken, l::onThinking);
             }
             String response = routed.response();
@@ -495,6 +503,17 @@ public class ChatService implements ChatStreamExecutor {
                         sessionId, clientMessageId);
                 throw new TurnInterruptedException("Redis 命令被中断（轮次取消）");
             }
+            // M8-9h/M8-9i/M8-9m：模型额度不足（如 DashScope 403 Free quota
+            // exhausted）——统一转为明确业务码 40303，SSE/JSON 前端可展示“模型额度
+            // 不足”提示而非原始 403；覆盖三种形态：原始 403（cause 链）、
+            // ChatRoutingStep 包装的 40303、QuotaShortCircuitInterceptor 短路抛出的
+            // 无 cause 40303。
+            if (isQuotaFailure(e)) {
+                log.warn("[ChatStream] 模型额度不足: sessionId={}, key={}", sessionId, clientMessageId);
+                chatPersistenceStep.failTurn(clientMessageId);
+                throw new BusinessException(ErrorCode.MODEL_QUOTA_EXCEEDED.code(),
+                        buildModelQuotaMessage(prepared.model()), e);
+            }
             // M4-3（复核观察项 2）：步骤 3~9 意外异常时幂等记录置 FAILED——
             // 否则 PENDING 悬挂，同键重试永远 40904（failTurn 对空键/开关关为 no-op）
             // M7-8：必须打 ERROR——ChatStreamService 会把该异常转成 SSE error 事件
@@ -520,6 +539,31 @@ public class ChatService implements ChatStreamExecutor {
             depth++;
         }
         return false;
+    }
+
+    /**
+     * M8-9h/M8-9i：识别模型额度不足异常。
+     * 实现收敛到 {@link ModelQuotaExceptionSupport}，供 ChatRoutingStep 与
+     * ChatService 共用（此处保留薄封装以兼容既有测试与调用点）。
+     */
+    static boolean isModelQuotaExceeded(Throwable e) {
+        return ModelQuotaExceptionSupport.isModelQuotaExceeded(e);
+    }
+
+    /** M8-9m：统一额度失败判定（含短路场景的无 cause 40303）。 */
+    static boolean isQuotaFailure(Throwable e) {
+        return ModelQuotaExceptionSupport.isQuotaFailure(e);
+    }
+
+    /**
+     * M8-9h：组装模型额度不足提示——动态携带模型名，前端无需为每个模型写死文案；
+     * 模型名未知时退回通用错误文案。
+     */
+    static String buildModelQuotaMessage(String model) {
+        if (model != null && !model.isBlank()) {
+            return "模型 " + model + " 额度不足：请切换其他模型，或在控制台充值/关闭“仅免费额度”后重试";
+        }
+        return ErrorCode.MODEL_QUOTA_EXCEEDED.message();
     }
 
     @SuppressWarnings("unchecked")

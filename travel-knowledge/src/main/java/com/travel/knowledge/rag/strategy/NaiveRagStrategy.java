@@ -31,10 +31,12 @@ public class NaiveRagStrategy extends AbstractRagStrategy {
     private static final String INDEX_NAME = "attraction_index";
 
     private final EsDocumentStore esStore;
+    private final RagFilterBuilder ragFilterBuilder;
 
     @Autowired
-    public NaiveRagStrategy(EsDocumentStore esStore) {
+    public NaiveRagStrategy(EsDocumentStore esStore, RagFilterBuilder ragFilterBuilder) {
         this.esStore = esStore;
+        this.ragFilterBuilder = ragFilterBuilder;
     }
 
     @Override
@@ -42,7 +44,7 @@ public class NaiveRagStrategy extends AbstractRagStrategy {
         List<SearchResult> results = new ArrayList<>();
         // M3-3：统一经 EsDocumentStore 检索
         for (SearchHit hit : esStore.search(INDEX_NAME,
-                RagFilterBuilder.esQuery(intent, intent.rawQuery()), topK)) {
+                ragFilterBuilder.esQuery(intent, intent.rawQuery()), topK)) {
             var sourceMap = hit.getSourceAsMap();
             results.add(SearchResult.builder()
                     .docId(hit.getId())

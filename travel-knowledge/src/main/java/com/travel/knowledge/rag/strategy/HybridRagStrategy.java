@@ -41,6 +41,7 @@ public class HybridRagStrategy extends AbstractRagStrategy {
     private final EsDocumentStore esStore;
     private final EmbeddingModel embeddingModel;
     private final MilvusVectorStore milvusStore;
+    private final RagFilterBuilder ragFilterBuilder;
     /** M4-6：Rerank SPI（默认 noop 直通）+ 候选池配置 + 指标 */
     private final Reranker reranker;
     private final RerankProperties rerankProperties;
@@ -50,26 +51,26 @@ public class HybridRagStrategy extends AbstractRagStrategy {
     public HybridRagStrategy(EsDocumentStore esStore,
                               EmbeddingModel embeddingModel,
                               MilvusVectorStore milvusStore,
+                              RagFilterBuilder ragFilterBuilder,
                               Reranker reranker,
                               RerankProperties rerankProperties,
                               RagRoutingMetrics routingMetrics) {
         this.esStore = esStore;
         this.embeddingModel = embeddingModel;
         this.milvusStore = milvusStore;
+        this.ragFilterBuilder = ragFilterBuilder;
         this.reranker = reranker;
         this.rerankProperties = rerankProperties;
         this.routingMetrics = routingMetrics;
     }
 
     @Override
-    protected List<SearchResult> doRetrieve(QueryIntent intent, int topK) throws Exception {
-        // M4-6：透明放大——直通 reranker（noop）时保持原内部检索量 topK（结果与原逻辑完全一致，
-        // 回归零风险）；真实 reranker 生效时放大到 max(topK, candidate-pool)，最终由 rerank 截回 topK，
-        // 上游 Self/Corrective 装饰器与调用方零改动即获益。
-        int pool = reranker.passthrough() ? topK : Math.max(topK, rerankProperties.getCandidatePool());
-        List<RRFusion.ScoredItem> bm25Results = bm25Search(intent, pool);
-        List<RRFusion.ScoredItem> knnResults = knnSearch(intent, pool);
-        List<RRFusion.FusionResult> fused = RRFusion.fuse(bm25Results, knnResults, pool);
+    protected List<SearchResult> doRetrieve(QueryIntent intent, int poolSize) throws Exception {
+        // M8-9d：poolSize 由模板 retrievalPoolSize 统一给出（质量/精排放大），
+        // 此处只负责召回+融合+池内精排，不再自行截断（截断收口到模板出口）。
+        List<RRFusion.ScoredItem> bm25Results = bm25Search(intent, poolSize);
+        List<RRFusion.ScoredItem> knnResults = knnSearch(intent, poolSize);
+        List<RRFusion.FusionResult> fused = RRFusion.fuse(bm25Results, knnResults, poolSize);
         List<SearchResult> merged = fused.stream()
                 .map(f -> SearchResult.builder()
                         .docId(f.docId())
@@ -83,9 +84,20 @@ public class HybridRagStrategy extends AbstractRagStrategy {
                         .build())
                 .collect(Collectors.toList());
         long rerankStart = System.currentTimeMillis();
-        List<SearchResult> reranked = reranker.rerank(intent.rawQuery(), merged, topK);
+        List<SearchResult> reranked = reranker.rerank(intent.rawQuery(), merged);
         routingMetrics.recordRerank(System.currentTimeMillis() - rerankStart);
         return reranked;
+    }
+
+    /**
+     * M8-9d：召回池 = max(质量池, 精排池)。noop + 质量关 → topK（现状不变）；
+     * dashscope（非直通）→ 至少 candidatePool（保留 M4-6 放大语义）；
+     * 质量开 → 两者取最大。
+     */
+    @Override
+    protected int retrievalPoolSize(int topK) {
+        int pool = super.retrievalPoolSize(topK);
+        return reranker.passthrough() ? pool : Math.max(pool, rerankProperties.getCandidatePool());
     }
 
     /**
@@ -96,7 +108,7 @@ public class HybridRagStrategy extends AbstractRagStrategy {
             List<RRFusion.ScoredItem> results = new ArrayList<>();
             // M3-3：统一经 EsDocumentStore 检索
             for (SearchHit hit : esStore.search(ES_INDEX,
-                    RagFilterBuilder.esQuery(intent, intent.rawQuery()), topK)) {
+                    ragFilterBuilder.esQuery(intent, intent.rawQuery()), topK)) {
                 var sourceMap = hit.getSourceAsMap();
                 results.add(new RRFusion.ScoredItem(
                         hit.getId(),
@@ -111,6 +123,7 @@ public class HybridRagStrategy extends AbstractRagStrategy {
             return results;
         } catch (Exception e) {
             log.error("[HybridRAG] BM25 检索失败", e);
+            routingMetrics.recordDegraded("es_fail");
             return Collections.emptyList();
         }
     }
@@ -120,7 +133,7 @@ public class HybridRagStrategy extends AbstractRagStrategy {
      */
     private List<RRFusion.ScoredItem> knnSearch(QueryIntent intent, int topK) {
         try {
-            String expr = RagFilterBuilder.milvusExpr(intent);
+            String expr = ragFilterBuilder.milvusExpr(intent);
             var embeddingResponse = embeddingModel.embedForResponse(List.of(intent.rawQuery()));
             float[] queryVector = embeddingResponse.getResults().get(0).getOutput();
             // M3-3：统一经 MilvusVectorStore 检索（装箱/解析封装）
@@ -147,6 +160,7 @@ public class HybridRagStrategy extends AbstractRagStrategy {
 
         } catch (Exception e) {
             log.error("[HybridRAG] KNN 检索失败", e);
+            routingMetrics.recordDegraded("milvus_fail");
             return Collections.emptyList();
         }
     }

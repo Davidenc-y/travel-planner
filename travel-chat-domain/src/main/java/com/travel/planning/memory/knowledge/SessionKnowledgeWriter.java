@@ -71,6 +71,24 @@ public class SessionKnowledgeWriter {
     }
 
     /**
+     * M8-9：按 seq 前缀删除切片（同步、best-effort；REFINE/重生成前覆盖旧版本，
+     * 避免新旧 itinerary_day 混叠导致 RECALL/保留性校验拿到过期数据）。
+     */
+    public void deleteBySeqPrefix(String sessionId, String seqPrefix) {
+        if (sessionId == null || sessionId.isBlank()
+                || seqPrefix == null || seqPrefix.isBlank()) {
+            return;
+        }
+        try {
+            knowledgeClient.deleteSessionContextByPrefix(sessionId, seqPrefix);
+        } catch (Exception e) {
+            log.warn("[SessionKnowledge] 按前缀删除失败（残留旧切片，仅影响观测）: "
+                            + "sessionId={}, seqPrefix={}, error={}",
+                    sessionId, seqPrefix, e.getMessage());
+        }
+    }
+
+    /**
      * 检索会话知识并组装为注入文本（"【type】content" 行）；失败/空返回空串。
      */
     public String search(String sessionId, String query, int topK) {

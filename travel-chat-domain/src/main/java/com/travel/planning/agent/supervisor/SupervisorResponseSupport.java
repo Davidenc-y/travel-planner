@@ -2,11 +2,18 @@ package com.travel.planning.agent.supervisor;
 
 import com.alibaba.cloud.ai.graph.OverAllState;
 import com.travel.common.util.AgentOutputUtils;
+import com.travel.common.util.JsonUtils;
+import com.travel.planning.agent.support.AttractionGroundingChecker;
+import com.travel.planning.trace.TraceContext;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.messages.AssistantMessage;
 
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 
 /**
  * M6-58/T9 Step4：Supervisor 最终回答组装与状态文本工具（从 TravelSupervisorAgent 迁出）。
@@ -16,7 +23,8 @@ import java.util.Optional;
  * F84 GraphResponse 防泄漏置空、M3-2/P2-10 state key 分派排版、
  * M6-56/T5 代码围栏去除（AgentOutputUtils）均原样保留。</p>
  */
-final class SupervisorResponseSupport {
+@Slf4j
+public final class SupervisorResponseSupport {
 
     private SupervisorResponseSupport() {
     }
@@ -100,5 +108,140 @@ final class SupervisorResponseSupport {
                 || !toText(state.value("attractions")).isBlank()
                 || !toText(state.value("routePlan")).isBlank()
                 || !toText(state.value("budgetEstimate")).isBlank();
+    }
+
+    /**
+     * M8-2：生成端引用校验（Grounding Check）——组装回答后调用，结果写 TraceContext。
+     *
+     * <p>候选名从组合输入（含【知识库检索候选景点】JSON）提取，输出名从最终回答的
+     * 【推荐景点】段落提取；候选为空/输出不可解析时跳过（观测模式，不阻断回答）。
+     * 本方法在调用线程执行（SupervisorGraphExecutor 的 future.get() 返回后），
+     * TraceContext ThreadLocal 可用。</p>
+     */
+    public static void recordGrounding(AttractionGroundingChecker checker,
+                                       String composed, String response) {
+        if (checker == null || !TraceContext.active()) {
+            return;
+        }
+        Set<String> candidates = extractCandidateNames(composed);
+        if (candidates.isEmpty()) {
+            return;
+        }
+        String attractionsText = extractSection(response, "推荐景点");
+        if (attractionsText == null) {
+            attractionsText = response;
+        }
+        // M8-7：改为 checkText——真实回答是 SupervisorResponseFormatter 渲染的
+        // 编号列表（如 "1. 宽窄巷子（文化·…）"），原 check 只能解析 JSON 数组，
+        // 导致观测静默跳过（groundingRate 从未落库）。
+        AttractionGroundingChecker.GroundingReport report =
+                checker.checkText(candidates, attractionsText);
+        if (report == null || !report.checked()) {
+            return;
+        }
+        TraceContext.Holder holder = TraceContext.current();
+        holder.groundingRate = report.rate();
+        holder.groundingUnmatched = JsonUtils.toJson(report.unmatchedNames());
+        log.info("[Grounding] rate={} ({}/{}), unmatched={}",
+                String.format("%.2f", report.rate()), report.matched(), report.total(),
+                report.unmatchedNames());
+    }
+
+    /**
+     * M8-6：REFINE 保留性校验（观测）——原行程景点集 vs 新输出景点集，静默丢失率写 trace。
+     *
+     * <p>原行程名从会话知识 itinerary_day 切片提取，新输出名从回答【推荐景点】段提取；
+     * 结果仅记录（retentionRate + lost），为未来升级为完整调解 loop 提供数据依据。</p>
+     */
+    public static void recordRetention(AttractionGroundingChecker checker,
+                                       List<Map<String, Object>> sessionHits,
+                                       String response) {
+        if (checker == null || !TraceContext.active()
+                || sessionHits == null || sessionHits.isEmpty()) {
+            return;
+        }
+        Set<String> previous = extractPreviousAttractionNames(sessionHits);
+        if (previous.isEmpty()) {
+            return;
+        }
+        String attractionsText = extractSection(response, "推荐景点");
+        if (attractionsText == null) {
+            attractionsText = response;
+        }
+        List<String> extracted = checker.extractAttractionNames(attractionsText);
+        Set<String> newNames = extracted == null ? Set.of() : new LinkedHashSet<>(extracted);
+        AttractionGroundingChecker.RetentionReport report =
+                checker.checkRetention(previous, newNames);
+        if (report == null) {
+            return;
+        }
+        TraceContext.Holder holder = TraceContext.current();
+        holder.retentionRate = report.rate();
+        holder.retentionLost = JsonUtils.toJson(report.lostNames());
+        log.info("[Retention] rate={} ({}/{}), lost={}",
+                String.format("%.2f", report.rate()), report.kept(), report.total(),
+                report.lostNames());
+    }
+
+    /** 从会话知识切片（type=itinerary_day 的 content）提取原行程景点名 */
+    private static Set<String> extractPreviousAttractionNames(
+            List<Map<String, Object>> sessionHits) {
+        Set<String> names = new LinkedHashSet<>();
+        for (Map<String, Object> hit : sessionHits) {
+            if (!"itinerary_day".equals(String.valueOf(hit.getOrDefault("type", "")))) {
+                continue;
+            }
+            Object content = hit.get("content");
+            if (content != null) {
+                names.addAll(AttractionGroundingChecker.extractAttractionNames(
+                        String.valueOf(content)));
+            }
+        }
+        return names;
+    }
+
+    /** 从组合输入中提取候选景点名（【知识库检索候选景点】标记后的 JSON 数组） */
+    private static Set<String> extractCandidateNames(String composed) {
+        if (composed == null || composed.isBlank()) {
+            return Set.of();
+        }
+        int marker = composed.indexOf("【知识库检索候选景点】");
+        String segment = marker >= 0 ? composed.substring(marker) : composed;
+        String json = AttractionGroundingChecker.extractJsonArray(segment);
+        if (json == null) {
+            return Set.of();
+        }
+        try {
+            List<?> list = JsonUtils.fromJson(json, List.class);
+            if (list == null) {
+                return Set.of();
+            }
+            Set<String> names = new LinkedHashSet<>();
+            for (Object o : list) {
+                if (o instanceof Map<?, ?> m && m.get("name") != null) {
+                    names.add(String.valueOf(m.get("name")).trim());
+                }
+            }
+            return names;
+        } catch (Exception e) {
+            return Set.of();
+        }
+    }
+
+    /** 提取最终回答中的指定章节（【xxx】之后到下一个章节标记之前） */
+    private static String extractSection(String text, String title) {
+        if (text == null) {
+            return null;
+        }
+        String marker = "【" + title + "】";
+        int start = text.indexOf(marker);
+        if (start < 0) {
+            return null;
+        }
+        int contentStart = start + marker.length();
+        int nextSection = text.indexOf("【", contentStart);
+        return nextSection > contentStart
+                ? text.substring(contentStart, nextSection).trim()
+                : text.substring(contentStart).trim();
     }
 }

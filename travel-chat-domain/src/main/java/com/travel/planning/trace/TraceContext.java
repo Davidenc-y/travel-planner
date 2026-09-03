@@ -23,6 +23,16 @@ public final class TraceContext {
         public long completionTokens;
         public long totalTokens;
         public final List<String> path = new ArrayList<>();
+        /** M8-2：生成端引用校验通过率（0~1；null=未校验） */
+        public Double groundingRate;
+        /** M8-2：未命中候选集的景点名 JSON 数组（null=未校验） */
+        public String groundingUnmatched;
+        /** M8-2：检索降级原因（knowledge_empty/knowledge_feign_fail；null=未降级） */
+        public String degradedReason;
+        /** M8-6：REFINE 保留性校验通过率（0~1；null=未校验） */
+        public Double retentionRate;
+        /** M8-6：静默丢失景点名 JSON 数组（null=未校验） */
+        public String retentionLost;
 
         public void addPath(String node) {
             path.add(node);

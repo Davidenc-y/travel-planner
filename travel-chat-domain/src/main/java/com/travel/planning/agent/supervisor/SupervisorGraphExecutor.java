@@ -36,15 +36,18 @@ final class SupervisorGraphExecutor {
     private final CircuitBreaker.Registry circuitBreakerRegistry;
     private final PromptTemplates promptTemplates;
     private final DirectAnswerExecutor directAnswerExecutor;
+    private final QuotaTripwire quotaTripwire;
 
     SupervisorGraphExecutor(TokenUsageInterceptor tokenUsageInterceptor,
                             CircuitBreaker.Registry circuitBreakerRegistry,
                             PromptTemplates promptTemplates,
-                            DirectAnswerExecutor directAnswerExecutor) {
+                            DirectAnswerExecutor directAnswerExecutor,
+                            QuotaTripwire quotaTripwire) {
         this.tokenUsageInterceptor = tokenUsageInterceptor;
         this.circuitBreakerRegistry = circuitBreakerRegistry;
         this.promptTemplates = promptTemplates;
         this.directAnswerExecutor = directAnswerExecutor;
+        this.quotaTripwire = quotaTripwire;
     }
 
     /**
@@ -69,6 +72,16 @@ final class SupervisorGraphExecutor {
                 : UUID.randomUUID().toString();
         // M7：阻塞整图在独立虚拟线程执行（ThreadLocal 不继承），先在提交线程捕获模型
         String model = ModelRoutingContext.current();
+        // M8-9j：可观测性——阻塞图是否收到请求级模型
+        if (model != null && !model.isBlank()) {
+            log.info("[ModelRoute] 阻塞图请求级模型: requestId={}, model={}", requestId, model);
+        } else {
+            log.warn("[ModelRoute] 阻塞图请求级模型为空，将使用角色默认 main: requestId={}",
+                    requestId);
+        }
+        // M8-9m：短路作用域优先轮次 key（图流重试复用），缺失回退 requestId
+        String scopeKey = cancel.clientMessageId() != null && !cancel.clientMessageId().isBlank()
+                ? cancel.clientMessageId() : requestId;
         tokenUsageInterceptor.begin(requestId);
         try {
             // F26 修复：必须执行 SupervisorAgent 整图（多步路由循环），
@@ -207,7 +220,9 @@ final class SupervisorGraphExecutor {
                     SupervisorResponseSupport.textLen(finalState, "budgetEstimate"),
                     totalTokens);
             SupervisorTraceSupport.applyTracePath(finalState);
-            return new TravelSupervisorAgent.PlanningResult(result, totalTokens);
+            // M8-9：最终 state 的 routePlan JSON 随结果返回（供会话知识 itinerary_day 切片写入）
+            String routePlanJson = SupervisorResponseSupport.toText(finalState.value("routePlan"));
+            return new TravelSupervisorAgent.PlanningResult(result, totalTokens, routePlanJson);
         } catch (ExecutionException e) {
             Throwable cause = e.getCause();
             // M6-42：拦截器取消短路抛出的 TurnInterruptedException 可能被图执行器
@@ -239,6 +254,8 @@ final class SupervisorGraphExecutor {
             throw new IllegalStateException("行程规划被中断", e);
         } finally {
             tokenUsageInterceptor.endAndGet(requestId);
+            // M8-9m：请求结束清理额度短路状态（与 token 采集 endAndGet 对称）
+            quotaTripwire.clear(scopeKey);
         }
     }
 

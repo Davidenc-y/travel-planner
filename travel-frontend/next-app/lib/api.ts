@@ -23,10 +23,17 @@ const STREAM_BASE = process.env.NEXT_PUBLIC_STREAM_BASE || PLANNING_BASE;
 // R3（02-11 §10.2-R7）：灰度目标网络级失败后的降级记忆（会话级，刷新后重试灰度）
 let sseFallbackToLocal = false;
 
-/** R3：业务码错误（HTTP 非 2xx 但带业务 code）视为正常响应语义，不触发灰度降级 */
+/**
+ * R3/M8-9j：业务码错误视为正常响应语义，不触发灰度降级。
+ *
+ * <p>兼容两种形态：HTTP 非 2xx 的 axios 错误（err.response.data.code）与
+ * SSE error 事件抛出的错误（useChatStream.onError 仅设置 err.code，无
+ * response.data）——后者此前被误判为网络错误，导致 40303/40904 等业务错误
+ * 被重复发送到 planning(8081)，同一消息双端执行。</p>
+ */
 function isBusinessError(err: unknown): boolean {
-  const e = err as { response?: { data?: { code?: number } } } | undefined;
-  return typeof e?.response?.data?.code === 'number';
+  const e = err as { response?: { data?: { code?: number } }; code?: number } | undefined;
+  return typeof e?.response?.data?.code === 'number' || typeof e?.code === 'number';
 }
 
 // ==================== 认证辅助（F87） ====================
@@ -143,6 +150,12 @@ export function getErrorMessage(err: unknown): string {
   const e = err as { response?: { data?: { message?: string; code?: number } }; message?: string } | undefined;
   if (e?.response?.data?.code === 40301) {
     return '操作过于频繁，请稍后再试';
+  }
+  // M8-9h：模型额度不足——明确提示用户切换模型或检查账户额度
+  if (e?.response?.data?.code === 40303) {
+    // 优先后端消息（已动态携带模型名），缺失时才用通用兜底
+    return e?.response?.data?.message
+      || '模型额度不足：当前模型不可用，请切换其他可用模型，或在 DashScope 控制台充值/关闭“仅免费额度”后重试';
   }
   return e?.response?.data?.message || e?.message || '请求失败，请稍后重试';
 }

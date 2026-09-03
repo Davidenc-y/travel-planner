@@ -26,6 +26,8 @@ import org.elasticsearch.client.RestHighLevelClient;
 import org.elasticsearch.client.indices.CreateIndexRequest;
 import org.elasticsearch.client.indices.GetIndexRequest;
 import org.elasticsearch.index.query.QueryBuilders;
+import org.elasticsearch.index.reindex.BulkByScrollResponse;
+import org.elasticsearch.index.reindex.DeleteByQueryRequest;
 import org.elasticsearch.search.builder.SearchSourceBuilder;
 import org.elasticsearch.search.sort.SortOrder;
 import org.elasticsearch.xcontent.XContentType;
@@ -190,6 +192,47 @@ public class SessionContextService {
                     sessionId, seqPrefix, e.getMessage(), e.getClass().getSimpleName(), e);
             return Collections.emptyList();
         }
+    }
+
+    /**
+     * M8-9：按 seq 前缀删除会话切片（REFINE/重生成时覆盖旧版本，避免新旧版本混叠）。
+     *
+     * <p>ES delete_by_query（sessionId term + seq prefix）+ Milvus delete（like 表达式），
+     * 任一侧失败仅 WARN 不阻断（残留旧切片最多影响观测，不影响主流程）。</p>
+     *
+     * @return ES 侧删除数（Milvus 删除数不返回）
+     */
+    public int deleteBySeqPrefix(String sessionId, String seqPrefix) {
+        if (sessionId == null || sessionId.isBlank()
+                || seqPrefix == null || seqPrefix.isBlank()) {
+            return 0;
+        }
+        int deleted = 0;
+        try {
+            DeleteByQueryRequest request = new DeleteByQueryRequest(ES_INDEX);
+            request.setQuery(QueryBuilders.boolQuery()
+                    .filter(QueryBuilders.termQuery("sessionId", sessionId))
+                    .filter(QueryBuilders.prefixQuery("seq", seqPrefix)));
+            request.setRefresh(true);
+            BulkByScrollResponse response = esClient.deleteByQuery(request, RequestOptions.DEFAULT);
+            deleted = response == null ? 0 : (int) response.getDeleted();
+            log.info("[SessionContext] 按前缀删除(ES): sessionId={}, seqPrefix={}, deleted={}",
+                    sessionId, seqPrefix, deleted);
+        } catch (Exception e) {
+            log.warn("[SessionContext] 按前缀删除(ES)失败: sessionId={}, seqPrefix={}, error={}",
+                    sessionId, seqPrefix, e.getMessage());
+        }
+        try {
+            milvusClient.delete(DeleteParam.newBuilder()
+                    .withCollectionName(MILVUS_COLLECTION)
+                    .withExpr("sessionId == \"" + sessionId
+                            + "\" and seq like \"" + seqPrefix + "%\"")
+                    .build());
+        } catch (Exception e) {
+            log.warn("[SessionContext] 按前缀删除(Milvus)失败: sessionId={}, seqPrefix={}, error={}",
+                    sessionId, seqPrefix, e.getMessage());
+        }
+        return deleted;
     }
 
     private void insertToMilvus(SessionContextChunk chunk, String content, float[] vector) {

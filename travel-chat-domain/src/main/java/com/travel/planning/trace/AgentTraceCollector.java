@@ -69,6 +69,20 @@ public class AgentTraceCollector {
         t.setTokenCompletion(safeInt(holder.completionTokens));
         t.setCallPath(holder.path.isEmpty() ? null
                 : com.travel.common.util.JsonUtils.toJson(holder.path));
+        // M8-2：引用校验与降级观测字段（null 不覆盖）
+        if (holder.groundingRate != null) {
+            t.setGroundingRate(holder.groundingRate);
+        }
+        if (holder.groundingUnmatched != null) {
+            t.setGroundingUnmatched(holder.groundingUnmatched);
+        }
+        // M8-6：REFINE 保留性观测字段（null 不覆盖）
+        if (holder.retentionRate != null) {
+            t.setRetentionRate(holder.retentionRate);
+        }
+        if (holder.retentionLost != null) {
+            t.setRetentionLost(holder.retentionLost);
+        }
         String model = modelRouteTracker.take(holder.requestId);
         if (model != null) {
             t.setModelName(model);

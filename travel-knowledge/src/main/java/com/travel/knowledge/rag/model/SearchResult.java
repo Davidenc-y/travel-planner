@@ -42,4 +42,35 @@ public class SearchResult {
 
     /** 检索来源：milvus / es / hybrid / self_rag / corrective_rag */
     private String source;
+
+    // ===== M8-1：结构化事实字段（由 AttractionEnricher 从 MySQL t_attraction 补全）=====
+    // null 语义约定（全链统一，M8-2/3/4 依赖）：字段为 null 表示知识库无此数据
+    //（触发 M8-4 联网兜底判定）；禁止使用空字符串（enricher 统一转换为 null）。
+
+    /** 城市 */
+    private String city;
+
+    /** 类型：CULTURE/NATURE/FOOD/SHOPPING/FAMILY/LEISURE */
+    private String type;
+
+    /** 详细地址 */
+    private String address;
+
+    /** 开放时间（如 "09:00-17:00"；库内为空时为 null） */
+    private String openHours;
+
+    /** 门票价格（元；null=未知，免费由 freeEntry 表达） */
+    private Double ticketPrice;
+
+    /** 是否免费 */
+    private Boolean freeEntry;
+
+    /** 评分 0-5 */
+    private Double rating;
+
+    /** 推荐游玩时长（如 "3-4小时"） */
+    private String recommendedDuration;
+
+    /** 数据源（amap/manual/enrich；M8-4 后可含 web_enrich） */
+    private String dataSource;
 }

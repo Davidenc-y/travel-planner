@@ -57,6 +57,13 @@
             <groupId>com.alibaba.cloud.ai</groupId>
             <artifactId>spring-ai-alibaba-agent-framework</artifactId>
         </dependency>
+        <!-- M8-4/M8-9b：MCP 联网搜索兜底（版本由根 POM spring-ai-bom 1.1.2 管理；
+             MCP client 自动装配已禁用，McpWebSearchAdapter 直接用 MCP Java SDK
+             后台建连，仅 WebSearchPort 按需调用，LLM 无自由搜索工具） -->
+        <dependency>
+            <groupId>org.springframework.ai</groupId>
+            <artifactId>spring-ai-starter-mcp-client</artifactId>
+        </dependency>
 
         <!-- Milvus SDK -->
         <dependency>
