@@ -6,6 +6,7 @@ import com.travel.common.entity.ChatMessageIdem;
 import com.travel.common.entity.ChatSession;
 import com.travel.common.exception.BusinessException;
 import com.travel.common.exception.ErrorCode;
+import com.travel.common.enums.SessionStatus;
 import com.travel.core.stream.TurnGate;
 import com.travel.aigateway.core.GatewayException;
 import com.travel.aigateway.core.ModelRegistry;
@@ -165,7 +166,8 @@ public class ChatService implements ChatStreamExecutor {
         String updatedSessionTitle = null;
         if (gate.proceed()) {
             // M4-4：ARCHIVED 会话拒绝新消息（40902；replay 已在上面豁免）
-            if (sessionGuardProps.isRejectArchived() && "ARCHIVED".equals(session.getStatus())) {
+            if (sessionGuardProps.isRejectArchived()
+                    && SessionStatus.ARCHIVED.name().equals(session.getStatus())) {
                 throw new BusinessException(40902, "会话已关闭");
             }
             if (!gate.userMessageAppended() && !gate.reuseUserMessage()) {
@@ -499,7 +501,9 @@ public class ChatService implements ChatStreamExecutor {
                 // 注意：本 catch 内抛出的异常不会再被上方 catch(TurnInterruptedException)
                 // 捕获，因此在这里直接完成中断登记与日志
                 chatPersistenceStep.markTurnInterrupted(sessionId, clientMessageId);
-                log.warn("[ChatInterrupt] Redis 命令被线程中断，按轮次取消处理: sessionId={}, key={}",
+                // M10-2d：预期取消的重复 WARN 收敛为 DEBUG（功能不受影响；
+                // 同键取消/重试语义由 TurnInterruptedException + INTERRUPTED 状态负责）
+                log.debug("[ChatInterrupt] Redis 命令被线程中断，按轮次取消处理: sessionId={}, key={}",
                         sessionId, clientMessageId);
                 throw new TurnInterruptedException("Redis 命令被中断（轮次取消）");
             }
@@ -635,14 +639,16 @@ public class ChatService implements ChatStreamExecutor {
      */
     public CloseSessionResult closeSession(Long userId, String sessionId) {
         ChatSession session = requireOwnedSession(userId, sessionId);
-        if ("ARCHIVED".equals(session.getStatus())) {
+        if (SessionStatus.ARCHIVED.name().equals(session.getStatus())) {
             return new CloseSessionResult(true, session.getSummaryFinal() != null);
         }
-        int updated = sessionStorePort.updateStatus(sessionId, "ACTIVE", "ARCHIVED");
+        int updated = sessionStorePort.updateStatus(
+                sessionId, SessionStatus.ACTIVE.name(), SessionStatus.ARCHIVED.name());
         if (updated == 0) {
             // 并发 close：重读判定幂等语义
             ChatSession fresh = sessionStorePort.findBySessionId(sessionId);
-            if (fresh != null && "ARCHIVED".equals(fresh.getStatus())) {
+            if (fresh != null
+                    && SessionStatus.ARCHIVED.name().equals(fresh.getStatus())) {
                 return new CloseSessionResult(true, fresh.getSummaryFinal() != null);
             }
             throw new BusinessException(40902, "会话状态冲突，请稍后重试");

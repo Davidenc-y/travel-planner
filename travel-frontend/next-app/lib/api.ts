@@ -235,6 +235,14 @@ export const itineraryApi = {
   /** M4-9：断点续跑（仅 FAILED/僵尸 GENERATING 可续；同步等待同 generate） */
   resume: (id: number) =>
     planningApi.post<R<import('@/types').ItineraryResponse>>(`/api/v1/itineraries/${id}/resume`),
+  /** M11-1：历史版本列表/详情 */
+  versions: (id: number) =>
+    planningApi.get<R<Array<Record<string, unknown>>>>(`/api/v1/itineraries/${id}/versions`),
+  version: (id: number, version: number) =>
+    planningApi.get<R<Record<string, unknown>>>(`/api/v1/itineraries/${id}/versions/${version}`),
+  /** M12：行程地图真实路网/住宿锚点（后端代理高德，前端不直连第三方） */
+  mapRoutes: (id: number) =>
+    planningApi.get<R<import('@/types').MapRouteResponse>>(`/api/v1/itineraries/${id}/map-routes`),
 };
 
 // ==================== Chat ====================
@@ -324,6 +332,15 @@ export const modelApi = {
   /** 前端可选模型清单（后端仅返回 enabled 且 selectable；embedding/rerank 不可选） */
   list: () =>
     planningApi.get<R<import('@/types').ModelOption[]>>('/api/v1/models'),
+};
+
+// ==================== Admin（M11-3：可靠性看板） ====================
+export const adminApi = {
+  /** 近 N 天可靠性聚合（后端按 travel.admin.user-ids 白名单门控） */
+  reliabilityStats: (days = 7) =>
+    planningApi.get<R<Record<string, unknown>>>('/api/v1/admin/reliability/stats', {
+      params: { days },
+    }),
 };
 
 // ==================== Attractions ====================

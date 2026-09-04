@@ -1,5 +1,6 @@
 package com.travel.crawl.util;
 
+import com.travel.core.guard.QuotaGuard;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.data.redis.core.StringRedisTemplate;

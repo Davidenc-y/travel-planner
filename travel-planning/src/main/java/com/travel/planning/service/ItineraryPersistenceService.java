@@ -3,6 +3,7 @@ package com.travel.planning.service;
 import com.travel.common.entity.Itinerary;
 import com.travel.planning.repository.ItineraryMapper;
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -19,6 +20,14 @@ import org.springframework.transaction.annotation.Transactional;
 public class ItineraryPersistenceService {
 
     private final ItineraryMapper itineraryMapper;
+
+    /** M11-1：版本快照服务（可选注入；缺失时仅不记录版本） */
+    private ItineraryVersionService versionService;
+
+    @Autowired(required = false)
+    void setItineraryVersionService(ItineraryVersionService versionService) {
+        this.versionService = versionService;
+    }
 
     /**
      * 插入行程（独立事务：单条 insert 原子；M4-8 将扩展为占位+更新两阶段）。
@@ -52,7 +61,12 @@ public class ItineraryPersistenceService {
         patch.setContent(content);
         patch.setMindmapData(mindmapData);
         patch.setEstimatedCost(estimatedCost);
-        return itineraryMapper.updateById(patch);
+        int rows = itineraryMapper.updateById(patch);
+        // M11-1：终态内容变化后记录历史版本与 diff（失败不影响主流程）
+        if (rows > 0 && versionService != null) {
+            versionService.recordFinalized(id, content, mindmapData, estimatedCost);
+        }
+        return rows;
     }
 
     /** M4-8：状态推进（GENERATING→FAILED 等单字段迁移） */

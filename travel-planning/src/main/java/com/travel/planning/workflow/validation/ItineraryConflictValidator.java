@@ -3,6 +3,7 @@ package com.travel.planning.workflow.validation;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.travel.common.util.AgentOutputUtils;
 import com.travel.common.util.JsonUtils;
+import com.travel.common.util.OpenHoursParser;
 import com.travel.planning.agent.support.AttractionGroundingChecker;
 import com.travel.planning.config.ItineraryConflictCheckProperties;
 import lombok.RequiredArgsConstructor;

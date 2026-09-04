@@ -3,7 +3,7 @@
 import { ReactNode } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
-import { MapPin, MessageSquare, Search, LogOut, Compass } from 'lucide-react';
+import { MapPin, MessageSquare, Search, LogOut, Compass, BarChart3 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { ThemeToggle } from './theme-toggle';
 import { useAuth } from '@/lib/auth-context';
@@ -21,10 +21,18 @@ const navItems = [
 export function ClientLayout({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
-  const { isAuthenticated, username, avatar, logout, mounted } = useAuth();
+  const { isAuthenticated, isAdmin, username, avatar, logout, mounted } = useAuth();
   const confirm = useConfirm();
 
   const isAuthPage = pathname === '/login' || pathname === '/register';
+
+  // M11-3：管理员导航项仅对白名单用户可见（普通用户界面不变）
+  const visibleNavItems = [
+    ...navItems,
+    ...(isAuthenticated && isAdmin
+      ? [{ href: '/admin/reliability', label: '看板', icon: BarChart3 }]
+      : []),
+  ];
 
   // B3（04 §4.0）：登出前确认；确认后行为与原实现一致（清凭据 + 整页回首页，R2）
   const handleLogout = async () => {
@@ -47,7 +55,7 @@ export function ClientLayout({ children }: { children: ReactNode }) {
           </Link>
 
           <nav className="hidden md:flex items-center gap-1">
-            {navItems.map((item) => {
+            {visibleNavItems.map((item) => {
               const Icon = item.icon;
               const active = pathname === item.href || (item.href !== '/' && pathname.startsWith(item.href));
               return (
@@ -104,7 +112,7 @@ export function ClientLayout({ children }: { children: ReactNode }) {
 
         {/* Mobile nav */}
         <nav className="md:hidden flex items-center justify-around border-t border-line px-2 py-1">
-          {navItems.map((item) => {
+          {visibleNavItems.map((item) => {
             const Icon = item.icon;
             const active = pathname === item.href || (item.href !== '/' && pathname.startsWith(item.href));
             return (

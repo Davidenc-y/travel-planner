@@ -7,8 +7,8 @@ import com.travel.core.guard.CircuitBreaker;
 import com.travel.core.util.CityNames;
 import com.travel.crawl.config.CrawlProperties;
 import com.travel.crawl.model.AttractionRaw;
-import com.travel.crawl.util.QuotaGuard;
-import com.travel.crawl.util.RequestThrottle;
+import com.travel.core.guard.QuotaGuard;
+import com.travel.core.guard.RequestThrottle;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 

@@ -53,14 +53,16 @@ public class PreferenceSaveService {
             List<String> interests = toList(pref.get("interests"));
             String budgetRange = toBudget(pref.get("budgetRange"));
             String travelStyle = toStyle(pref.get("travelStyle"));
-            if ((interests == null || interests.isEmpty()) && budgetRange == null && travelStyle == null) {
+            String consumeLevel = toConsumeLevel(pref.get("consumeLevel"));
+            if ((interests == null || interests.isEmpty()) && budgetRange == null
+                    && travelStyle == null && consumeLevel == null) {
                 return; // 无有效偏好可保存
             }
             profilePort.update(userId, null,
                     interests != null ? JsonUtils.toJson(interests) : null,
-                    budgetRange, travelStyle);
-            log.info("[PreferenceSave] 确定性偏好保存: userId={}, interests={}, budget={}, style={}",
-                    userId, interests, budgetRange, travelStyle);
+                    budgetRange, travelStyle, consumeLevel);
+            log.info("[PreferenceSave] 确定性偏好保存: userId={}, interests={}, budget={}, style={}, consumeLevel={}",
+                    userId, interests, budgetRange, travelStyle, consumeLevel);
         } catch (Exception e) {
             log.warn("[PreferenceSave] 偏好抽取/保存失败（不影响主流程）: userId={}, error={}",
                     userId, e.getMessage());
@@ -74,7 +76,7 @@ public class PreferenceSaveService {
         return message.contains("记住") || message.contains("偏好")
                 || message.contains("设为") || message.contains("改为")
                 || message.contains("设置为") || message.contains("预算")
-                || message.contains("喜欢");
+                || message.contains("喜欢") || message.contains("消费");
     }
 
     private Map<String, Object> extract(String message) {
@@ -138,5 +140,25 @@ public class PreferenceSaveService {
             return s;
         }
         return null;
+    }
+
+    /** M11-4：consumeLevel 归一（经济/穷游→ECONOMICAL，品质/舒适→COMFORT，其余合法原样）。 */
+    private static String toConsumeLevel(Object value) {
+        if (value == null) {
+            return null;
+        }
+        String s = String.valueOf(value).trim();
+        if (s.isBlank() || "null".equalsIgnoreCase(s)) {
+            return null;
+        }
+        if (s.contains("经济") || s.contains("穷游") || s.contains("实惠")) {
+            return "ECONOMICAL";
+        }
+        if (s.contains("品质") || s.contains("舒适") || s.contains("享受")) {
+            return "COMFORT";
+        }
+        String upper = s.toUpperCase();
+        return "ECONOMICAL".equals(upper) || "STANDARD".equals(upper)
+                || "COMFORT".equals(upper) ? upper : null;
     }
 }

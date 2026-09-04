@@ -1,6 +1,6 @@
 package com.travel.knowledge.config;
 
-import com.travel.common.guard.RateLimitInterceptor;
+import com.travel.webmvc.guard.RateLimitInterceptor;
 import com.travel.core.guard.RateLimiter;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;

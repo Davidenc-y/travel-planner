@@ -25,6 +25,12 @@
             <groupId>com.travel.chatstream</groupId>
             <artifactId>travel-chat-stream</artifactId>
         </dependency>
+        <!-- M10-2a：源码直接引用 com.travel.common.*（实体/ErrorCode/工具），
+             显式声明避免经 chat-stream 隐式传递依赖 -->
+        <dependency>
+            <groupId>com.travel.common</groupId>
+            <artifactId>travel-common</artifactId>
+        </dependency>
 
         <!-- M7：模型网关（注册表/工厂/路由代理；内含 DashScope/OpenAI 核心 SDK） -->
         <dependency>

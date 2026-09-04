@@ -1,4 +1,4 @@
-package com.travel.common.guard;
+package com.travel.webmvc.guard;
 
 import com.travel.core.guard.RateLimiter;
 import jakarta.servlet.http.HttpServletRequest;

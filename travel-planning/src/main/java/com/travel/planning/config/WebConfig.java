@@ -1,7 +1,7 @@
 package com.travel.planning.config;
 
 import com.travel.planning.util.JwtAuthInterceptor;
-import com.travel.common.guard.RateLimitInterceptor;
+import com.travel.webmvc.guard.RateLimitInterceptor;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Configuration;

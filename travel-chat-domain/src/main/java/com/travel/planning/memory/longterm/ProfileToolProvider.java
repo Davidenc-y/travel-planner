@@ -78,6 +78,7 @@ public class ProfileToolProvider {
         view.put("preferredInterests", profile.getPreferredInterests());
         view.put("budgetRange", profile.getBudgetRange());
         view.put("travelStyle", profile.getTravelStyle());
+        view.put("consumeLevel", profile.getConsumeLevel());
         view.put("historyTrips", profile.getHistoryTrips());
         view.put("totalTrips", profile.getTotalTrips());
         log.info("[ProfileTool] get_user_profile: userId={}, totalTrips={}", userId, profile.getTotalTrips());
@@ -94,7 +95,8 @@ public class ProfileToolProvider {
                 req.preferredDestinations() != null ? JsonUtils.toJson(req.preferredDestinations()) : null,
                 req.preferredInterests() != null ? JsonUtils.toJson(req.preferredInterests()) : null,
                 req.budgetRange(),
-                req.travelStyle());
+                req.travelStyle(),
+                req.consumeLevel());
         log.info("[ProfileTool] save_user_profile: userId={}, budgetRange={}, travelStyle={}",
                 userId, req.budgetRange(), req.travelStyle());
         return "{\"success\":true}";
@@ -135,6 +137,7 @@ public class ProfileToolProvider {
     public record SaveUserProfileRequest(List<String> preferredDestinations,
                                          List<String> preferredInterests,
                                          String budgetRange,
-                                         String travelStyle) {
+                                         String travelStyle,
+                                         String consumeLevel) {
     }
 }

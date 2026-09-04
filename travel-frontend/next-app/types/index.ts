@@ -28,6 +28,9 @@ export interface AttractionVisit {
   timeSlot: string;
   cost?: number;
   notes?: string;
+  /** M11-2：景点坐标（后端读取时回查；缺失时为 undefined，地图降级） */
+  latitude?: number;
+  longitude?: number;
 }
 
 export interface MindmapSection {
@@ -64,6 +67,51 @@ export interface PageResult<T> {
   page: number;
   size: number;
   totalPages: number;
+}
+
+// ==================== M12 地图路线 ====================
+export interface MapPoint {
+  lng: number;
+  lat: number;
+}
+
+export interface MapRouteSegment {
+  fromName: string;
+  fromLng: number;
+  fromLat: number;
+  toName: string;
+  toLng: number;
+  toLat: number;
+  mode: 'WALKING' | 'DRIVING' | 'UNSUPPORTED';
+  distanceMeters?: number | null;
+  durationSeconds?: number | null;
+  /** 真实路网折线（[lng,lat] 对象序列）；null/空=示意降级 */
+  polyline?: MapPoint[] | null;
+  source: string;
+}
+
+export interface HotelAnchor {
+  text?: string;
+  point?: MapPoint | null;
+  source: string;
+}
+
+export interface DayMapRoute {
+  day: number;
+  segments: MapRouteSegment[];
+  hotel?: HotelAnchor | null;
+}
+
+export interface MapRouteResponse {
+  itineraryId: number;
+  destination: string;
+  status: 'CACHED' | 'FULL' | 'PARTIAL' | 'DEGRADED' | 'EMPTY' | string;
+  days: DayMapRoute[];
+  usage: {
+    hits: number;
+    routeCalls: number;
+    geocodeCalls: number;
+  };
 }
 
 // 聊天相关
@@ -164,6 +212,8 @@ export interface UserInfo {
   avatar?: string | null;
   email?: string | null;
   phone?: string | null;
+  /** M11-3：管理员白名单标识（后端 travel.admin.user-ids） */
+  admin?: boolean;
 }
 
 // 统一响应

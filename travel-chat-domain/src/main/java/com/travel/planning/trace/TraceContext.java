@@ -33,6 +33,10 @@ public final class TraceContext {
         public Double retentionRate;
         /** M8-6：静默丢失景点名 JSON 数组（null=未校验） */
         public String retentionLost;
+        /** M9-4：聊天路径冲突校验违规 JSON 数组（null=未观测/无输入） */
+        public String chatConflictViolations;
+        /** M9-3：图流节点执行次数超阈值告警 JSON 数组（null=无震荡） */
+        public String graphFlowWarnings;
 
         public void addPath(String node) {
             path.add(node);

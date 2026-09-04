@@ -27,6 +27,7 @@ interface AuthContextType {
   userId: number | null;
   username: string | null;
   avatar: string | null;
+  isAdmin: boolean;
   token: string | null;
   isAuthenticated: boolean;
   /** PE-02（F-23）：挂载标记——Provider 不再拦截渲染，消费方用它渲染中性占位 */
@@ -42,6 +43,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [userId, setUserId] = useState<number | null>(null);
   const [username, setUsername] = useState<string | null>(null);
   const [avatar, setAvatar] = useState<string | null>(null);
+  const [isAdmin, setIsAdmin] = useState(false);
   const [token, setToken] = useState<string | null>(null);
   const [mounted, setMounted] = useState(false);
   const router = useRouter();
@@ -71,6 +73,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             if (d) {
               setAvatar(d.avatar || null);
               if (d.username) setUsername(d.username);
+              setIsAdmin(!!d.admin);
             }
           })
           .catch(() => {});
@@ -89,14 +92,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setAuthCookie(token);
     setToken(token);
     setUserId(userId);
-    setUsername(username);
-    setAvatar(null);
+      setUsername(username);
+      setIsAdmin(false);
+      setAvatar(null);
     userApi.me()
       .then((res) => {
         const d = res.data.data;
         if (d) {
           setAvatar(d.avatar || null);
           if (d.username) setUsername(d.username);
+          setIsAdmin(!!d.admin);
         }
       })
       .catch(() => {});
@@ -130,6 +135,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUserId(null);
     setUsername(null);
     setAvatar(null);
+    setIsAdmin(false);
     // M5-1：主动登出整页跳转默认首页，避免与页面守卫 router.push('/login') 竞态
     window.location.assign('/');
   };
@@ -143,6 +149,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       userId,
       username,
       avatar,
+      isAdmin,
       token,
       isAuthenticated: !!token,
       mounted,

@@ -3,6 +3,7 @@ package com.travel.planning.memory.sessionstore;
 import com.travel.common.entity.ChatMessage;
 import com.travel.common.entity.ChatSession;
 import com.travel.common.enums.ChatRole;
+import com.travel.common.enums.SessionStatus;
 import com.travel.planning.repository.ChatMessageMapper;
 import com.travel.planning.repository.ChatSessionMapper;
 import lombok.RequiredArgsConstructor;
@@ -32,7 +33,7 @@ public class SessionStoreServiceImpl implements SessionStorePort {
         session.setSessionId(UUID.randomUUID().toString());
         session.setUserId(userId);
         session.setTitle(title != null ? title : DEFAULT_SESSION_TITLE);
-        session.setStatus("ACTIVE");
+        session.setStatus(SessionStatus.ACTIVE.name());
         sessionMapper.insert(session);
         log.info("创建聊天会话: sessionId={}, userId={}", session.getSessionId(), userId);
         return session.getSessionId();

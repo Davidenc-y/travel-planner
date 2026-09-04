@@ -1,7 +1,7 @@
 package com.travel.planning.util;
 
 import com.travel.common.auth.TokenAuthService;
-import com.travel.common.guard.RateLimitInterceptor;
+import com.travel.webmvc.guard.RateLimitInterceptor;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;

@@ -27,6 +27,9 @@ spring:
     username: ${MYSQL_USER:root}
     password: ${MYSQL_PASSWORD:root123}
     driver-class-name: com.mysql.cj.jdbc.Driver
+    # M10-2d：maxLifetime < MySQL wait_timeout（20min），避免服务端关闭后校验失败
+    hikari:
+      max-lifetime: 1200000
 
   # ============ Redis ============
   data:
@@ -56,6 +59,9 @@ mybatis-plus:
 
 # ============ 应用专属配置 ============
 travel:
+  # M11-3：可靠性看板管理员白名单（空=无管理员，生产用环境变量 ADMIN_USER_IDS 注入）
+  admin:
+    user-ids: ${ADMIN_USER_IDS:2}
   # F104 P1：MinIO 业务对象存储（头像 avatars 桶）
   minio:
     endpoint: http://192.168.253.129:9000
@@ -105,10 +111,34 @@ travel:
           roles: []
           selectable: true
           enabled: true
-  # 地图 API
+    # M10-2c：模型维度熔断（按 model key；false=直通现状）
+    model-circuit:
+      enabled: true
+      failure-threshold: 5
+      open-ms: 60000
+  # M12：高德地图路线/地理编码（Key 只允许环境变量或本地未提交配置）
   map:
-    tencent:
-      key: ${TENCENT_MAP_KEY:}
+    amap:
+      enabled: true
+      web-api-key: ${AMAP_WEB_API_KEY:}
+      route-base-url: https://restapi.amap.com/v3/direction
+      geocode-base-url: https://restapi.amap.com/v3/geocode/geo
+      timeout-ms: 8000
+      connect-timeout-ms: 5000
+      max-qps: 2
+      max-retries: 1
+      retry-backoff-ms: 1000
+      route-day-quota: 4500
+      route-month-quota: 120000
+      geocode-day-quota: 3000
+      geocode-month-quota: 30000
+      cache-enabled: true
+      route-cache-ttl-days: 30
+      geocode-cache-ttl-days: 90
+      max-segments-per-request: 40
+      circuit-failure-threshold: 3
+      circuit-window-ms: 60000
+      circuit-open-ms: 30000
   # 限流
   rate-limit:
     per-minute: 100
@@ -143,6 +173,10 @@ travel:
     # M4-4：ARCHIVED 会话拒绝新消息（COMPLETED 幂等重放豁免）
     session:
       reject-archived: true
+    # M9-4：聊天规划路径冲突观测（只写 trace，不阻断；false=行为等价现状）
+    supervisor:
+      conflict-observe:
+        enabled: true
   # M4-8/P1-5：行程状态机（GENERATING/FAILED/快照/resume；false=回退一次性写入旧行为）
   itinerary:
     state-machine:

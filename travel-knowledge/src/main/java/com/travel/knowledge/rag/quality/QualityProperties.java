@@ -41,4 +41,7 @@ public class QualityProperties {
 
     /** 评分缺失或 ≤ 0 扣分 */
     private double zeroRatingPenalty = 0.10;
+
+    /** M9-1：精确名称命中优先开关（默认 true，纯排序规则无数据风险；false=直通现状） */
+    private boolean exactMatchBoost = true;
 }

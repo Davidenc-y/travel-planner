@@ -1,13 +1,13 @@
 package com.travel.knowledge.rag.websearch;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.travel.common.util.OpenHoursParser;
 import com.travel.common.util.JsonUtils;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.model.ChatModel;
 
 import java.util.List;
 import java.util.Optional;
-import java.util.regex.Pattern;
 
 /**
  * M8-4：web 搜索结果结构化抽取（lightModel + 确定性校验）。
@@ -27,10 +27,6 @@ public class WebEnrichExtractor {
     private static final List<String> HIGH_RISK = List.of(
             "忽略", "忽略以上", "系统提示", "系统指令", "请遵循", "不要遵守",
             "重置对话", "扮演", "你是", "无视上");
-
-    /** 开放时间宽松校验（与 OpenHoursParser 支持格式同族：全天/时间区间） */
-    private static final Pattern OPEN_HOURS =
-            Pattern.compile("^(全天|([01]?\\d|2[0-3]):[0-5]\\d\\s*[-—~至到]\\s*([01]?\\d|2[0-3]):[0-5]\\d)$");
 
     /** 抽取结果（校验通过才返回） */
     public record EnrichedFields(String openHours, Double ticketPrice) {
@@ -98,7 +94,7 @@ public class WebEnrichExtractor {
 
     private static boolean validate(EnrichedFields fields) {
         if (fields.openHours() != null
-                && (!OPEN_HOURS.matcher(fields.openHours()).matches()
+                && (OpenHoursParser.parse(fields.openHours()).isEmpty()
                         || containsHighRisk(fields.openHours()))) {
             return false;
         }

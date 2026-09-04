@@ -3,15 +3,23 @@ package com.travel.knowledge.service;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.travel.common.entity.Attraction;
 import com.travel.knowledge.etl.AttractionEtlService;
+import com.travel.knowledge.rag.websearch.WebEnrichExtractor;
+import com.travel.knowledge.rag.websearch.WebSearchPort;
 import com.travel.knowledge.repository.AttractionMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.ai.chat.model.ChatModel;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.Optional;
 
 /**
  * M8-5：web_enrich 数据回写闭环（联网搜索退化为一次性补全工具）。
@@ -40,6 +48,72 @@ public class WebEnrichWritebackService {
 
     private final AttractionMapper attractionMapper;
     private final AttractionEtlService etlService;
+
+    /** M9-2：后台异步补全任务端口（Spring 注入门面；测试可 setter 注入） */
+    private WebSearchPort webSearchPort;
+
+    /** M9-2：结构化抽取 lightModel（异步路径需要；缺失时降级返回 false） */
+    private ChatModel lightModel;
+
+    private final WebEnrichExtractor webEnrichExtractor = new WebEnrichExtractor();
+
+    /** M9-2：同景点防并发重复投递（跨进程由 7 天防抖 UPDATE 兜底） */
+    private final Set<Long> inFlight = ConcurrentHashMap.newKeySet();
+
+    @Autowired(required = false)
+    void setWebSearchPort(WebSearchPort webSearchPort) {
+        this.webSearchPort = webSearchPort;
+    }
+
+    @Autowired(required = false)
+    void setLightModel(@Qualifier("lightModel") ChatModel lightModel) {
+        this.lightModel = lightModel;
+    }
+
+    /**
+     * M9-2：异步补全投递（本轮回 null 语义 + 下次命中本地）。
+     *
+     * <p>后台执行：搜索 → lightModel 结构化抽取 → 确定性校验 →
+     * {@link #writeback}（空字段保护 + 7 天防抖 + 增量 ETL）。
+     * 同一景点同一时刻只投递一次；搜索/抽取失败静默降级，不影响主流程。</p>
+     *
+     * @return true=已投递；false=参数非法/端口缺失/重复投递
+     */
+    public boolean submitAsyncFill(Long attractionId, String name, String city) {
+        if (attractionId == null || name == null || name.isBlank()) {
+            return false;
+        }
+        if (webSearchPort == null || lightModel == null) {
+            log.warn("[WebEnrichWriteback] 异步补全组件缺失（port/lightModel），跳过: id={}",
+                    attractionId);
+            return false;
+        }
+        if (!inFlight.add(attractionId)) {
+            return false; // 同请求/同窗口已投递
+        }
+        ETL_EXECUTOR.submit(() -> {
+            try {
+                String query = name + (city == null || city.isBlank() ? "" : " " + city)
+                        + " 开放时间 门票价格";
+                Optional<WebSearchPort.WebSearchResult> result = webSearchPort.search(query);
+                if (result.isEmpty()) {
+                    return;
+                }
+                var fields = webEnrichExtractor.extract(lightModel, name, city, result.get());
+                if (fields.isEmpty()) {
+                    return;
+                }
+                writeback(attractionId, fields.get().openHours(), fields.get().ticketPrice());
+            } catch (Exception e) {
+                log.warn("[WebEnrichWriteback] 异步补全失败（静默降级）: id={}, err={}",
+                        attractionId, e.getMessage());
+            } finally {
+                inFlight.remove(attractionId);
+            }
+        });
+        log.info("[WebEnrichWriteback] 异步补全已投递: id={}, name={}", attractionId, name);
+        return true;
+    }
 
     /**
      * 幂等回写；返回 true=已写入并触发 ETL，false=跳过（已有值/防抖命中/参数非法）。

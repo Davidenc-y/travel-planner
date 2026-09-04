@@ -4,6 +4,7 @@ import com.travel.common.dto.UsageStatsDTO;
 import com.travel.common.entity.User;
 import com.travel.common.result.R;
 import com.travel.planning.repository.UserMapper;
+import com.travel.planning.service.AdminAccessService;
 import com.travel.planning.service.UserUsageStatsService;
 import com.travel.planning.service.UserService;
 import com.travel.planning.util.AuthUtils;
@@ -32,6 +33,7 @@ public class MeController {
     private final UserMapper userMapper;
     private final UserService userService;
     private final UserUsageStatsService userUsageStatsService;
+    private final AdminAccessService adminAccessService;
 
     @GetMapping("/me")
     public R<Map<String, Object>> me() {
@@ -46,6 +48,8 @@ public class MeController {
         m.put("avatar", user.getAvatar());
         m.put("email", user.getEmail());
         m.put("phone", user.getPhone());
+        // M11-3：管理员标识（前端据此显示可靠性看板入口）
+        m.put("admin", adminAccessService.isAdmin(userId));
         return R.ok(m);
     }
 

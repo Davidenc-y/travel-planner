@@ -56,6 +56,9 @@ public class ProfileContextAssembler {
         if (StringUtils.hasText(profile.getTravelStyle())) {
             parts.add("出行风格：" + profile.getTravelStyle());
         }
+        if (StringUtils.hasText(profile.getConsumeLevel())) {
+            parts.add("消费水平：" + profile.getConsumeLevel());
+        }
         addJsonList(parts, "常去目的地", profile.getPreferredDestinations());
         addJsonList(parts, "偏好兴趣", profile.getPreferredInterests());
         addJsonList(parts, "历史行程", profile.getHistoryTrips());

@@ -62,6 +62,9 @@ public class ItineraryResponseDTO {
         private String timeSlot;
         private BigDecimal cost;
         private String notes;
+        /** M11-2：景点坐标（由行程详情读取时按名称回查 t_attraction；缺失为 null） */
+        private Double latitude;
+        private Double longitude;
     }
 
     /**

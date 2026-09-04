@@ -88,6 +88,7 @@ public class TravelProfileService implements ProfilePort {
             profile.setPreferredInterests("[]");
             profile.setBudgetRange("");
             profile.setTravelStyle("COMFORT");
+            profile.setConsumeLevel("STANDARD");
             profile.setHistoryTrips("[]");
             profile.setTotalTrips(0);
             profileMapper.insert(profile);
@@ -112,12 +113,21 @@ public class TravelProfileService implements ProfilePort {
     public TravelProfile update(Long userId, String preferredDestinations,
                                 String preferredInterests, String budgetRange,
                                 String travelStyle) {
+        return update(userId, preferredDestinations, preferredInterests,
+                budgetRange, travelStyle, null);
+    }
+
+    /** M11-4：含消费水平的画像更新（旧 5 参调用委托，consumeLevel=null 不覆盖）。 */
+    @Override
+    public TravelProfile update(Long userId, String preferredDestinations,
+                                String preferredInterests, String budgetRange,
+                                String travelStyle, String consumeLevel) {
         // F69/B3-3：画像写入口 1（save_user_profile）按 userId 串行化
         synchronized (lockFor(userId)) {
             for (int attempt = 0; ; attempt++) {
             TravelProfile profile = getByUserId(userId);
             applyProfileUpdate(profile, preferredDestinations, preferredInterests,
-                    budgetRange, travelStyle);
+                    budgetRange, travelStyle, consumeLevel);
             // F53：显式刷新 updated_at（updateById 会把实体旧值写回，覆盖 DB ON UPDATE）
             profile.setUpdatedAt(LocalDateTime.now());
             if (profileMapper.updateById(profile) > 0) {
@@ -138,7 +148,7 @@ public class TravelProfileService implements ProfilePort {
      */
     private void applyProfileUpdate(TravelProfile profile, String preferredDestinations,
                                     String preferredInterests, String budgetRange,
-                                    String travelStyle) {
+                                    String travelStyle, String consumeLevel) {
         // F70：字面量 "null"/空串视为"未提及"，避免 LLM 输出字符串 "null" 覆盖原值；
         //      列表字段改为"合并去重"而非整体替换（新增兴趣/目的地不丢失旧值）。
         if (isPresent(preferredInterests)) {
@@ -158,6 +168,14 @@ public class TravelProfileService implements ProfilePort {
                 profile.setTravelStyle(style);
             } else {
                 log.warn("忽略非法 travelStyle: {}", style);
+            }
+        }
+        if (isPresent(consumeLevel)) {
+            String level = consumeLevel.trim().toUpperCase();
+            if (isValidConsumeLevel(level)) {
+                profile.setConsumeLevel(level);
+            } else {
+                log.warn("忽略非法 consumeLevel: {}", consumeLevel);
             }
         }
     }
@@ -317,6 +335,11 @@ public class TravelProfileService implements ProfilePort {
     /** F70：travel_style 仅接受三种合法枚举值 */
     private static boolean isValidTravelStyle(String s) {
         return "ECONOMY".equals(s) || "COMFORT".equals(s) || "LUXURY".equals(s);
+    }
+
+    /** M11-4：消费水平仅接受三种合法枚举值 */
+    private static boolean isValidConsumeLevel(String s) {
+        return "ECONOMICAL".equals(s) || "STANDARD".equals(s) || "COMFORT".equals(s);
     }
 
     /**

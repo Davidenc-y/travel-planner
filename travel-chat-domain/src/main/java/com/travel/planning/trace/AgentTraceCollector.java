@@ -69,6 +69,16 @@ public class AgentTraceCollector {
         t.setTokenCompletion(safeInt(holder.completionTokens));
         t.setCallPath(holder.path.isEmpty() ? null
                 : com.travel.common.util.JsonUtils.toJson(holder.path));
+        // M9-4/M9-3：观测扩展字段编码进 callPath JSON（不新增 DB 列，后端日志/DB 可查）
+        if (holder.chatConflictViolations != null) {
+            holder.path.add("chatConflictViolations=" + holder.chatConflictViolations);
+        }
+        if (holder.graphFlowWarnings != null) {
+            holder.path.add("graphFlowWarnings=" + holder.graphFlowWarnings);
+        }
+        if (!holder.path.isEmpty()) {
+            t.setCallPath(com.travel.common.util.JsonUtils.toJson(holder.path));
+        }
         // M8-2：引用校验与降级观测字段（null 不覆盖）
         if (holder.groundingRate != null) {
             t.setGroundingRate(holder.groundingRate);

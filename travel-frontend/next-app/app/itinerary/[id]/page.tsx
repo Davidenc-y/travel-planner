@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import { toast } from 'sonner';
-import { ArrowLeft, MapPin, Calendar, DollarSign, Clock, Maximize2, Copy } from 'lucide-react';
+import { ArrowLeft, MapPin, Calendar, DollarSign, Clock, Maximize2, Copy, History } from 'lucide-react';
 import { decodeItineraryId } from '@/lib/url-guard';
 import { itineraryApi, getErrorMessage } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
@@ -20,6 +20,15 @@ const BudgetSection = dynamic(() => import('@/components/feature/budget-section'
   ssr: false,
   loading: () => <Skeleton className="h-56 w-full" />,
 });
+
+// M11-2：路线地图仅客户端加载（Leaflet 依赖 window）
+const ItineraryMap = dynamic(
+  () => import('@/components/feature/ItineraryMap').then((m) => m.ItineraryMap),
+  {
+    ssr: false,
+    loading: () => <Skeleton className="h-[380px] w-full" />,
+  },
+);
 
 // B3/B4（04 §4.5 / 05 M6）：导出按钮组件（复制为 Markdown，clipboard + 降级与聊天复制同源）
 function CopyMarkdownButton({ data }: { data: ItineraryResponse }) {
@@ -58,6 +67,9 @@ function ItineraryDetailContent() {
   const { isAuthenticated } = useAuth();
   const [data, setData] = useState<ItineraryResponse | null>(null);
   const [loading, setLoading] = useState(true);
+  const [versionsOpen, setVersionsOpen] = useState(false);
+  const [versions, setVersions] = useState<Array<Record<string, unknown>>>([]);
+  const [versionDetail, setVersionDetail] = useState<Record<string, unknown> | null>(null);
   // B3（04 §4.5）：思维导图全屏查看
   const [mindmapFull, setMindmapFull] = useState(false);
 
@@ -84,6 +96,28 @@ function ItineraryDetailContent() {
       toast.error('加载失败: ' + getErrorMessage(err));
     } finally {
       setLoading(false);
+    }
+  };
+
+  const openVersions = async () => {
+    setVersionsOpen(true);
+    setVersionDetail(null);
+    if (!data) return;
+    try {
+      const res = await itineraryApi.versions(data.id);
+      setVersions(res.data.data ?? []);
+    } catch (err) {
+      toast.error('版本加载失败: ' + getErrorMessage(err));
+    }
+  };
+
+  const selectVersion = async (v: number) => {
+    if (!data) return;
+    try {
+      const res = await itineraryApi.version(data.id, v);
+      setVersionDetail(res.data.data);
+    } catch (err) {
+      toast.error('版本详情加载失败: ' + getErrorMessage(err));
     }
   };
 
@@ -121,7 +155,12 @@ function ItineraryDetailContent() {
 
       <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
         <h1 className="text-2xl font-bold">{data.title}</h1>
-        <CopyMarkdownButton data={data} />
+        <div className="flex items-center gap-2">
+          <Button variant="secondary" size="sm" onClick={openVersions}>
+            <History className="h-3.5 w-3.5" /> 历史版本
+          </Button>
+          <CopyMarkdownButton data={data} />
+        </div>
       </div>
 
       {/* 基本信息（print 友好：grid 保持） */}
@@ -147,6 +186,14 @@ function ItineraryDetailContent() {
           <p className="font-medium text-sm">{formatDate(data.generatedAt)}</p>
         </div>
       </div>
+
+      {/* M11-2：按天路线地图（坐标缺失自动降级） */}
+      {data.dayPlans && data.dayPlans.length > 0 && (
+        <div className="mb-6">
+          <h2 className="text-xl font-semibold mb-3">路线地图</h2>
+          <ItineraryMap dayPlans={data.dayPlans} itineraryId={data.id} />
+        </div>
+      )}
 
       {/* 每日行程（B3/04 §4.5：时间线布局——左侧日期轴） */}
       {data.dayPlans && data.dayPlans.length > 0 && (
@@ -226,6 +273,56 @@ function ItineraryDetailContent() {
           </div>
         )}
       </Dialog>
+
+      {/* M11-1：历史版本抽屉（只读回看 + diff 摘要） */}
+      <Dialog open={versionsOpen} onClose={() => setVersionsOpen(false)} className="max-w-xl p-4" ariaLabel="历史版本">
+        <div>
+          <h3 className="mb-3 font-semibold">历史版本</h3>
+          {versions.length === 0 && <p className="text-sm text-ink-faint">暂无历史版本</p>}
+          <div className="max-h-72 space-y-2 overflow-y-auto">
+            {versions.map((v) => (
+              <button
+                key={String(v.version)}
+                type="button"
+                onClick={() => selectVersion(Number(v.version))}
+                className="w-full rounded-lg border border-line bg-surface px-3 py-2 text-left text-sm hover:border-brand-400 focus-ring"
+              >
+                <span className="font-medium">v{String(v.version)}</span>
+                <span className="ml-2 text-ink-faint">{String(v.createdAt ?? '')}</span>
+              </button>
+            ))}
+          </div>
+          {versionDetail && (
+            <div className="mt-3 rounded-lg border border-line bg-surface-2 p-3 text-xs">
+              <VersionDiff diff={versionDetail.versionDiff as Record<string, unknown> | null} />
+            </div>
+          )}
+        </div>
+      </Dialog>
+    </div>
+  );
+}
+
+/** M11-1：diff 四列表可视化（保留灰/调整橙/新增绿/删除红） */
+function VersionDiff({ diff }: { diff: Record<string, unknown> | null }) {
+  if (!diff) return <p className="text-ink-faint">v1 初始版本，无 diff</p>;
+  const rows: Array<[string, string, string]> = [
+    ['kept', '保留', 'text-ink-secondary'],
+    ['adjusted', '调整', 'text-amber-600'],
+    ['added', '新增', 'text-green-600'],
+    ['removed', '删除', 'text-red-600 line-through'],
+  ];
+  return (
+    <div className="space-y-1">
+      {rows.map(([key, label, cls]) => {
+        const items = (diff[key] as string[] | undefined) ?? [];
+        if (items.length === 0) return null;
+        return (
+          <div key={key}>
+            <span className={cls}>{label}：{items.join('、')}</span>
+          </div>
+        );
+      })}
     </div>
   );
 }

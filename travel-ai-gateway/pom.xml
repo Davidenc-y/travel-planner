@@ -20,6 +20,11 @@
         不引任何 starter 自动配置激活（openai 用核心库手工构建）</description>
 
     <dependencies>
+        <!-- M10-2c：复用 travel-core CircuitBreaker.Registry 做模型维度熔断 -->
+        <dependency>
+            <groupId>com.travel.core</groupId>
+            <artifactId>travel-core</artifactId>
+        </dependency>
         <!-- Spring Boot 基础（仅配置/DI 能力，非 Web 栈） -->
         <dependency>
             <groupId>org.springframework.boot</groupId>

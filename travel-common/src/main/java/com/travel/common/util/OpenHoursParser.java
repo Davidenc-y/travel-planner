@@ -1,4 +1,4 @@
-package com.travel.planning.workflow.validation;
+package com.travel.common.util;
 
 import java.time.LocalTime;
 import java.util.ArrayList;
@@ -8,9 +8,10 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * M8-3：开放时间宽松解析器（t_attraction.open_hours 常见格式）。
+ * M8-3（M9-2 上移）：开放时间宽松解析器（t_attraction.open_hours 常见格式）。
  *
- * <p>支持的格式：</p>
+ * <p>原位于 travel-planning workflow.validation（纯静态工具、无依赖）；
+ * M9-2 异步抽取校验需跨模块复用，上移至 travel-common。支持格式：</p>
  * <ul>
  *   <li>{@code "09:00-17:00"} / {@code "08:30-17:30"} → LocalTime 区间；</li>
  *   <li>{@code "周一至周日 08:00-18:00"} 等带星期前缀 → 提取区间；</li>

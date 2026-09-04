@@ -7,7 +7,7 @@ import com.travel.core.guard.CircuitBreaker;
 import com.travel.crawl.config.CrawlProperties;
 import com.travel.crawl.model.AttractionRaw;
 import com.travel.crawl.util.LruTtlCache;
-import com.travel.crawl.util.RequestThrottle;
+import com.travel.core.guard.RequestThrottle;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.core.annotation.Order;

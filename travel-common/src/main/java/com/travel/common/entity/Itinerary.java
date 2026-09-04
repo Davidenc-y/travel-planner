@@ -55,4 +55,10 @@ public class Itinerary extends BaseEntity {
 
     /** 幂等键 UUID */
     private String clientRequestId;
+
+    /** M11-1：版本号（每次终态内容变化递增，默认 1） */
+    private Integer version;
+
+    /** M11-1：上次→本次 diff JSON（保留/调整/新增/删除四列表） */
+    private String versionDiff;
 }

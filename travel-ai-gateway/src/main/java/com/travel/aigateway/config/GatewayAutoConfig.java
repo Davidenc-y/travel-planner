@@ -5,10 +5,12 @@ import com.travel.aigateway.core.ModelProperties;
 import com.travel.aigateway.core.ModelProviderType;
 import com.travel.aigateway.core.ModelRegistry;
 import com.travel.aigateway.route.RoleRoutingChatModel;
+import com.travel.aigateway.route.ModelCircuitGuard;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.ConfigurationPropertiesBinding;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Primary;
@@ -38,15 +40,26 @@ public class GatewayAutoConfig {
         return new ChatModelFactory(properties, environment);
     }
 
+    /** M10-2c：模型维度熔断 Guard（所有角色路由共享同一个 Registry）。 */
+    @Bean
+    public ModelCircuitGuard modelCircuitGuard(
+            @Value("${travel.ai.model-circuit.enabled:true}") boolean enabled,
+            @Value("${travel.ai.model-circuit.failure-threshold:5}") int failureThreshold,
+            @Value("${travel.ai.model-circuit.open-ms:60000}") long openMs) {
+        return new ModelCircuitGuard(enabled, failureThreshold, openMs);
+    }
+
     @Bean
     @Primary
-    public ChatModel chatModel(ModelRegistry registry, ChatModelFactory factory) {
-        return new RoleRoutingChatModel("main", registry, factory);
+    public ChatModel chatModel(ModelRegistry registry, ChatModelFactory factory,
+                               ModelCircuitGuard modelCircuitGuard) {
+        return new RoleRoutingChatModel("main", registry, factory, modelCircuitGuard);
     }
 
     @Bean("lightModel")
-    public ChatModel lightModel(ModelRegistry registry, ChatModelFactory factory) {
-        return new RoleRoutingChatModel("light", registry, factory);
+    public ChatModel lightModel(ModelRegistry registry, ChatModelFactory factory,
+                                ModelCircuitGuard modelCircuitGuard) {
+        return new RoleRoutingChatModel("light", registry, factory, modelCircuitGuard);
     }
 
     /** yml provider 值（dashscope/dashscope-native/openai/openai-compatible）→ 枚举绑定。 */

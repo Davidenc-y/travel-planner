@@ -10,6 +10,7 @@ import { ITINERARY_STATUS, ITINERARY_POLL_INTERVAL_MS } from '@/lib/constants';
 import { useAuth } from '@/lib/auth-context';
 import type { DialogOriginRect } from '@/components/ui/dialog';
 import type { ItineraryResponse, PageResult } from '@/types';
+import { decodeItineraryQuery } from '@/lib/url-guard';
 import { ListState } from '@/components/ui/list-state';
 import { takePrefetch } from '@/lib/prefetch';
 import { ItineraryCardModal } from '@/components/feature/itinerary-card-modal';
@@ -41,6 +42,13 @@ function ItineraryListContent() {
     if (!isAuthenticated) {
       router.replace('/');
       return;
+    }
+    // F98/M11-2：兼容“/itinerary?itineraryId=<加密令牌>”直达（聊天/规划跳转与旧书签），
+    // 进入列表后自动打开对应行程名片弹窗（弹窗内已含路线地图）
+    const q = new URLSearchParams(window.location.search).get('itineraryId');
+    const directId = decodeItineraryQuery(q);
+    if (directId != null) {
+      setSelectedId(directId);
     }
     if (userId) {
       loadData();

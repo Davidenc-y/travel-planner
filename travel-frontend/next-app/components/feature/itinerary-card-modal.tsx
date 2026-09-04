@@ -18,6 +18,14 @@ const MarkmapView = dynamic(() => import('@/components/markmap-view').then((m) =
   ssr: false,
   loading: () => <Skeleton className="h-64 w-full" />,
 });
+// M11-2：路线地图仅客户端加载（Leaflet 依赖 window），卡片弹窗与完整详情页共用
+const ItineraryMap = dynamic(
+  () => import('@/components/feature/ItineraryMap').then((m) => m.ItineraryMap),
+  {
+    ssr: false,
+    loading: () => <Skeleton className="h-[380px] w-full" />,
+  },
+);
 
 interface Props {
   itineraryId: number | null;
@@ -98,6 +106,14 @@ export function ItineraryCardModal({ itineraryId, onClose, originRect }: Props) 
                 <p className="font-medium text-sm">{formatDate(data.generatedAt)}</p>
               </div>
             </div>
+
+            {/* M11-2：按天路线地图（与完整详情页同款，坐标缺失自动降级） */}
+            {data.dayPlans && data.dayPlans.length > 0 && (
+              <div className="mb-5">
+                <h3 className="font-semibold mb-2">路线地图</h3>
+                <ItineraryMap dayPlans={data.dayPlans} itineraryId={data.id} />
+              </div>
+            )}
 
             {data.dayPlans && data.dayPlans.length > 0 && (
               <div className="mb-5">

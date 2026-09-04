@@ -49,3 +49,12 @@ export function decodeItineraryId(token: string): string {
 export function buildItineraryUrl(id: number | string): string {
   return `/itinerary?itineraryId=${encodeItineraryId(id)}`;
 }
+
+/** M11-2 修复：解析列表页直达参数（非法/空返回 null，供自动打开名片弹窗） */
+export function decodeItineraryQuery(q: string | null | undefined): number | null {
+  if (!q) return null;
+  const raw = decodeItineraryId(q);
+  if (!raw) return null;
+  const id = Number(raw);
+  return Number.isSafeInteger(id) && id > 0 ? id : null;
+}

@@ -29,25 +29,39 @@ public final class RoleRoutingChatModel implements ChatModel {
     private final String role;
     private final ModelRegistry registry;
     private final ChatModelFactory factory;
+    private final ModelCircuitGuard circuitGuard;
 
     public RoleRoutingChatModel(String role, ModelRegistry registry, ChatModelFactory factory) {
+        this(role, registry, factory, new ModelCircuitGuard(false, 5, 60_000));
+    }
+
+    public RoleRoutingChatModel(String role, ModelRegistry registry, ChatModelFactory factory,
+                                ModelCircuitGuard circuitGuard) {
         this.role = role;
         this.registry = registry;
         this.factory = factory;
+        this.circuitGuard = circuitGuard == null
+                ? new ModelCircuitGuard(false, 5, 60_000) : circuitGuard;
     }
 
     @Override
     public ChatResponse call(Prompt prompt) {
-        return resolve(prompt).call(prompt);
+        ModelDescriptor descriptor = resolveDescriptor(prompt);
+        return circuitGuard.call(descriptor.key(),
+                () -> factory.obtain(descriptor).call(prompt));
     }
 
     @Override
     public Flux<ChatResponse> stream(Prompt prompt) {
-        return resolve(prompt).stream(prompt);
+        ModelDescriptor descriptor = resolveDescriptor(prompt);
+        @SuppressWarnings("unchecked")
+        Flux<ChatResponse> protectedFlux = (Flux<ChatResponse>) circuitGuard.stream(
+                descriptor.key(), () -> factory.obtain(descriptor).stream(prompt));
+        return protectedFlux;
     }
 
     /** D1/D3/D5/D6 落地：options > context(main) > 角色默认。 */
-    private ChatModel resolve(Prompt prompt) {
+    private ModelDescriptor resolveDescriptor(Prompt prompt) {
         String fromOptions = prompt.getOptions() != null ? prompt.getOptions().getModel() : null;
         String fromContext = "main".equals(role) ? ModelRoutingContext.current() : null;
         String target = fromOptions != null
@@ -60,7 +74,7 @@ public final class RoleRoutingChatModel implements ChatModel {
         }
         ModelDescriptor descriptor = registry.requireSelectable(target);
         ModelRoutingContext.recordRouted(descriptor.key());
-        return factory.obtain(descriptor);
+        return descriptor;
     }
 
     public String role() {

@@ -28,4 +28,14 @@ public interface ProfilePort {
      */
     TravelProfile update(Long userId, String preferredDestinations, String preferredInterests,
                          String budgetRange, String travelStyle);
+
+    /**
+     * M11-4：更新画像偏好（含消费水平）。旧 5 参调用经默认重载保持兼容。
+     */
+    default TravelProfile update(Long userId, String preferredDestinations,
+                                 String preferredInterests, String budgetRange,
+                                 String travelStyle, String consumeLevel) {
+        return update(userId, preferredDestinations, preferredInterests,
+                budgetRange, travelStyle);
+    }
 }

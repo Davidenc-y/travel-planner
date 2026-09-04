@@ -6,8 +6,11 @@ import com.travel.common.result.PageResult;
 import com.travel.common.result.R;
 import com.travel.core.stream.StreamPreflight;
 import com.travel.core.stream.StreamRequest;
+import com.travel.planning.map.model.ItineraryMapRouteResponse;
+import com.travel.planning.map.service.ItineraryMapRouteService;
 import com.travel.planning.service.ItineraryStreamingPipeline;
 import com.travel.planning.service.ItineraryService;
+import com.travel.planning.service.ItineraryVersionService;
 import com.travel.planning.stream.ItineraryStreamProperties;
 import com.travel.planning.stream.StreamErrorMapper;
 import com.travel.webmvc.stream.SseStreamAdapter;
@@ -37,6 +40,8 @@ public class ItineraryController {
     private final ItineraryStreamingPipeline itineraryStreamingPipeline;
     private final SseStreamAdapter sseStreamAdapter;
     private final ItineraryStreamProperties itineraryStreamProps;
+    private final ItineraryVersionService itineraryVersionService;
+    private final ItineraryMapRouteService itineraryMapRouteService;
 
     /**
      * 生成行程
@@ -95,6 +100,14 @@ public class ItineraryController {
     }
 
     /**
+     * M12：行程地图路线（真实路网/住宿锚点；高德调用由配额+限频+缓存治理）。
+     */
+    @GetMapping("/{id}/map-routes")
+    public R<ItineraryMapRouteResponse> mapRoutes(@PathVariable Long id) {
+        return R.ok(itineraryMapRouteService.mapRoutes(id));
+    }
+
+    /**
      * 分页查询用户行程
      */
     @GetMapping
@@ -112,5 +125,18 @@ public class ItineraryController {
     public R<Void> delete(@PathVariable Long id) {
         itineraryService.delete(id);
         return R.ok();
+    }
+
+    /** M11-1：行程历史版本列表（本人行程，按版本倒序）。 */
+    @GetMapping("/{id}/versions")
+    public R<java.util.List<java.util.Map<String, Object>>> versions(@PathVariable Long id) {
+        return R.ok(itineraryVersionService.list(id, AuthUtils.resolveUserId(null)));
+    }
+
+    /** M11-1：行程历史版本详情（只读快照回看）。 */
+    @GetMapping("/{id}/versions/{version}")
+    public R<java.util.Map<String, Object>> version(@PathVariable Long id,
+                                                     @PathVariable Integer version) {
+        return R.ok(itineraryVersionService.detail(id, version, AuthUtils.resolveUserId(null)));
     }
 }

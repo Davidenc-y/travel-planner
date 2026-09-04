@@ -3,15 +3,19 @@ package com.travel.planning.memory.pipeline;
 import com.travel.planning.agent.supervisor.TravelSupervisorAgent;
 import com.travel.planning.agent.supervisor.SupervisorResponseSupport;
 import com.travel.planning.agent.support.AttractionGroundingChecker;
+import com.travel.planning.agent.support.ItineraryConflictPort;
 import com.travel.planning.memory.chat.ChatIntent;
 import com.travel.planning.memory.knowledge.SessionContextChunker;
 import com.travel.planning.memory.knowledge.SessionKnowledgeWriter;
 import com.travel.planning.service.ModelQuotaExceptionSupport;
+import com.travel.planning.service.ModelCircuitExceptionSupport;
 import com.travel.planning.service.TurnCancellation;
 import com.travel.planning.service.TurnInterruptedException;
 import com.travel.planning.stream.ChatStreamProperties;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import java.util.List;
@@ -54,6 +58,18 @@ public class ChatRoutingStep {
     /** M8-9：会话知识写入（itinerary_day 切片，解锁 RECALL/REFINE retention） */
     private final SessionKnowledgeWriter sessionKnowledgeWriter;
     private final SessionContextChunker sessionContextChunker;
+
+    /** M9-4：冲突校验 Port（planning 实现注入；null=关闭/未装配） */
+    private ItineraryConflictPort itineraryConflictPort;
+
+    /** M9-4：冲突观测开关（false=完全关闭，行为等价现状） */
+    @Value("${travel.chat.supervisor.conflict-observe.enabled:true}")
+    private boolean conflictObserveEnabled = true;
+
+    @Autowired(required = false)
+    void setItineraryConflictPort(ItineraryConflictPort itineraryConflictPort) {
+        this.itineraryConflictPort = itineraryConflictPort;
+    }
 
     /**
      * 按意图分派：RECALL → 轻量回顾；PROFILE/CHAT/FUNCTIONAL → 入口直答；
@@ -103,6 +119,7 @@ public class ChatRoutingStep {
                                 groundingChecker, sessionHits, response);
                     }
                     // M8-9：行程生成后写入 itinerary_day 切片（REFINE 覆盖旧版本）
+                    observeConflictIfEnabled(composed, result.routePlanJson());
                     writeItineraryChunks(sessionId, result.routePlanJson());
                 }
             }
@@ -112,6 +129,7 @@ public class ChatRoutingStep {
         } catch (Exception e) {
             // M8-9i：模型额度不足必须上抛 40303（前端展示明确提示），
             // 不得吞成“抱歉，请稍后重试”兜底文案
+            ModelCircuitExceptionSupport.rethrowIfCircuitOpen(e);
             ModelQuotaExceptionSupport.rethrowIfQuotaExceeded(e);
             log.error("Agent 调用失败", e);
             response = "抱歉，处理您的请求时出现错误，请稍后重试。";
@@ -164,6 +182,7 @@ public class ChatRoutingStep {
                                             composed, userId, think, sink, cancellation);
                             SupervisorResponseSupport.recordGrounding(
                                     groundingChecker, composed, r.answer());
+                            observeConflictIfEnabled(composed, r.routePlanJson());
                             writeItineraryChunks(sessionId, r.routePlanJson());
                             logElapsed(intent, routeStart, r.fallback());
                             return new StreamRouteResult(r.answer(), r.totalTokens(),
@@ -180,6 +199,7 @@ public class ChatRoutingStep {
                         } catch (Exception e) {
                             // M8-9i：额度不足不得降级阻塞重跑（会再次 403 且多耗请求），
                             // 直接上抛由外层统一转换
+                            ModelCircuitExceptionSupport.rethrowIfCircuitOpen(e);
                             ModelQuotaExceptionSupport.rethrowIfQuotaExceeded(e);
                             log.warn("[ChatRouting][graph-stream] 图流失败，降级阻塞: {}",
                                     e.getMessage());
@@ -201,6 +221,7 @@ public class ChatRoutingStep {
             throw e;
         } catch (Exception e) {
             // M8-9i：模型额度不足必须上抛 40303，不得吞成兜底文案
+            ModelCircuitExceptionSupport.rethrowIfCircuitOpen(e);
             ModelQuotaExceptionSupport.rethrowIfQuotaExceeded(e);
             log.error("Agent 流式调用失败", e);
             return new StreamRouteResult("抱歉，处理您的请求时出现错误，请稍后重试。", 0, true, false);
@@ -246,5 +267,16 @@ public class ChatRoutingStep {
             log.warn("[ChatRouting] itinerary_day 切片写入失败（不影响主流程）: sessionId={}, error={}",
                     sessionId, e.getMessage());
         }
+    }
+
+    /**
+     * M9-4：规划成功后做观测级冲突校验（只写 trace，不阻断、不重试）。
+     */
+    private void observeConflictIfEnabled(String composed, String routePlanJson) {
+        if (!conflictObserveEnabled || itineraryConflictPort == null) {
+            return;
+        }
+        SupervisorResponseSupport.recordChatConflict(
+                itineraryConflictPort, routePlanJson, composed);
     }
 }

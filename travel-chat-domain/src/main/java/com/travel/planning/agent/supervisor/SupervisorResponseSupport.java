@@ -3,6 +3,7 @@ package com.travel.planning.agent.supervisor;
 import com.alibaba.cloud.ai.graph.OverAllState;
 import com.travel.common.util.AgentOutputUtils;
 import com.travel.common.util.JsonUtils;
+import com.travel.planning.agent.support.ItineraryConflictPort;
 import com.travel.planning.agent.support.AttractionGroundingChecker;
 import com.travel.planning.trace.TraceContext;
 import lombok.extern.slf4j.Slf4j;
@@ -183,6 +184,49 @@ public final class SupervisorResponseSupport {
                 report.lostNames());
     }
 
+    /**
+     * M9-4：聊天规划路径冲突观测（复用 grounding 观测级先行模式）。
+     *
+     * <p>routePlan 存在且开关开启时经 {@link ItineraryConflictPort} 校验，
+     * 违规列表写 TraceContext.chatConflictViolations（随 t_agent_trace 落库）；
+     * 不阻断、不重试。输入缺失/解析失败/端口异常一律静默跳过。</p>
+     */
+    public static void recordChatConflict(ItineraryConflictPort conflictPort,
+                                          String routePlanJson, String composed) {
+        if (conflictPort == null || !TraceContext.active()) {
+            return;
+        }
+        if (routePlanJson == null || routePlanJson.isBlank()) {
+            return;
+        }
+        String candidatesJson = extractCandidatesJson(composed);
+        if (candidatesJson == null || candidatesJson.isBlank()) {
+            return;
+        }
+        try {
+            List<Map<String, String>> violations =
+                    conflictPort.validate(routePlanJson, candidatesJson);
+            if (violations == null || violations.isEmpty()) {
+                return;
+            }
+            TraceContext.current().chatConflictViolations = JsonUtils.toJson(violations);
+            log.info("[ChatConflict] 观测到 {} 条冲突: {}", violations.size(),
+                    JsonUtils.toJson(violations));
+        } catch (Exception e) {
+            log.warn("[ChatConflict] 观测写入失败（不影响回答）: {}", e.getMessage());
+        }
+    }
+
+    /** 从组合输入中提取【知识库检索候选景点】后的候选 JSON 数组原文 */
+    public static String extractCandidatesJson(String composed) {
+        if (composed == null || composed.isBlank()) {
+            return null;
+        }
+        int marker = composed.indexOf("【知识库检索候选景点】");
+        String segment = marker >= 0 ? composed.substring(marker) : composed;
+        return AttractionGroundingChecker.extractJsonArray(segment);
+    }
+
     /** 从会话知识切片（type=itinerary_day 的 content）提取原行程景点名 */
     private static Set<String> extractPreviousAttractionNames(
             List<Map<String, Object>> sessionHits) {
@@ -202,12 +246,7 @@ public final class SupervisorResponseSupport {
 
     /** 从组合输入中提取候选景点名（【知识库检索候选景点】标记后的 JSON 数组） */
     private static Set<String> extractCandidateNames(String composed) {
-        if (composed == null || composed.isBlank()) {
-            return Set.of();
-        }
-        int marker = composed.indexOf("【知识库检索候选景点】");
-        String segment = marker >= 0 ? composed.substring(marker) : composed;
-        String json = AttractionGroundingChecker.extractJsonArray(segment);
+        String json = extractCandidatesJson(composed);
         if (json == null) {
             return Set.of();
         }

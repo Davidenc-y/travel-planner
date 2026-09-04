@@ -5,7 +5,7 @@ import type { NextRequest } from 'next/server';
  * 路由守卫（F91）：未登录访问受保护页 → /login。
  * 前端登录时由 auth-context 写入 accessToken cookie（F91 双写）。
  */
-const PROTECTED = ['/plan', '/itinerary', '/chat', '/profile'];
+const PROTECTED = ['/plan', '/itinerary', '/chat', '/profile', '/admin/reliability'];
 
 function tokenExpired(token: string): boolean {
   try {
@@ -45,5 +45,6 @@ export function middleware(req: NextRequest) {
 }
 
 export const config = {
-  matcher: ['/plan/:path*', '/itinerary/:path*', '/chat/:path*', '/profile/:path*'],
+  matcher: ['/plan/:path*', '/itinerary/:path*', '/chat/:path*', '/profile/:path*',
+    '/admin/reliability/:path*'],
 };

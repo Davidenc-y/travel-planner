@@ -3,6 +3,7 @@ package com.travel.knowledge.rag.strategy;
 import com.travel.knowledge.rag.model.QueryIntent;
 import com.travel.knowledge.rag.model.SearchResult;
 import com.travel.knowledge.rag.quality.CandidateQualityFilter;
+import com.travel.knowledge.rag.quality.ExactMatchBoostRule;
 import com.travel.knowledge.rag.quality.QualityProperties;
 import com.travel.knowledge.rag.retrieval.QueryExpander;
 import com.travel.knowledge.rag.support.AttractionEnricher;
@@ -75,6 +76,14 @@ public abstract class AbstractRagStrategy implements RagStrategy {
         this.queryExpander = queryExpander;
     }
 
+    /** M9-1：精确名称命中优先规则（未注入直通，行为与现状一致） */
+    protected ExactMatchBoostRule exactMatchBoostRule;
+
+    @Autowired(required = false)
+    void setExactMatchBoostRule(ExactMatchBoostRule exactMatchBoostRule) {
+        this.exactMatchBoostRule = exactMatchBoostRule;
+    }
+
     @Override
     public final List<SearchResult> retrieve(QueryIntent intent, int topK) {
         log.info("[{}] query={}, intent={}, topK={}", getType(), intent.rawQuery(), intent, topK);
@@ -119,8 +128,14 @@ public abstract class AbstractRagStrategy implements RagStrategy {
             log.warn("[{}] 质量截断异常，回退顺序截断: {}", getType(), e.getMessage());
             selected = truncate(results, topK);
         }
+        // M9-1：质量截断后、结构化补全前应用精确名称命中置顶（确定性，零 LLM）
+        List<SearchResult> ranked = exactMatchBoostRule != null
+                && qualityProperties != null
+                && qualityProperties.isExactMatchBoost()
+                ? exactMatchBoostRule.apply(selected, intent.rawQuery())
+                : selected;
         List<SearchResult> enriched = attractionEnricher == null
-                ? selected : attractionEnricher.enrich(selected);
+                ? ranked : attractionEnricher.enrich(ranked);
         log.info("[{}] 检索完成, 耗时={}ms, 结果数={}",
                 getType(), System.currentTimeMillis() - start, enriched.size());
         return enriched;

@@ -130,7 +130,7 @@ public class AttractionEtlService {
      * @return 成功处理数量
      */
     public int etlUnindexed() {
-        List<Attraction> unindexed = attractionMapper.findUnindexed(500);
+        List<Attraction> unindexed = attractionMapper.findUnindexed(etlProps.getBatchSize());
         log.info("开始增量 ETL, 共 {} 条未索引景点", unindexed.size());
         return processBatch(unindexed);
     }

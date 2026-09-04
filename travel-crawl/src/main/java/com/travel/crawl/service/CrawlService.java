@@ -8,7 +8,7 @@ import com.travel.crawl.source.CrawlQuery;
 import com.travel.crawl.source.CrawlSource;
 import com.travel.crawl.store.CrawlFileStore;
 import com.travel.crawl.store.CrawlQueue;
-import com.travel.crawl.util.QuotaGuard;
+import com.travel.core.guard.QuotaGuard;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 

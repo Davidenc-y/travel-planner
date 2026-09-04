@@ -114,17 +114,6 @@ function ChatContent() {
     messagesRef.current = messages;
   }, [messages]);
 
-  const sessionList = useSessionList(userId ?? null);
-  const chatStream = useChatStream(() => currentSessionRef.current);
-  // M7 Batch 3：用户模型偏好（'' = 智能默认）
-  const modelPref = useModelPreference();
-
-  const activeDraftKey = currentSessionId ?? '__new__';
-  const input = drafts[activeDraftKey] ?? '';
-  const currentStreamState = currentSessionId
-    ? chatStream.streamStates[currentSessionId] : undefined;
-  const currentSession = sessionList.sessions.find((s) => s.sessionId === currentSessionId);
-
   const setInterruptedMap = (
     updater: (prev: Record<string, InterruptedTurn>) => Record<string, InterruptedTurn>,
   ) => {
@@ -144,6 +133,29 @@ function ChatContent() {
     }
     sessionList.finalizeTurnSession(sid);
   };
+
+  const sessionList = useSessionList(userId ?? null);
+  const chatStream = useChatStream(() => currentSessionRef.current, {
+    // M10-1b：40303 提示/气泡逻辑下沉 hook（page 只注入展示能力）
+    onToastError: (msg) => toast.error(msg),
+    onAssistantError: (sid, content) => {
+      const quotaMsg: ChatMessage = {
+        sessionId: sid,
+        role: 'assistant',
+        content,
+        localKey: `a-${crypto.randomUUID()}`,
+      };
+      appendAssistantOrNotify(sid, quotaMsg);
+    },
+  });
+  // M7 Batch 3：用户模型偏好（'' = 智能默认）
+  const modelPref = useModelPreference();
+
+  const activeDraftKey = currentSessionId ?? '__new__';
+  const input = drafts[activeDraftKey] ?? '';
+  const currentStreamState = currentSessionId
+    ? chatStream.streamStates[currentSessionId] : undefined;
+  const currentSession = sessionList.sessions.find((s) => s.sessionId === currentSessionId);
 
   useEffect(() => {
     if (!isAuthenticated) {
@@ -391,6 +403,7 @@ function ChatContent() {
       // M6：优先 SSE 流式；失败自动回退 JSON 端点
       const streamed = await chatStream.sendStreamWithRetry(
         sid!, text, clientMessageId, modelPref.model);
+      if (streamed.handled) return; // M10-1b：40303 已在 hook 内完成提示与气泡
       const stages = chatStream.getThinkingLines(sid!);
       const aiMsg: ChatMessage = {
         sessionId: sid!,
@@ -417,19 +430,6 @@ function ChatContent() {
       if (code === ERROR_CODE.MODEL_NOT_FOUND) {
         toast.error('所选模型不可用，已切换回智能默认');
         modelPref.select('');
-        return;
-      }
-      // M8-9h：模型额度不足——不重试、不回退 JSON，直接给出明确提示
-      if (code === ERROR_CODE.MODEL_QUOTA_EXCEEDED) {
-        const quotaText = getErrorMessage(err);
-        toast.error(quotaText);
-        const quotaMsg: ChatMessage = {
-          sessionId: sid!,
-          role: 'assistant',
-          content: `⚠️ ${quotaText}`,
-          localKey: `a-${crypto.randomUUID()}`,
-        };
-        appendAssistantOrNotify(sid!, quotaMsg);
         return;
       }
       if (code === ERROR_CODE.MESSAGE_PROCESSING) {

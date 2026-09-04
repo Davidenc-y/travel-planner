@@ -12,6 +12,9 @@ import org.springframework.stereotype.Component;
 @ConfigurationProperties(prefix = "travel.etl")
 public class EtlProperties {
 
+    /** 每批未索引扫描上限（默认 100，与 yml travel.etl.batch-size 对齐） */
+    private int batchSize = 100;
+
     /** ETL 并行度（默认 4，范围 1~8） */
     private int parallelism = 4;
 

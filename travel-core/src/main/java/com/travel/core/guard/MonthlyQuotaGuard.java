@@ -1,11 +1,14 @@
-package com.travel.crawl.util;
+package com.travel.core.guard;
 
 import lombok.extern.slf4j.Slf4j;
 
 import java.time.YearMonth;
 import java.util.concurrent.atomic.AtomicInteger;
 
-/** 月度免费配额保护（F104 2.5）：5000/月，85% 告警、100% 停、次月重置。 */
+/**
+ * 月度免费配额保护（F104 2.5，M12-0 自 travel-crawl util 下沉）：
+ * 85% 告警、100% 停、次月重置。
+ */
 @Slf4j
 public class MonthlyQuotaGuard implements QuotaGuard {
 
@@ -35,7 +38,8 @@ public class MonthlyQuotaGuard implements QuotaGuard {
         }
         if (!warned && next >= (int) (quota * warnRatio)) {
             warned = true;
-            log.warn("[Quota] 月度配额已使用 {}%（{}/{}），请关注免费额度", (int) (warnRatio * 100), next, quota);
+            log.warn("[Quota] 月度配额已使用 {}%（{}/{}），请关注免费额度",
+                    (int) (warnRatio * 100), next, quota);
         }
         return true;
     }

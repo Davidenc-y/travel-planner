@@ -31,6 +31,9 @@ public class TravelProfile extends BaseEntity {
     /** 出行风格: ECONOMY/COMFORT/LUXURY */
     private String travelStyle;
 
+    /** M11-4：消费水平 ECONOMICAL/STANDARD/COMFORT（默认 STANDARD；用于预算餐费个性化） */
+    private String consumeLevel;
+
     /** JSON: 历史行程摘要 */
     private String historyTrips;
 

@@ -1,5 +1,8 @@
-package com.travel.common.exception;
+package com.travel.webmvc.exception;
 
+import com.travel.common.exception.BusinessException;
+import com.travel.common.exception.ErrorCode;
+import com.travel.common.exception.ExternalApiException;
 import com.travel.common.result.R;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.extern.slf4j.Slf4j;

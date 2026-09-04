@@ -25,16 +25,13 @@ spring:
     username: ${MYSQL_USER:root}
     password: ${MYSQL_PASSWORD:root123}
     driver-class-name: com.mysql.cj.jdbc.Driver
+    # M10-2d：maxLifetime < MySQL wait_timeout（20min），避免服务端关闭后校验失败
+    hikari:
+      max-lifetime: 1200000
 
   # ============ Redis ============
-  data:
-    redis:
-      host: ${REDIS_HOST:localhost}
-      port: ${REDIS_PORT:6379}
-      # password: 不设置 — Redis 无密码，避免 Redisson 发送 AUTH 空密码
-      # 如需密码，设置环境变量 SPRING_DATA_REDIS_PASSWORD=yourpassword
-      database: 0
-      timeout: 5000ms
+  # M10-1a：knowledge 无 Redis 代码引用（web_enrich 防抖由 DB 7 天 UPDATE 承担），
+  # 原 spring.data.redis.* 零引用配置已移除，避免误导运维。
 
   # ============ AI DashScope（仅 reranker 直连使用；Chat/Embedding 走 M7 注册表） ============
   ai:
@@ -132,6 +129,11 @@ travel:
           roles: [rerank]
           selectable: false
           enabled: true
+    # M10-2c：模型维度熔断（按 model key；false=直通现状）
+    model-circuit:
+      enabled: true
+      failure-threshold: 5
+      open-ms: 60000
   # M6-19：RAG 检索流式
   knowledge:
     stream:
@@ -189,6 +191,19 @@ travel:
       daily-quota: 100
       enrich-fields: [openHours, ticketPrice]
       writeback-enabled: false
+      # M9-2：补全模式（sync=现状同步；async=本轮回 null + 后台回写）
+      fill-mode: sync
+      # M9-2：搜索源注册表（priority 升序；单源失败自动 failover 下一源）
+      providers:
+        - name: tavily
+          enabled: false
+          api-key-env: TAVILY_API_KEY
+          base-url: https://api.tavily.com/search
+          timeout-ms: 10000
+          priority: 1
+        - name: duckduckgo
+          enabled: false
+          priority: 2
     # M4-6：Rerank SPI（none=直通默认；dashscope 启用 gte-rerank-v2，失败 fail-open）
     rerank:
       type: none
@@ -207,6 +222,8 @@ travel:
       tags-weight: 0.10
       empty-description-penalty: 0.20
       zero-rating-penalty: 0.10
+      # M9-1：精确名称命中优先（默认 true，纯排序规则；false=直通现状）
+      exact-match-boost: true
     # M8-9e：检索层修复（city 参与评分 + PLANNING 规则化扩展）
     retrieval:
       city-score-boost: 0.5

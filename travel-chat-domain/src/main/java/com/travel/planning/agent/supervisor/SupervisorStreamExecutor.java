@@ -16,7 +16,11 @@ import org.springframework.ai.chat.metadata.Usage;
 import org.springframework.ai.chat.model.ChatResponse;
 import reactor.core.publisher.Flux;
 
+import java.util.List;
+import java.util.Map;
+import java.util.TreeMap;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BiConsumer;
 import java.util.function.Consumer;
@@ -99,7 +103,12 @@ final class SupervisorStreamExecutor {
             String[] lastNodeLabel = {null};
             Flux<NodeOutput> flux = circuitBreakerRegistry.of("supervisor").call(
                     "supervisor", () -> streamSupervisorSafely(supervisor, userInput, config));
+            // M9-3c：同节点执行次数观测（图流成本治理第③层）
+            Map<String, Integer> nodeExecutionCounts = new ConcurrentHashMap<>();
             ReactiveBlockSupport.blockUntilDone(flux, out -> {
+                if (out.node() != null) {
+                    nodeExecutionCounts.merge(out.node(), 1, Integer::sum);
+                }
                 if (out.state() != null) {
                     lastState.set(out.state());
                 }
@@ -156,6 +165,9 @@ final class SupervisorStreamExecutor {
                             "supervisor", () -> streamSupervisorSafely(
                                     supervisor, userInput, retryBuilder.build()));
                     ReactiveBlockSupport.blockUntilDone(retryFlux, out -> {
+                        if (out.node() != null) {
+                            nodeExecutionCounts.merge(out.node(), 1, Integer::sum);
+                        }
                         if (out.state() != null) {
                             retryState.set(out.state());
                         }
@@ -208,6 +220,7 @@ final class SupervisorStreamExecutor {
                     }
                 }
             }
+            recordOscillationWarnings(nodeExecutionCounts);
             if (tokenSink != null && result != null) {
                 tokenSink.accept(result);
             }
@@ -223,6 +236,33 @@ final class SupervisorStreamExecutor {
         } finally {
             // M8-9m：请求结束清理额度短路状态（与 token 采集 endAndGet 对称）
             quotaTripwire.clear(scopeKey);
+        }
+    }
+
+    /**
+     * M9-3c：同节点执行次数超阈值（3）→ WARN 日志 + trace 扩展字段
+     * （经 AgentTraceCollector 编码进 callPath JSON，无 DDL）。
+     */
+    private static void recordOscillationWarnings(Map<String, Integer> nodeExecutionCounts) {
+        if (nodeExecutionCounts == null || nodeExecutionCounts.isEmpty()) {
+            return;
+        }
+        Map<String, Integer> over = new TreeMap<>();
+        nodeExecutionCounts.forEach((node, count) -> {
+            if (count > 3) {
+                over.put(node, count);
+            }
+        });
+        if (over.isEmpty()) {
+            return;
+        }
+        List<String> warnings = over.entrySet().stream()
+                .map(e -> e.getKey() + "=" + e.getValue())
+                .toList();
+        log.warn("[GraphFlow] 节点疑似路由震荡: {}", warnings);
+        if (TraceContext.active()) {
+            TraceContext.current().graphFlowWarnings =
+                    com.travel.common.util.JsonUtils.toJson(warnings);
         }
     }
 

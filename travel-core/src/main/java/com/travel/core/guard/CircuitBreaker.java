@@ -70,7 +70,8 @@ public class CircuitBreaker {
         return state.get();
     }
 
-    private boolean isOpen() {
+    /** M10-2c：公开 OPEN 判定（内部自动完成 OPEN→HALF_OPEN 超时迁移）。 */
+    public boolean isOpen() {
         if (state.get() == State.OPEN) {
             if (System.currentTimeMillis() - openedAt.get() >= openTimeoutMs) {
                 if (state.compareAndSet(State.OPEN, State.HALF_OPEN)) {
@@ -80,6 +81,26 @@ public class CircuitBreaker {
             return state.get() == State.OPEN;
         }
         return false;
+    }
+
+    /** M10-2c：成功记录（CLOSED 复位 / HALF_OPEN 探测成功回 CLOSED）。 */
+    public void recordSuccess() {
+        onSuccess();
+    }
+
+    /** M10-2c：失败记录（CLOSED/HALF_OPEN 计数，超阈值 OPEN）。 */
+    public void recordFailure() {
+        onFailure();
+    }
+
+    /** M10-2c：半开探测许可（同一时刻仅一个探测请求）。 */
+    public boolean tryAcquireProbe() {
+        return halfOpenProbe.compareAndSet(false, true);
+    }
+
+    /** M10-2c：释放半开探测许可。 */
+    public void releaseProbe() {
+        halfOpenProbe.set(false);
     }
 
     private void onSuccess() {

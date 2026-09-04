@@ -1,7 +1,8 @@
 'use client';
 
 import { useCallback, useRef, useState } from 'react';
-import { chatApi, httpErrorCode, isAbortError } from '@/lib/api';
+import { chatApi, getErrorMessage, httpErrorCode, isAbortError } from '@/lib/api';
+import { ERROR_CODE } from '@/lib/constants';
 
 // M6-5：逐字揭示节奏——后端可能一次性爆发式发送全部分块，
 // 前端按固定节奏消费待展示队列，保证“逐字直到完全展示”。
@@ -21,6 +22,14 @@ export interface StreamedResult {
   sessionTitle?: string;
   /** B3/09 C-07：done 事件携带的本轮 token 数（后端已有字段，此前被丢弃） */
   tokens?: number;
+  /** M10-1b：业务错误已在 hook 内处理（如 40303 已提示+气泡），调用方不再兜底 */
+  handled?: boolean;
+}
+
+/** M10-1b：业务错误展示回调（page 只注入能力，不承载提示/气泡拼装逻辑） */
+export interface ChatStreamErrorHandlers {
+  onToastError?: (message: string) => void;
+  onAssistantError?: (sid: string, content: string) => void;
 }
 
 /**
@@ -31,7 +40,10 @@ export interface StreamedResult {
  *
  * @param getCurrentSid 返回当前可见会话 id（供后台会话直接累积、前台进 reveal 队列）
  */
-export function useChatStream(getCurrentSid: () => string | null) {
+export function useChatStream(
+  getCurrentSid: () => string | null,
+  errorHandlers?: ChatStreamErrorHandlers,
+) {
   const [streamStates, setStreamStates] = useState<Record<string, StreamState>>({});
   const streamAbortRef = useRef<AbortController | null>(null);
   // M6-5：待展示文本队列与揭示定时器
@@ -189,6 +201,14 @@ export function useChatStream(getCurrentSid: () => string | null) {
         if (code === 40904 && attempt < maxAttempts - 1) {
           await new Promise((r) => setTimeout(r, 3000));
           continue;
+        }
+        // M10-1b：40303 额度不足——本 hook 统一 toast + assistant 气泡后收尾，
+        // page 不再重复拼装（不重试、不回退 JSON）
+        if (code === ERROR_CODE.MODEL_QUOTA_EXCEEDED) {
+          const quotaText = getErrorMessage(err);
+          errorHandlers?.onToastError?.(quotaText);
+          errorHandlers?.onAssistantError?.(sid, `⚠️ ${quotaText}`);
+          return { text: '', handled: true };
         }
         // P1：中途断线（网络错误、无业务码）且已收到部分内容 → 同键 + Last-Event-ID 续传
         if (!code && lastId && acc && attempt < maxAttempts - 1) {

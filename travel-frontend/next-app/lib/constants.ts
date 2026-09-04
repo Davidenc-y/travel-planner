@@ -29,6 +29,8 @@ export const ERROR_CODE = {
   MODEL_NOT_FOUND: 40005,
   /** 模型额度不足（DashScope 403 Free quota exhausted） */
   MODEL_QUOTA_EXCEEDED: 40303,
+  /** M10-2c：模型维度熔断 OPEN（连续失败后暂不可用） */
+  MODEL_CIRCUIT_OPEN: 40304,
   /** 未登录 */
   UNAUTHORIZED: 40101,
   /** 限流 */
