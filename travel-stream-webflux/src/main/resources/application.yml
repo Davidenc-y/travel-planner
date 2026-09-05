@@ -80,6 +80,8 @@ travel:
       open-ms: 60000
   knowledge:
     base-url: ${KNOWLEDGE_BASE_URL:http://localhost:8082}
+  # M13-2f：聊天行程回写桥目标（travel-planning MVC 实例）
+  planning-base-url: ${PLANNING_BASE_URL:http://localhost:8081}
   memory:
     shortterm:
       enabled: true

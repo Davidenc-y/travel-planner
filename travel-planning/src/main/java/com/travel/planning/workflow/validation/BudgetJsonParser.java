@@ -43,6 +43,19 @@ public final class BudgetJsonParser {
     }
 
     /**
+     * 从预算估算 JSON 提取 mealCost（M14-1b 消费水平餐费硬约束用）。
+     *
+     * @return 数值；缺失/不可解析返回 0（与既有抽取语义一致）
+     */
+    public static double extractMealCost(String budgetJson) {
+        JsonNode node = parse(strip(budgetJson));
+        if (node == null) {
+            return 0;
+        }
+        return toDouble(node.get("mealCost"), 0);
+    }
+
+    /**
      * 从偏好 JSON 提取预算上限。
      *
      * @return 数值；缺失/null/不可解析返回 {@link Double#MAX_VALUE}（保持原语义）

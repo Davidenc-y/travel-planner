@@ -9,6 +9,10 @@ import org.springframework.stereotype.Service;
 import java.time.Duration;
 import java.time.LocalDate;
 import java.time.YearMonth;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
 
 /**
  * 高德日/月双预算守卫（M12-2）：Redis 持久计数，重启/多实例不归零。
@@ -83,6 +87,39 @@ public class MapQuotaGuardService {
         return "route".equals(api)
                 ? props.getRouteMonthQuota()
                 : props.getGeocodeMonthQuota();
+    }
+
+    /**
+     * M14-1c：看板配额水位快照（route/geocode 各返回日/月已用量与上限）。
+     * Redis 不可用/读失败按 0 返回，不阻断看板。
+     */
+    public List<Map<String, Object>> usageSnapshot() {
+        List<Map<String, Object>> rows = new ArrayList<>(2);
+        rows.add(usageOf("route"));
+        rows.add(usageOf("geocode"));
+        return rows;
+    }
+
+    /** 单 API 配额水位：dayUsed/dayLimit/monthUsed/monthLimit */
+    public Map<String, Object> usageOf(String api) {
+        Map<String, Object> row = new LinkedHashMap<>();
+        row.put("api", api);
+        row.put("dayUsed", readCount(dayKey(api)));
+        row.put("dayLimit", dayLimit(api));
+        row.put("monthUsed", readCount(monthKey(api)));
+        row.put("monthLimit", monthLimit(api));
+        return row;
+    }
+
+    private long readCount(String key) {
+        try {
+            String v = redisTemplate.opsForValue().get(key);
+            return v == null || v.isBlank() ? 0L : Long.parseLong(v.trim());
+        } catch (Exception e) {
+            log.warn("[MapQuota] 读取配额水位失败（按 0 展示）: key={}, error={}", key,
+                    e.getMessage());
+            return 0L;
+        }
     }
 
     private String dayKey(String api) {

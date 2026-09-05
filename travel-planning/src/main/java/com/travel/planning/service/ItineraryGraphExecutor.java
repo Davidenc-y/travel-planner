@@ -4,6 +4,8 @@ import com.alibaba.cloud.ai.graph.CompiledGraph;
 import com.alibaba.cloud.ai.graph.OverAllState;
 import com.alibaba.cloud.ai.graph.RunnableConfig;
 import com.travel.common.exception.ItineraryGenerationException;
+import com.travel.planning.agent.supervisor.TokenUsageInterceptor;
+import com.travel.planning.trace.TraceContext;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
@@ -30,6 +32,12 @@ public class ItineraryGraphExecutor {
     /** 工作流整体执行超时（秒）：硬性退出边界。 */
     public static final long MAX_EXECUTION_SECONDS = 300;
 
+    private final TokenUsageInterceptor tokenUsageInterceptor;
+
+    public ItineraryGraphExecutor(TokenUsageInterceptor tokenUsageInterceptor) {
+        this.tokenUsageInterceptor = tokenUsageInterceptor;
+    }
+
     /**
      * 工作流执行专用线程池：使用虚拟线程（Java 21），daemon 且轻量，
      * 与 CompletableFuture.cancel(true) 配合可及时中断 graph.invoke 的阻塞等待。
@@ -42,17 +50,29 @@ public class ItineraryGraphExecutor {
      */
     public OverAllState execute(CompiledGraph graph, Map<String, Object> initialState) {
         CompletableFuture<Optional<OverAllState>> future = null;
+        // M14-1c：行程图与 Supervisor 同款 token 采集——TraceAspect 已为
+        // ItineraryService.generate 建 requestId，这里 begin/end 同一拦截器并回写 Holder
+        String requestId = TraceContext.active()
+                ? TraceContext.current().requestId : null;
+        boolean collectTokens = requestId != null && !requestId.isBlank()
+                && tokenUsageInterceptor != null;
+        if (collectTokens) {
+            tokenUsageInterceptor.begin(requestId);
+        }
         try {
             // F64/B2：把 userId 写入 RunnableConfig.metadata，供画像工具从 ToolContext 读取
             Object uid = initialState.get("userId");
-            RunnableConfig config = RunnableConfig.builder()
+            RunnableConfig.Builder configBuilder = RunnableConfig.builder()
                     .addMetadata(com.travel.planning.memory.longterm.ProfileToolProvider.USER_ID_METADATA_KEY,
                             uid == null ? 0L : uid)
                     // M6-51：AgentLlmNode 默认按 metadata("_stream_") 走流式（输出 Flux），
                     // 导致 SnapshotNodeWrapper 快照 payload 泄漏为 "FluxFlatMap"（toString）。
                     // 显式关闭流式 → 节点输出 AssistantMessage，快照可正确归一化业务 JSON。
-                    .addMetadata("_stream_", false)
-                    .build();
+                    .addMetadata("_stream_", false);
+            if (collectTokens) {
+                configBuilder.addMetadata(TokenUsageInterceptor.REQUEST_ID_KEY, requestId);
+            }
+            RunnableConfig config = configBuilder.build();
             future = CompletableFuture.supplyAsync(
                     () -> graph.invoke(initialState, config), WORKFLOW_EXECUTOR);
             return future.orTimeout(MAX_EXECUTION_SECONDS, TimeUnit.SECONDS)
@@ -77,6 +97,21 @@ public class ItineraryGraphExecutor {
         } catch (InterruptedException ie) {
             Thread.currentThread().interrupt();
             throw new ItineraryGenerationException("行程生成被中断", ie);
+        } finally {
+            if (collectTokens) {
+                long[] usage = tokenUsageInterceptor.peek(requestId);
+                tokenUsageInterceptor.endAndGet(requestId);
+                if (TraceContext.active()
+                        && requestId.equals(TraceContext.current().requestId)) {
+                    TraceContext.Holder h = TraceContext.current();
+                    h.promptTokens += usage[0];
+                    h.completionTokens += usage[1];
+                    h.totalTokens += usage[2];
+                }
+                log.info("[ItineraryTrace] itinerary 图 token 采集: requestId={}, "
+                                + "prompt={}, completion={}, total={}",
+                        requestId, usage[0], usage[1], usage[2]);
+            }
         }
     }
 

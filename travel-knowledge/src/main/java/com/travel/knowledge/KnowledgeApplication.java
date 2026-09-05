@@ -25,6 +25,9 @@ import org.springframework.scheduling.annotation.EnableScheduling;
 public class KnowledgeApplication {
 
     public static void main(String[] args) {
+        // M15-3：api.tavily.com 在本机 IPv6 路径 TLS 握手被远端重置，
+        // 强制 IPv4 优先后再初始化 Spring（须在任何 java.net 网络初始化之前）。
+        System.setProperty("java.net.preferIPv4Stack", "true");
         SpringApplication.run(KnowledgeApplication.class, args);
         System.out.println("""
                 ===================================================

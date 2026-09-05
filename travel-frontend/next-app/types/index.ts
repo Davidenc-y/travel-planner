@@ -28,6 +28,8 @@ export interface AttractionVisit {
   timeSlot: string;
   cost?: number;
   notes?: string;
+  /** M15-2：景点类型（CULTURE/NATURE/FOOD/SHOPPING/FAMILY/LEISURE；缺失时灰点） */
+  type?: string;
   /** M11-2：景点坐标（后端读取时回查；缺失时为 undefined，地图降级） */
   latitude?: number;
   longitude?: number;
@@ -51,6 +53,10 @@ export interface ItineraryResponse {
   title: string;
   destination: string;
   days: number;
+  /** M15-4：当前启用的版本号（版本切换不新增版本） */
+  version?: number;
+  /** M13-2g：行程预算上限（聊天/页面生成请求回填） */
+  budget?: number;
   dayPlans?: DayPlan[];
   estimatedCost?: number;
   mindmap?: MindmapData;
@@ -96,6 +102,15 @@ export interface HotelAnchor {
   source: string;
 }
 
+/** M15-1：每日天气角标（map-routes 随响应返回；无数据时为空） */
+export interface DailyWeather {
+  date: string;
+  weatherCode?: number;
+  weatherText?: string;
+  tempMax?: number;
+  tempMin?: number;
+}
+
 export interface DayMapRoute {
   day: number;
   segments: MapRouteSegment[];
@@ -112,6 +127,8 @@ export interface MapRouteResponse {
     routeCalls: number;
     geocodeCalls: number;
   };
+  /** M15-1：按 dayPlans 顺序对齐的每日天气 */
+  weather?: DailyWeather[];
 }
 
 // 聊天相关

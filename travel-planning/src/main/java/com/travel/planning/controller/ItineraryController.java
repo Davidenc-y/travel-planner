@@ -139,4 +139,30 @@ public class ItineraryController {
                                                      @PathVariable Integer version) {
         return R.ok(itineraryVersionService.detail(id, version, AuthUtils.resolveUserId(null)));
     }
+
+    /**
+     * M13-2e/M15-4：版本切换（选中版本即当前使用，固定版本总数不递增）。
+     * 保留 /rollback 兼容别名。
+     */
+    @PostMapping("/{id}/versions/{version}/switch")
+    public R<java.util.Map<String, Object>> switchVersion(
+            @PathVariable Long id,
+            @PathVariable Integer version,
+            @RequestHeader(value = "X-User-Id", required = false) Long userId) {
+        Integer activeVersion = itineraryVersionService.switchTo(
+                AuthUtils.resolveUserId(userId), id, version);
+        return R.ok(java.util.Map.of(
+                "itineraryId", id, "version", activeVersion, "activeVersion", activeVersion));
+    }
+
+    @PostMapping("/{id}/versions/{version}/rollback")
+    public R<java.util.Map<String, Object>> rollback(
+            @PathVariable Long id,
+            @PathVariable Integer version,
+            @RequestHeader(value = "X-User-Id", required = false) Long userId) {
+        Integer activeVersion = itineraryVersionService.rollbackTo(
+                AuthUtils.resolveUserId(userId), id, version);
+        return R.ok(java.util.Map.of(
+                "itineraryId", id, "version", activeVersion, "activeVersion", activeVersion));
+    }
 }

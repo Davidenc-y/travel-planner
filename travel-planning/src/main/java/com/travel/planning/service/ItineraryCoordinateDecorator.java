@@ -73,6 +73,7 @@ public class ItineraryCoordinateDecorator {
                     if (match != null && match.getLat() != null && match.getLng() != null) {
                         v.setLatitude(match.getLat());
                         v.setLongitude(match.getLng());
+                        v.setType(match.getType());
                         filled++;
                     }
                 }

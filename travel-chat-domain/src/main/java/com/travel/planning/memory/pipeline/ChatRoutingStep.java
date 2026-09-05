@@ -3,7 +3,9 @@ package com.travel.planning.memory.pipeline;
 import com.travel.planning.agent.supervisor.TravelSupervisorAgent;
 import com.travel.planning.agent.supervisor.SupervisorResponseSupport;
 import com.travel.planning.agent.support.AttractionGroundingChecker;
+import com.travel.planning.agent.support.ChatWeatherContextPort;
 import com.travel.planning.agent.support.ItineraryConflictPort;
+import com.travel.planning.agent.support.ItineraryVersionPort;
 import com.travel.planning.memory.chat.ChatIntent;
 import com.travel.planning.memory.knowledge.SessionContextChunker;
 import com.travel.planning.memory.knowledge.SessionKnowledgeWriter;
@@ -15,6 +17,7 @@ import com.travel.planning.stream.ChatStreamProperties;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
@@ -62,13 +65,42 @@ public class ChatRoutingStep {
     /** M9-4：冲突校验 Port（planning 实现注入；null=关闭/未装配） */
     private ItineraryConflictPort itineraryConflictPort;
 
+    /** M13-2：行程版本回写 Port（planning 本地实现或 WebFlux HTTP 桥注入；null=关闭/未装配） */
+    private ItineraryVersionPort itineraryVersionPort;
+
+    /** M15-1：聊天规划天气上下文 Port（planning 实现注入；null=未装配） */
+    private ChatWeatherContextPort chatWeatherContextPort;
+
     /** M9-4：冲突观测开关（false=完全关闭，行为等价现状） */
     @Value("${travel.chat.supervisor.conflict-observe.enabled:true}")
     private boolean conflictObserveEnabled = true;
 
+    /** M13-2：行程落库/回写总开关（false=行为等价现状） */
+    @Value("${travel.chat.supervisor.itinerary-writeback.enabled:true}")
+    private boolean itineraryWritebackEnabled = true;
+
     @Autowired(required = false)
     void setItineraryConflictPort(ItineraryConflictPort itineraryConflictPort) {
         this.itineraryConflictPort = itineraryConflictPort;
+    }
+
+    /** MVC planning 应用装配本地实现（travel-planning 扫描到它） */
+    @Autowired(required = false)
+    @Qualifier("itineraryVersionPortImpl")
+    void setLocalItineraryVersionPort(ItineraryVersionPort itineraryVersionPort) {
+        this.itineraryVersionPort = itineraryVersionPort;
+    }
+
+    /** WebFlux(8083) 应用装配 HTTP 桥（travel-stream-webflux 不依赖 travel-planning） */
+    @Autowired(required = false)
+    @Qualifier("webfluxItineraryVersionPort")
+    void setBridgeItineraryVersionPort(ItineraryVersionPort itineraryVersionPort) {
+        this.itineraryVersionPort = itineraryVersionPort;
+    }
+
+    @Autowired(required = false)
+    void setChatWeatherContextPort(ChatWeatherContextPort chatWeatherContextPort) {
+        this.chatWeatherContextPort = chatWeatherContextPort;
     }
 
     /**
@@ -107,7 +139,8 @@ public class ChatRoutingStep {
                 }
                 default -> { // PLANNING / REFINE：F64/B2 把 userId 传入 Supervisor（metadata 供画像工具）
                     TravelSupervisorAgent.PlanningResult result =
-                            supervisorAgent.executePlanningWithUsage(composed, userId, cancel);
+                            supervisorAgent.executePlanningWithUsage(
+                                    withWeather(intent, composed), userId, cancel);
                     response = result.answer();
                     // F27：assistant 消息 tokens = 本次全部 LLM 调用的真实 totalTokens 之和
                     aiTokens = result.totalTokens();
@@ -121,6 +154,8 @@ public class ChatRoutingStep {
                     // M8-9：行程生成后写入 itinerary_day 切片（REFINE 覆盖旧版本）
                     observeConflictIfEnabled(composed, result.routePlanJson());
                     writeItineraryChunks(sessionId, result.routePlanJson());
+                    writebackIfEnabled(intent, userId, sessionId, composed,
+                            result.routePlanJson(), result.budgetJson());
                 }
             }
         } catch (TurnInterruptedException e) {
@@ -179,11 +214,14 @@ public class ChatRoutingStep {
                         try {
                             TravelSupervisorAgent.StreamPlanningResult r =
                                     supervisorAgent.streamPlanningWithUsage(
-                                            composed, userId, think, sink, cancellation);
+                                            withWeather(intent, composed),
+                                            userId, think, sink, cancellation);
                             SupervisorResponseSupport.recordGrounding(
                                     groundingChecker, composed, r.answer());
                             observeConflictIfEnabled(composed, r.routePlanJson());
                             writeItineraryChunks(sessionId, r.routePlanJson());
+                            writebackIfEnabled(intent, userId, sessionId, composed,
+                                    r.routePlanJson(), r.budgetJson());
                             logElapsed(intent, routeStart, r.fallback());
                             return new StreamRouteResult(r.answer(), r.totalTokens(),
                                     r.fallback(), true);
@@ -242,6 +280,16 @@ public class ChatRoutingStep {
         };
     }
 
+    /** M15-1：PLANNING/REFINE 前拼接天气参考段；不可用时不改变输入。 */
+    private String withWeather(ChatIntent intent, String composed) {
+        if (intent != ChatIntent.PLANNING && intent != ChatIntent.REFINE
+                || chatWeatherContextPort == null || composed == null) {
+            return composed;
+        }
+        String weather = chatWeatherContextPort.build(composed);
+        return weather == null || weather.isBlank() ? composed : weather + "\n\n" + composed;
+    }
+
     /**
      * M8-9：把 Supervisor 规划结果按天切片写入当前会话知识。
      *
@@ -265,6 +313,29 @@ public class ChatRoutingStep {
             log.info("[ChatRouting] itinerary_day 切片已写入会话知识: sessionId={}", sessionId);
         } catch (Exception e) {
             log.warn("[ChatRouting] itinerary_day 切片写入失败（不影响主流程）: sessionId={}, error={}",
+                    sessionId, e.getMessage());
+        }
+    }
+
+    /**
+     * M13-2：聊天规划/REFINE 结果同步为行程资产（create-on-chat / REFINE 回写建版）。
+     * 仅观测/资产层变化，不参与回答组装；失败静默降级。
+     */
+    private void writebackIfEnabled(ChatIntent intent, Long userId, String sessionId,
+                                    String userInput, String routePlanJson, String budgetJson) {
+        if (!itineraryWritebackEnabled || itineraryVersionPort == null
+                || intent != ChatIntent.PLANNING && intent != ChatIntent.REFINE
+                || routePlanJson == null || routePlanJson.isBlank()) {
+            return;
+        }
+        try {
+            java.util.Optional<Long> itineraryId = itineraryVersionPort.syncAfterPlanning(
+                    userId, sessionId, userInput, routePlanJson, budgetJson);
+            itineraryId.ifPresent(id -> log.info(
+                    "[ItineraryWriteback] 行程资产已同步: itineraryId={}, sessionId={}, intent={}",
+                    id, sessionId, intent));
+        } catch (Exception e) {
+            log.warn("[ItineraryWriteback] 同步失败（不影响主流程）: sessionId={}, error={}",
                     sessionId, e.getMessage());
         }
     }

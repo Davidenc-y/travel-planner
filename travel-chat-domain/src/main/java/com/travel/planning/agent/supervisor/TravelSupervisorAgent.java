@@ -216,10 +216,16 @@ public class TravelSupervisorAgent {
      * @param routePlanJson M8-9：最终 state 的 routePlan JSON（可为 null；
      *                      供会话知识 itinerary_day 切片写入，解锁 RECALL/REFINE retention）
      */
-    public record PlanningResult(String answer, long totalTokens, String routePlanJson) {
+    public record PlanningResult(String answer, long totalTokens, String routePlanJson,
+                                 String budgetJson) {
+        /** 兼容既有调用方（无 routePlanJson/budgetJson 场景） */
+        public PlanningResult(String answer, long totalTokens, String routePlanJson) {
+            this(answer, totalTokens, routePlanJson, null);
+        }
+
         /** 兼容既有调用方（无 routePlanJson 场景） */
         public PlanningResult(String answer, long totalTokens) {
-            this(answer, totalTokens, null);
+            this(answer, totalTokens, null, null);
         }
     }
 
@@ -286,9 +292,14 @@ public class TravelSupervisorAgent {
     /** M6-18：图流规划结果 */
     /** M8-9：同 {@link PlanningResult}，图流路径附带 routePlanJson */
     public record StreamPlanningResult(String answer, long totalTokens, boolean fallback,
-                                       String routePlanJson) {
+                                       String routePlanJson, String budgetJson) {
         public StreamPlanningResult(String answer, long totalTokens, boolean fallback) {
-            this(answer, totalTokens, fallback, null);
+            this(answer, totalTokens, fallback, null, null);
+        }
+
+        public StreamPlanningResult(String answer, long totalTokens, boolean fallback,
+                                    String routePlanJson) {
+            this(answer, totalTokens, fallback, routePlanJson, null);
         }
     }
 

@@ -229,7 +229,10 @@ final class SupervisorStreamExecutor {
                     result == null ? 0 : result.length(), totalTokens);
             // M8-9：最终 state 的 routePlan JSON 随结果返回（供会话知识 itinerary_day 切片写入）
             String routePlanJson = SupervisorResponseSupport.toText(finalState.value("routePlan"));
-            return new TravelSupervisorAgent.StreamPlanningResult(result, totalTokens, false, routePlanJson);
+            String budgetJson = SupervisorResponseSupport.toText(
+                    finalState.value("budgetEstimate"));
+            return new TravelSupervisorAgent.StreamPlanningResult(
+                    result, totalTokens, false, routePlanJson, budgetJson);
         } catch (Exception e) {
             tokenUsageInterceptor.endAndGet(requestId);
             throw e;

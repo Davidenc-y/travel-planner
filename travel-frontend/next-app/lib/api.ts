@@ -240,6 +240,13 @@ export const itineraryApi = {
     planningApi.get<R<Array<Record<string, unknown>>>>(`/api/v1/itineraries/${id}/versions`),
   version: (id: number, version: number) =>
     planningApi.get<R<Record<string, unknown>>>(`/api/v1/itineraries/${id}/versions/${version}`),
+  /** M15-4：版本切换（选中版本即当前使用，不新增版本；保留旧接口别名） */
+  activateVersion: (id: number, version: number) =>
+    planningApi.post<R<{ itineraryId: number; version: number; activeVersion: number }>>(
+      `/api/v1/itineraries/${id}/versions/${version}/switch`),
+  rollbackVersion: (id: number, version: number) =>
+    planningApi.post<R<{ itineraryId: number; version: number; activeVersion: number }>>(
+      `/api/v1/itineraries/${id}/versions/${version}/rollback`),
   /** M12：行程地图真实路网/住宿锚点（后端代理高德，前端不直连第三方） */
   mapRoutes: (id: number) =>
     planningApi.get<R<import('@/types').MapRouteResponse>>(`/api/v1/itineraries/${id}/map-routes`),

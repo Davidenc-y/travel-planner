@@ -22,6 +22,7 @@ import com.travel.planning.memory.knowledge.KnowledgeRetrievalService;
 import com.travel.planning.workflow.validation.ItineraryConflictValidator;
 import com.travel.planning.workflow.validation.BudgetJsonParser;
 import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.SystemMessage;
@@ -157,6 +158,9 @@ public class TravelWorkflowBuilder {
             map.put("conflictViolations", new ReplaceStrategy());
             map.put("userId", new ReplaceStrategy());
             map.put("retrievalQuery", new ReplaceStrategy());
+            // M14-1b：确定性下传的画像消费水平与出行人数（itinerary_optimize 餐费校验）
+            map.put("consumeLevel", new ReplaceStrategy());
+            map.put("party", new ReplaceStrategy());
             // M4-8：快照包装器读取任务 id
             map.put(SnapshotNodeWrapper.TASK_ID_KEY, new ReplaceStrategy());
             return map;
@@ -541,6 +545,9 @@ public class TravelWorkflowBuilder {
             log.info("[Node:conflict_retry] routeRetryCount {} -> {}", current, next);
             Map<String, Object> result = new HashMap<>();
             result.put("routeRetryCount", next);
+            // M13-3：冲突重试必须清空下游 outputKey，否则派发去重 Hook 会短路重跑
+            result.put("routePlan", OverAllState.MARK_FOR_REMOVAL);
+            result.put("budgetEstimate", OverAllState.MARK_FOR_REMOVAL);
 
             List<ItineraryConflictValidator.Violation> violations = safeViolations(conflictValidator.validate(
                     toText(state.value("routePlan")), toText(state.value("candidates"))));
@@ -582,6 +589,10 @@ public class TravelWorkflowBuilder {
             log.info("[Node:budget_retry] retryCount {} -> {}", current, next);
             Map<String, Object> result = new HashMap<>();
             result.put("retryCount", next);
+            // M13-3：预算超支回退必须清空下游 outputKey，否则派发去重 Hook 会短路重跑
+            result.put("candidates", OverAllState.MARK_FOR_REMOVAL);
+            result.put("routePlan", OverAllState.MARK_FOR_REMOVAL);
+            result.put("budgetEstimate", OverAllState.MARK_FOR_REMOVAL);
 
             // F24 补强：重试时必须让下游 Agent 感知“预算超支多少、需如何降低成本”，
             // 否则 attraction_filter 会用同样的偏好与上下文重新筛选出相同景点，
@@ -605,6 +616,25 @@ public class TravelWorkflowBuilder {
         return v == Math.floor(v) ? String.valueOf((long) v) : String.format("%.2f", v);
     }
 
+    /** M14-1b：预算校验 WARNING 合并进 budgetEstimate.notes（非法 JSON 原样保留）。 */
+    private static Object appendBudgetWarnings(
+            String budgetJson, List<ItineraryConflictValidator.Violation> warnings) {
+        Object value = toJsonValue(budgetJson);
+        if (!(value instanceof ObjectNode obj) || warnings == null || warnings.isEmpty()) {
+            return value;
+        }
+        StringBuilder sb = new StringBuilder("【行程校验提示】");
+        for (int i = 0; i < warnings.size(); i++) {
+            if (i > 0) {
+                sb.append("；");
+            }
+            sb.append(warnings.get(i).message());
+        }
+        String oldNotes = obj.path("notes").asText("");
+        obj.put("notes", oldNotes.isBlank() ? sb.toString() : oldNotes + "。" + sb);
+        return obj;
+    }
+
     /**
      * 行程综合优化节点 —— 整合路线、预算、偏好为最终 itinerary。
      *
@@ -619,18 +649,24 @@ public class TravelWorkflowBuilder {
             String candidates = toText(state.value("candidates"));
             log.info("[Node:itinerary_optimize] 整合路线+预算, routeLen={}, budgetLen={}",
                     routePlan.length(), budgetEstimate.length());
-            // M8-3：费用一致性（WARNING 级，不触发重试；随日志观测）
+            List<ItineraryConflictValidator.Violation> budgetWarnings = new ArrayList<>();
+            // M8-3：费用一致性（WARNING 级，不触发重试）
             if (!candidates.isBlank()) {
-                List<ItineraryConflictValidator.Violation> budgetWarnings =
-                        conflictValidator.validateBudgetConsistency(
-                                routePlan, candidates, budgetEstimate);
-                if (budgetWarnings != null && !budgetWarnings.isEmpty()) {
-                    log.warn("[Node:itinerary_optimize] 预算一致性警告: {}", budgetWarnings);
-                }
+                budgetWarnings.addAll(conflictValidator.validateBudgetConsistency(
+                        routePlan, candidates, budgetEstimate));
+            }
+            // M14-1b：消费水平餐费硬约束（确定性第五规则，WARNING 级不重试）
+            budgetWarnings.addAll(conflictValidator.validateConsumeLevelBudget(
+                    routePlan, budgetEstimate,
+                    toText(state.value("consumeLevel")), toText(state.value("party"))));
+            if (!budgetWarnings.isEmpty()) {
+                log.warn("[Node:itinerary_optimize] 预算校验警告 {} 条: {}",
+                        budgetWarnings.size(), budgetWarnings);
             }
             Map<String, Object> body = new LinkedHashMap<>();
             body.put("routePlan", toJsonValue(routePlan));
-            body.put("budgetEstimate", toJsonValue(budgetEstimate));
+            // M14-1b：WARNING 随 budgetEstimate.notes 携带（DTO 预算明细可透出）
+            body.put("budgetEstimate", appendBudgetWarnings(budgetEstimate, budgetWarnings));
             body.put("preference", toJsonValue(preference));
             String itinerary = JsonUtils.getMapper().writeValueAsString(body);
             Map<String, Object> result = new HashMap<>();

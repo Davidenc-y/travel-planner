@@ -222,7 +222,10 @@ final class SupervisorGraphExecutor {
             SupervisorTraceSupport.applyTracePath(finalState);
             // M8-9：最终 state 的 routePlan JSON 随结果返回（供会话知识 itinerary_day 切片写入）
             String routePlanJson = SupervisorResponseSupport.toText(finalState.value("routePlan"));
-            return new TravelSupervisorAgent.PlanningResult(result, totalTokens, routePlanJson);
+            String budgetJson = SupervisorResponseSupport.toText(
+                    finalState.value("budgetEstimate"));
+            return new TravelSupervisorAgent.PlanningResult(
+                    result, totalTokens, routePlanJson, budgetJson);
         } catch (ExecutionException e) {
             Throwable cause = e.getCause();
             // M6-42：拦截器取消短路抛出的 TurnInterruptedException 可能被图执行器

@@ -5,6 +5,7 @@ import com.alibaba.cloud.ai.graph.OverAllState;
 import com.travel.common.dto.ItineraryGenerateRequestDTO;
 import com.travel.common.dto.ItineraryResponseDTO;
 import com.travel.common.entity.Itinerary;
+import com.travel.common.entity.TravelProfile;
 import com.travel.common.enums.ItineraryStatus;
 import com.travel.common.exception.BusinessException;
 import com.travel.common.exception.ItineraryGenerationException;
@@ -15,10 +16,12 @@ import com.travel.planning.memory.longterm.ProfilePort;
 import com.travel.planning.prompt.PromptTemplates;
 import com.travel.planning.repository.ItineraryMapper;
 import com.travel.planning.trace.TraceContext;
+import com.travel.planning.weather.WeatherContextBuilder;
 import com.travel.planning.workflow.ItineraryStateMachineProperties;
 import com.travel.planning.workflow.TravelWorkflowBuilder;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DuplicateKeyException;
+import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.function.client.WebClientResponseException;
 
 import java.math.BigDecimal;
@@ -33,6 +36,7 @@ import java.util.Map;
  * 保持 F52/F90/M4-7/M4-8/M8-9/M6-51 全部语义。</p>
  */
 @Slf4j
+@Component
 public class ItineraryGenerationOrchestrator {
 
     /** M4-7（修复 4）：mindmap 兜底 LLM 调用超时（秒） */
@@ -51,6 +55,7 @@ public class ItineraryGenerationOrchestrator {
     private final ItineraryGraphExecutor graphExecutor;
     private final ItineraryResumeCoordinator resumeCoordinator;
     private final ItinerarySliceWriter sliceWriter;
+    private final WeatherContextBuilder weatherContextBuilder;
 
     public ItineraryGenerationOrchestrator(ItineraryMapper itineraryMapper,
                                            TravelWorkflowBuilder workflowBuilder,
@@ -64,7 +69,8 @@ public class ItineraryGenerationOrchestrator {
                                            ItineraryDtoAssembler dtoAssembler,
                                            ItineraryGraphExecutor graphExecutor,
                                            ItineraryResumeCoordinator resumeCoordinator,
-                                           ItinerarySliceWriter sliceWriter) {
+                                           ItinerarySliceWriter sliceWriter,
+                                           WeatherContextBuilder weatherContextBuilder) {
         this.itineraryMapper = itineraryMapper;
         this.workflowBuilder = workflowBuilder;
         this.profilePort = profilePort;
@@ -78,6 +84,7 @@ public class ItineraryGenerationOrchestrator {
         this.graphExecutor = graphExecutor;
         this.resumeCoordinator = resumeCoordinator;
         this.sliceWriter = sliceWriter;
+        this.weatherContextBuilder = weatherContextBuilder;
     }
 
     /** 生成主流程（model 校验与 ModelRoutingContext 由入口 Service 负责）。 */
@@ -126,16 +133,30 @@ public class ItineraryGenerationOrchestrator {
             return toDto(existing);
         }
 
-        String profileContext = profileContextAssembler.assemble(profilePort.getOrCreate(userId));
+        TravelProfile profile = profilePort.getOrCreate(userId);
+        String profileContext = profileContextAssembler.assemble(profile);
         String userInput = buildUserInput(req);
         if (!profileContext.isBlank()) {
             userInput = profileContext + "\n\n" + userInput;
+        }
+        // M15-1：出行天气确定性注入（weather.enabled=false 时为空串，行为等价）
+        String weatherContext = weatherContextBuilder.build(
+                req.getDestination(), req.getStartDate(), req.getDays());
+        if (weatherContext != null && !weatherContext.isBlank()) {
+            userInput = weatherContext + "\n\n" + userInput;
         }
         Map<String, Object> initialState = new HashMap<>();
         initialState.put("userInput", userInput);
         initialState.put("userId", userId);
         initialState.put("retryCount", 0);
         initialState.put("retrievalQuery", buildRetrievalQuery(req));
+        // M14-1b：消费水平/出行人数确定性下传（供 itinerary_optimize 餐费硬约束）
+        if (profile != null && profile.getConsumeLevel() != null) {
+            initialState.put("consumeLevel", profile.getConsumeLevel());
+        }
+        if (req.getParty() != null && !req.getParty().isBlank()) {
+            initialState.put("party", req.getParty());
+        }
 
         Long taskId = null;
         Itinerary entity = buildEntity(req, userId, ItineraryStatus.GENERATED.name(),
@@ -264,6 +285,7 @@ public class ItineraryGenerationOrchestrator {
         entity.setMindmapData(mindmap);
         entity.setEstimatedCost(estimatedCost);
         entity.setClientRequestId(req.getClientRequestId());
+        entity.setSessionId(req.getSessionId());
         return entity;
     }
 

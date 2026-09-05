@@ -97,6 +97,9 @@ public class WebSearchProperties {
         /** API Key 环境变量名（如 TAVILY_API_KEY；缺失视为禁用并告警） */
         private String apiKeyEnv = "";
 
+        /** M13-1：API Key 直连值（仅允许本地未提交配置；优先于 apiKeyEnv） */
+        private String apiKey = "";
+
         /** HTTP 端点（Tavily/博查直连）；duckduckgo/MCP 可不填 */
         private String baseUrl = "";
 

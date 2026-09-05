@@ -139,6 +139,21 @@ travel:
       circuit-failure-threshold: 3
       circuit-window-ms: 60000
       circuit-open-ms: 30000
+  # M15-1：Open-Meteo 天气接入（零 Key；默认关闭灰度，开启后日预算 3000/QPS1）
+  weather:
+    enabled: false
+    forecast-base-url: https://api.open-meteo.com/v1
+    geocoding-base-url: https://geocoding-api.open-meteo.com/v1
+    timeout-ms: 8000
+    connect-timeout-ms: 5000
+    day-quota: 3000
+    max-qps: 1
+    cache-enabled: true
+    forecast-cache-ttl-hours: 24
+    geocode-cache-ttl-days: 30
+    circuit-failure-threshold: 3
+    circuit-window-ms: 60000
+    circuit-open-ms: 30000
   # 限流
   rate-limit:
     per-minute: 100
@@ -233,6 +248,16 @@ travel:
       enabled: true          # false → 全部走原 supervisor 流程（回滚开关）
       cache-size: 256
       llm-fallback: true     # 规则无法判定时用轻模型；false → 直接回退 PLANNING
+    # M13-2：聊天规划/REFINE 行程资产同步（create-on-chat/REFINE 回写建版）
+    supervisor:
+      conflict-observe:
+        enabled: true
+      itinerary-writeback:
+        enabled: true
+        create-on-chat: true
+      # M13-3：派发去重（输出已有值短路子Agent，false=现状灰度）
+      dispatch-dedup:
+        enabled: false
   # F90：Agent 调用前安全防护（Prompt 注入 / 熔断 / 限流）
   guard:
     enabled: true

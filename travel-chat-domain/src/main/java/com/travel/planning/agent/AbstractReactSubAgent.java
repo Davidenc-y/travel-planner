@@ -9,6 +9,7 @@ import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.tool.ToolCallback;
+import org.springframework.beans.factory.annotation.Value;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -19,6 +20,10 @@ import java.util.List;
  */
 @Slf4j
 public abstract class AbstractReactSubAgent {
+
+    /** M13-3：派发去重开关（false=现状，不加 Hook） */
+    @Value("${travel.chat.supervisor.dispatch-dedup.enabled:false}")
+    private boolean dispatchDedupEnabled;
 
     private ReactAgent agent;
 
@@ -35,6 +40,9 @@ public abstract class AbstractReactSubAgent {
             List<ToolCallback> tools = tools();
             if (tools != null && !tools.isEmpty()) {
                 builder.tools(tools);
+            }
+            if (dispatchDedupEnabled) {
+                builder.hooks(new com.travel.planning.agent.supervisor.DedupSubAgentHook(outputKey()));
             }
             ModelInterceptor tokenInterceptor = interceptor();
             ModelInterceptor routeInterceptor = modelRouteInterceptor();

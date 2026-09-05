@@ -7,6 +7,7 @@ import com.travel.common.exception.BusinessException;
 import com.travel.common.exception.ErrorCode;
 import com.travel.common.exception.ItineraryGenerationException;
 import com.travel.common.result.PageResult;
+import com.travel.common.util.JsonUtils;
 import com.travel.planning.guard.GuardService;
 import com.travel.planning.memory.knowledge.SessionContextChunker;
 import com.travel.planning.memory.knowledge.SessionKnowledgeWriter;
@@ -23,7 +24,6 @@ import com.travel.aigateway.route.ModelRoutingContext;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.messages.UserMessage;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
@@ -55,84 +55,13 @@ public class ItineraryService {
     private final ItineraryStateMachineProperties stateMachineProps;
     private final ModelRegistry modelRegistry;
 
-    private ItineraryDtoAssembler dtoAssembler;
-    private ItinerarySliceWriter sliceWriter;
-    private ItineraryResumeCoordinator resumeCoordinator;
-    private ItineraryGraphExecutor graphExecutor;
-    private ItineraryGenerationOrchestrator generationOrchestrator;
-    private ItineraryCoordinateDecorator coordinateDecorator;
-
-    @Autowired(required = false)
-    void setItineraryDtoAssembler(ItineraryDtoAssembler dtoAssembler) {
-        this.dtoAssembler = dtoAssembler;
-    }
-
-    @Autowired(required = false)
-    void setItinerarySliceWriter(ItinerarySliceWriter sliceWriter) {
-        this.sliceWriter = sliceWriter;
-    }
-
-    @Autowired(required = false)
-    void setItineraryResumeCoordinator(ItineraryResumeCoordinator resumeCoordinator) {
-        this.resumeCoordinator = resumeCoordinator;
-    }
-
-    @Autowired(required = false)
-    void setItineraryGraphExecutor(ItineraryGraphExecutor graphExecutor) {
-        this.graphExecutor = graphExecutor;
-    }
-
-    @Autowired(required = false)
-    void setItineraryGenerationOrchestrator(ItineraryGenerationOrchestrator generationOrchestrator) {
-        this.generationOrchestrator = generationOrchestrator;
-    }
-
-    @Autowired(required = false)
-    void setItineraryCoordinateDecorator(ItineraryCoordinateDecorator coordinateDecorator) {
-        this.coordinateDecorator = coordinateDecorator;
-    }
-
-    private ItineraryDtoAssembler dtoAssembler() {
-        if (dtoAssembler == null) {
-            dtoAssembler = new ItineraryDtoAssembler();
-        }
-        return dtoAssembler;
-    }
-
-    private ItinerarySliceWriter sliceWriter() {
-        if (sliceWriter == null) {
-            sliceWriter = new ItinerarySliceWriter(sessionContextChunker, sessionKnowledgeWriter);
-        }
-        return sliceWriter;
-    }
-
-    private ItineraryGraphExecutor graphExecutor() {
-        if (graphExecutor == null) {
-            graphExecutor = new ItineraryGraphExecutor();
-        }
-        return graphExecutor;
-    }
-
-    private ItineraryResumeCoordinator resumeCoordinator() {
-        if (resumeCoordinator == null) {
-            resumeCoordinator = new ItineraryResumeCoordinator(
-                    stateMachineProps, itineraryMapper, workflowBuilder, profilePort,
-                    mindmapGenerator, profileContextAssembler, promptTemplates,
-                    persistenceService, snapshotPort, dtoAssembler(), graphExecutor());
-        }
-        return resumeCoordinator;
-    }
-
-    private ItineraryGenerationOrchestrator generationOrchestrator() {
-        if (generationOrchestrator == null) {
-            generationOrchestrator = new ItineraryGenerationOrchestrator(
-                    itineraryMapper, workflowBuilder, profilePort, mindmapGenerator,
-                    profileContextAssembler, guardService, promptTemplates, persistenceService,
-                    stateMachineProps, dtoAssembler(), graphExecutor(),
-                    resumeCoordinator(), sliceWriter());
-        }
-        return generationOrchestrator;
-    }
+    // M14-1a：拆分五件套 + 坐标装饰器改为 Spring 构造注入（删除 setter/懒加载兜底）
+    private final ItineraryDtoAssembler dtoAssembler;
+    private final ItinerarySliceWriter sliceWriter;
+    private final ItineraryResumeCoordinator resumeCoordinator;
+    private final ItineraryGraphExecutor graphExecutor;
+    private final ItineraryGenerationOrchestrator generationOrchestrator;
+    private final ItineraryCoordinateDecorator coordinateDecorator;
 
     /**
      * 生成行程（编排已下沉 {@link ItineraryGenerationOrchestrator}）。
@@ -140,7 +69,7 @@ public class ItineraryService {
     public ItineraryResponseDTO generate(ItineraryGenerateRequestDTO req, Long userId) {
         validateModel(req.getModel());
         return ModelRoutingContext.runWith(req.getModel(),
-                () -> generationOrchestrator().generate(req, userId));
+                () -> generationOrchestrator.generate(req, userId));
     }
 
     /**
@@ -148,7 +77,7 @@ public class ItineraryService {
      */
     public ItineraryResponseDTO resume(Long id, Long userId) {
         return ModelRoutingContext.runWith(null,
-                () -> resumeCoordinator().resume(id, userId));
+                () -> resumeCoordinator.resume(id, userId));
     }
 
     /** 查询行程详情 */
@@ -157,12 +86,42 @@ public class ItineraryService {
         if (entity == null) {
             throw new ItineraryGenerationException("行程不存在: " + id);
         }
+        ensureMindmap(entity);
         ItineraryResponseDTO dto = toResponseDTO(entity);
         // M12-5：坐标装饰只保留在详情/地图路径（列表页不再按城市回查坐标）
-        if (coordinateDecorator != null) {
-            coordinateDecorator.decorate(dto);
-        }
+        coordinateDecorator.decorate(dto);
         return dto;
+    }
+
+    /** M15-3：历史/聊天写入缺少 mindmap 时，读取详情惰性确定性补齐并持久化。 */
+    private void ensureMindmap(Itinerary entity) {
+        if (entity == null || entity.getContent() == null || entity.getContent().isBlank()
+                || entity.getMindmapData() != null && !entity.getMindmapData().isBlank()) {
+            return;
+        }
+        try {
+            var mindmap = mindmapGenerator.generate(
+                    entity.getTitle() == null || entity.getTitle().isBlank()
+                            ? entity.getDestination() + entity.getDays() + "日游"
+                            : entity.getTitle(),
+                    entity.getDestination(),
+                    entity.getDays(),
+                    entity.getBudget() != null ? entity.getBudget().toPlainString() : null,
+                    entity.getContent());
+            if (mindmap == null) {
+                return;
+            }
+            String json = JsonUtils.toJson(mindmap);
+            entity.setMindmapData(json);
+            Itinerary patch = new Itinerary();
+            patch.setId(entity.getId());
+            patch.setMindmapData(json);
+            itineraryMapper.updateById(patch);
+            log.info("[ItineraryMindmap] 读取详情惰性补齐思维导图: id={}", entity.getId());
+        } catch (Exception e) {
+            log.warn("[ItineraryMindmap] 惰性补齐失败（保留 null）: id={}, error={}",
+                    entity.getId(), e.getMessage());
+        }
     }
 
     /** 分页查询用户行程 */
@@ -209,12 +168,12 @@ public class ItineraryService {
 
     /** GENERATING 僵尸判定（供 DTO 可续标志） */
     private boolean isZombie(Itinerary task) {
-        return resumeCoordinator().isZombie(task);
+        return resumeCoordinator.isZombie(task);
     }
 
     /** Entity → ResponseDTO */
     private ItineraryResponseDTO toResponseDTO(Itinerary entity) {
-        ItineraryResponseDTO dto = dtoAssembler().toResponseDTO(entity, isResumable(entity));
+        ItineraryResponseDTO dto = dtoAssembler.toResponseDTO(entity, isResumable(entity));
         return dto;
     }
 

@@ -1,14 +1,24 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
-import type { DayMapRoute, DayPlan, MapPoint, MapRouteResponse, MapRouteSegment } from '@/types';
+import type {
+  DailyWeather,
+  DayMapRoute,
+  DayPlan,
+  MapPoint,
+  MapRouteResponse,
+  MapRouteSegment,
+} from '@/types';
 import { itineraryApi } from '@/lib/api';
 import {
   buildFallbackCurve,
   formatRouteDuration,
   isRealRouteSource,
+  modeLabel,
+  poiTypeColor,
+  poiTypeLabel,
   toLatLng,
 } from '@/lib/itinerary-map-utils';
 
@@ -60,17 +70,35 @@ export function ItineraryMap({
   const [mapRoutes, setMapRoutes] = useState<MapRouteResponse | null>(null);
   const [routeLoading, setRouteLoading] = useState(false);
   const [routeError, setRouteError] = useState(false);
+  const [activeDay, setActiveDay] = useState<number | null>(null);
+  const [playing, setPlaying] = useState(false);
+  const highlightLayers = useRef<{ day: number; layer: L.Path }[]>([]);
 
   const planList = dayPlans ?? EMPTY_PLAN_LIST;
   const routeDays = useMemo(
     () => mapRoutes?.days ?? EMPTY_ROUTE_DAYS,
     [mapRoutes],
   );
+  const weatherList = mapRoutes?.weather ?? [];
+  const usedTypes = useMemo(
+    () =>
+      [...new Set(
+        planList
+          .flatMap((day) => day.attractions ?? [])
+          .map((a) => a.type)
+          .filter((t): t is string => Boolean(t)),
+      )],
+    [planList],
+  );
   const hasPoints = planList.some((day) =>
     (day.attractions ?? []).some(
       (a) => typeof a.latitude === 'number' && typeof a.longitude === 'number',
     ),
   );
+  const dayNumbers = useMemo(() => planList.map((day) => day.day), [planList]);
+  const prefersReducedMotion =
+    typeof window !== 'undefined'
+    && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
 
   useEffect(() => {
     if (itineraryId == null) {
@@ -98,6 +126,26 @@ export function ItineraryMap({
     };
   }, [itineraryId]);
 
+  // M15-2：按天播放高亮；prefers-reduced-motion 直接全量展示（不进入轮播）
+  useEffect(() => {
+    if (!playing || dayNumbers.length === 0) return undefined;
+    if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) {
+      setActiveDay(null);
+      setPlaying(false);
+      return undefined;
+    }
+    let idx = 0;
+    setActiveDay(dayNumbers[0]);
+    const timer = window.setInterval(() => {
+      idx += 1;
+      if (idx >= dayNumbers.length) {
+        idx = 0;
+      }
+      setActiveDay(dayNumbers[idx]);
+    }, 1800);
+    return () => window.clearInterval(timer);
+  }, [playing, dayNumbers]);
+
   useEffect(() => {
     const el = containerEl;
     if (!el || !hasPoints) return undefined;
@@ -123,6 +171,7 @@ export function ItineraryMap({
     createTile(sourceIndex);
 
     const latLngs: L.LatLngExpression[] = [];
+    highlightLayers.current = [];
 
     planList.forEach((day, dayIdx) => {
       const dayRoute: DayMapRoute | undefined = routeDays.find((r) => r.day === day.day)
@@ -135,20 +184,27 @@ export function ItineraryMap({
 
       // 真实路网/示意路线段
       (dayRoute?.segments ?? []).forEach((segment) => {
-        drawSegment(map, segment, color, day.day);
+        const path = drawSegment(map, segment, color, day.day);
+        if (path) {
+          highlightLayers.current.push({ day: day.day, layer: path });
+        }
       });
 
       // 景点标记
       dayPoints.forEach((latlng, idx) => {
         const visit = (day.attractions ?? [])[idx];
-        L.circleMarker(latlng, {
+        const pointColor = poiTypeColor(visit?.type);
+        const marker = L.circleMarker(latlng, {
           radius: 7,
-          color,
-          fillColor: color,
+          color: pointColor,
+          fillColor: pointColor,
           fillOpacity: 0.85,
         })
           .addTo(map)
-          .bindTooltip(`第${day.day}天 · ${visit?.name ?? ''}`);
+          .bindTooltip(
+            `第${day.day}天 · ${visit?.name ?? ''} · ${poiTypeLabel(visit?.type)}`,
+          );
+        highlightLayers.current.push({ day: day.day, layer: marker });
       });
 
       // 住宿锚点
@@ -185,6 +241,23 @@ export function ItineraryMap({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [containerEl, planList, routeDays, hasPoints]);
 
+  // M15-2：按天高亮——非当前日路线/标点降透明；停止播放时全量显示
+  useEffect(() => {
+    for (const item of highlightLayers.current) {
+      const active = activeDay === null || activeDay === item.day;
+      if (item.layer instanceof L.CircleMarker) {
+        item.layer.setStyle({
+          opacity: active ? 1 : 0.15,
+          fillOpacity: active ? 0.85 : 0.15,
+        });
+      } else {
+        item.layer.setStyle({
+          opacity: active ? 0.9 : 0.1,
+        });
+      }
+    }
+  }, [activeDay, routeDays, planList, hasPoints]);
+
   if (!hasPoints) {
     return (
       <div className="rounded-xl border border-line bg-surface p-6 text-center text-sm text-ink-faint">
@@ -196,19 +269,49 @@ export function ItineraryMap({
   return (
     <div>
       <div className="mb-2 flex flex-wrap items-center gap-3 text-xs">
-        {planList.map((day, idx) => (
-          <span key={day.day} className="inline-flex items-center gap-1.5">
-            <span
-              className="h-2.5 w-2.5 rounded-full"
-              style={{ backgroundColor: DAY_COLORS[idx % DAY_COLORS.length] }}
-            />
-            第 {day.day} 天
-          </span>
-        ))}
+        <button
+          type="button"
+          onClick={() => {
+            if (playing) {
+              setPlaying(false);
+              setActiveDay(null);
+            } else {
+              setActiveDay(dayNumbers[0] ?? null);
+              setPlaying(true);
+            }
+          }}
+          disabled={prefersReducedMotion}
+          title={prefersReducedMotion ? '系统已开启减弱动态效果，直接展示全部日期' : undefined}
+          className="rounded-lg border border-line bg-surface px-2.5 py-1 font-medium text-ink-strong"
+        >
+          {playing ? '⏸ 停止播放' : '▶ 按天播放'}
+        </button>
+        {planList.map((day, idx) => {
+          const weather = weatherList[idx];
+          return (
+            <span key={day.day} className="inline-flex items-center gap-1.5">
+              <span
+                className="h-2.5 w-2.5 rounded-full"
+                style={{ backgroundColor: DAY_COLORS[idx % DAY_COLORS.length] }}
+              />
+              第 {day.day} 天
+              {weather && <WeatherBadge weather={weather} />}
+            </span>
+          );
+        })}
         <span className="inline-flex items-center gap-1.5 text-ink-faint">
           <span className="flex h-3.5 w-3.5 items-center justify-center text-[10px]">🏨</span>
           推荐住宿区域
         </span>
+        {usedTypes.map((type) => (
+          <span key={type} className="inline-flex items-center gap-1.5 text-ink-faint">
+            <span
+              className="h-2.5 w-2.5 rounded-full border border-white/50"
+              style={{ backgroundColor: poiTypeColor(type) }}
+            />
+            {poiTypeLabel(type)}
+          </span>
+        ))}
       </div>
       <div className="relative">
         <div
@@ -237,14 +340,49 @@ export function ItineraryMap({
   );
 }
 
-function drawSegment(map: L.Map, segment: MapRouteSegment, color: string, day: number) {
+function WeatherBadge({ weather }: { weather: DailyWeather }) {
+  const temp =
+    weather.tempMin != null || weather.tempMax != null
+      ? ` ${fmtTemp(weather.tempMin)}~${fmtTemp(weather.tempMax)}℃`
+      : '';
+  return (
+    <span className="text-ink-faint">
+      {weatherIcon(weather.weatherText)} {weather.weatherText ?? '未知'}
+      {temp}
+    </span>
+  );
+}
+
+function weatherIcon(text?: string): string {
+  if (!text) return '';
+  if (text.includes('晴')) return '☀️';
+  if (text.includes('雷')) return '⛈️';
+  if (text.includes('雪')) return '🌨️';
+  if (text.includes('雨') || text.includes('毛毛')) return '🌧️';
+  if (text.includes('雾')) return '🌫️';
+  if (text.includes('阴')) return '☁️';
+  if (text.includes('云')) return '⛅';
+  return '';
+}
+
+function fmtTemp(v?: number): string {
+  if (v == null) return '-';
+  return String(Math.round(v));
+}
+
+function drawSegment(
+  map: L.Map,
+  segment: MapRouteSegment,
+  color: string,
+  day: number,
+): L.Polyline | null {
   const from: MapPoint = { lng: segment.fromLng, lat: segment.fromLat };
   const to: MapPoint = { lng: segment.toLng, lat: segment.toLat };
   const label = `${segment.fromName} → ${segment.toName}`;
   const duration = formatRouteDuration(segment.durationSeconds);
 
   if (isRealRouteSource(segment.source) && segment.polyline && segment.polyline.length > 0) {
-    L.polyline(segment.polyline.map(toLatLng), {
+    const line = L.polyline(segment.polyline.map(toLatLng), {
       color,
       weight: 4,
       opacity: 0.9,
@@ -252,10 +390,12 @@ function drawSegment(map: L.Map, segment: MapRouteSegment, color: string, day: n
     })
       .addTo(map)
       .bindTooltip(`第${day}天 · ${label}${duration ? ` · ${duration}` : ''}`);
-    return;
+    drawModeBadge(map, segment, segment.polyline.map(toLatLng));
+    return line;
   }
 
-  L.polyline(buildFallbackCurve(from, to), {
+  const curve = buildFallbackCurve(from, to);
+  const line = L.polyline(curve, {
     color,
     weight: 2,
     opacity: 0.55,
@@ -263,4 +403,31 @@ function drawSegment(map: L.Map, segment: MapRouteSegment, color: string, day: n
   })
     .addTo(map)
     .bindTooltip(`第${day}天 · ${label}（示意路线）`);
+  drawModeBadge(map, segment, curve);
+  return line;
+}
+
+/** M15-2：路线中点叠加交通方式小图标（步行 🚶 / 驾车 🚗）。 */
+function drawModeBadge(
+  map: L.Map,
+  segment: MapRouteSegment,
+  points: L.LatLngExpression[],
+) {
+  if (segment.mode !== 'WALKING' && segment.mode !== 'DRIVING') return;
+  if (!points || points.length === 0) return;
+  const mid = points[Math.floor(points.length / 2)];
+  const latlng = Array.isArray(mid)
+    ? L.latLng(mid[0], mid[1])
+    : (mid as L.LatLng);
+  const icon = L.divIcon({
+    className: '',
+    html: `<div style="width:22px;height:22px;display:flex;align-items:center;justify-content:center;font-size:13px;background:rgba(255,255,255,.94);border:1px solid rgba(0,0,0,.18);border-radius:9999px;box-shadow:0 1px 3px rgba(0,0,0,.18)">${
+      segment.mode === 'WALKING' ? '🚶' : '🚗'
+    }</div>`,
+    iconSize: [22, 22],
+    iconAnchor: [11, 11],
+  });
+  L.marker(latlng, { icon, interactive: false })
+    .addTo(map)
+    .bindTooltip(modeLabel(segment.mode), { direction: 'top' });
 }

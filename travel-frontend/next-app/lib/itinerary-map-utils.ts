@@ -67,3 +67,44 @@ export function formatRouteDuration(seconds?: number | null): string {
   const minutes = Math.max(1, Math.round(seconds / 60));
   return `约 ${minutes} 分钟`;
 }
+
+/** M15-2：POI 六类配色（CULTURE 紫 / NATURE 绿 / FOOD 橙 / SHOPPING 金 / FAMILY 粉 / LEISURE 青）。 */
+export const POI_TYPE_COLORS: Record<string, string> = {
+  CULTURE: '#7c3aed',
+  NATURE: '#16a34a',
+  FOOD: '#ea580c',
+  SHOPPING: '#d97706',
+  FAMILY: '#db2777',
+  LEISURE: '#0891b2',
+};
+
+/** 未知/缺失类型 → 中性灰。 */
+export const POI_UNKNOWN_COLOR = '#64748b';
+
+/** M15-2：景点类型颜色（大小写不敏感，未知回中性灰）。 */
+export function poiTypeColor(type?: string | null): string {
+  if (!type) return POI_UNKNOWN_COLOR;
+  return POI_TYPE_COLORS[type.toUpperCase()] ?? POI_UNKNOWN_COLOR;
+}
+
+/** M15-2：类型显示标签（未知显示“其他”）。 */
+export function poiTypeLabel(type?: string | null): string {
+  if (!type) return '其他';
+  return (
+    {
+      CULTURE: '文化',
+      NATURE: '自然',
+      FOOD: '美食',
+      SHOPPING: '购物',
+      FAMILY: '亲子',
+      LEISURE: '休闲',
+    } as Record<string, string>
+  )[type.toUpperCase()] ?? '其他';
+}
+
+/** M15-2：交通方式图标与文案。 */
+export function modeLabel(mode?: string | null): string {
+  if (mode === 'WALKING') return '🚶 步行';
+  if (mode === 'DRIVING') return '🚗 驾车';
+  return '🚌 暂不支持';
+}

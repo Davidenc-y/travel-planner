@@ -1,5 +1,7 @@
 package com.travel.planning.map.model;
 
+import com.travel.planning.weather.DailyWeather;
+
 import java.util.List;
 import java.util.Map;
 
@@ -15,5 +17,6 @@ public record ItineraryMapRouteResponse(
         String destination,
         String status,
         List<DayMapRoute> days,
-        Map<String, Integer> usage) {
+        Map<String, Integer> usage,
+        List<DailyWeather> weather) {
 }

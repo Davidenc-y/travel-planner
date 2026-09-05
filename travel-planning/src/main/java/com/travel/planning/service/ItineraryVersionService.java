@@ -3,14 +3,17 @@ package com.travel.planning.service;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.travel.common.entity.Itinerary;
 import com.travel.common.entity.ItineraryVersion;
+import com.travel.common.dto.ItineraryResponseDTO;
 import com.travel.common.exception.BusinessException;
 import com.travel.common.util.JsonUtils;
 import com.travel.planning.repository.ItineraryMapper;
 import com.travel.planning.repository.ItineraryVersionMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
@@ -35,6 +38,14 @@ public class ItineraryVersionService {
 
     private final ItineraryMapper itineraryMapper;
     private final ItineraryVersionMapper versionMapper;
+
+    /** M15-4：旧快照缺失 mindmap 时切换前确定性补齐（不修改只读快照） */
+    private MindmapGenerator mindmapGenerator;
+
+    @Autowired(required = false)
+    void setMindmapGenerator(MindmapGenerator mindmapGenerator) {
+        this.mindmapGenerator = mindmapGenerator;
+    }
 
     /** 终态内容落库后调用（幂等：同内容不重复建版本）。 */
     public void recordFinalized(Long itineraryId, String content,
@@ -105,6 +116,74 @@ public class ItineraryVersionService {
         m.put("estimatedCost", snap.getEstimatedCost());
         m.put("versionDiff", snap.getVersionDiff());
         return m;
+    }
+
+    /**
+     * M13-2e/M15-4：版本切换——把指定历史版本内容设为“当前使用版本”。
+     * 不再递增版本号：版本总数固定，选中哪个版本即当前使用哪个版本。
+     *
+     * @return 当前启用的版本号（= targetVersion）
+     */
+    @Transactional
+    public Integer switchTo(Long userId, Long itineraryId, Integer targetVersion) {
+        requireOwner(itineraryId, userId);
+        if (targetVersion == null || targetVersion <= 0) {
+            throw new BusinessException(40402, "行程版本不存在: " + targetVersion);
+        }
+        ItineraryVersion target = versionMapper.selectOne(new QueryWrapper<ItineraryVersion>()
+                .eq("itinerary_id", itineraryId)
+                .eq("version", targetVersion)
+                .last("LIMIT 1"));
+        if (target == null) {
+            throw new BusinessException(40402, "行程版本不存在: " + targetVersion);
+        }
+        Itinerary current = itineraryMapper.selectById(itineraryId);
+        String mindmap = ensureMindmap(current, target);
+        Itinerary patch = new Itinerary();
+        patch.setId(itineraryId);
+        patch.setContent(target.getContent());
+        patch.setMindmapData(mindmap);
+        patch.setEstimatedCost(target.getEstimatedCost());
+        patch.setVersion(target.getVersion());
+        patch.setVersionDiff(target.getVersionDiff());
+        int rows = itineraryMapper.updateById(patch);
+        if (rows <= 0) {
+            throw new BusinessException(50001, "行程内容更新失败: " + itineraryId);
+        }
+        Itinerary updated = itineraryMapper.selectById(itineraryId);
+        log.info("[ItineraryVersion] 版本切换完成（不新增版本）: itineraryId={}, activeVersion={}",
+                itineraryId, targetVersion);
+        return updated == null ? null : updated.getVersion();
+    }
+
+    /** M13-2e 兼容别名：历史“恢复此版本”行为等同 switchTo（不新增版本）。 */
+    public Integer rollbackTo(Long userId, Long itineraryId, Integer targetVersion) {
+        return switchTo(userId, itineraryId, targetVersion);
+    }
+
+    private String ensureMindmap(Itinerary current, ItineraryVersion target) {
+        if (target.getMindmapData() != null && !target.getMindmapData().isBlank()) {
+            return target.getMindmapData();
+        }
+        if (mindmapGenerator == null || current == null
+                || target.getContent() == null || target.getContent().isBlank()) {
+            return null;
+        }
+        try {
+            ItineraryResponseDTO.MindmapData md = mindmapGenerator.generate(
+                    current.getTitle() == null || current.getTitle().isBlank()
+                            ? current.getDestination() + current.getDays() + "日游"
+                            : current.getTitle(),
+                    current.getDestination(),
+                    current.getDays(),
+                    current.getBudget() != null ? current.getBudget().toPlainString() : null,
+                    target.getContent());
+            return md == null ? null : JsonUtils.toJson(md);
+        } catch (Exception e) {
+            log.warn("[ItineraryVersion] 切换前思维导图生成失败（保留 null）: itineraryId={}, version={}",
+                    current.getId(), target.getVersion());
+            return null;
+        }
     }
 
     private void requireOwner(Long itineraryId, Long userId) {

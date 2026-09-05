@@ -20,11 +20,16 @@ import com.travel.planning.map.support.MapRouteSegmentizer;
 import com.travel.planning.map.support.MapRouteSegmentizer.Leg;
 import com.travel.planning.map.support.RouteModeResolver;
 import com.travel.planning.service.ItineraryService;
+import com.travel.planning.weather.DailyWeather;
+import com.travel.planning.weather.WeatherPort;
+import com.travel.planning.weather.WeatherProperties;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.time.Duration;
+import java.time.LocalDate;
+import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -50,6 +55,8 @@ public class ItineraryMapRouteService {
     private final MapValueCache cache;
     private final MapApiAccessGuard guard;
     private final AmapMapProperties props;
+    private final WeatherPort weatherPort;
+    private final WeatherProperties weatherProps;
 
     public ItineraryMapRouteResponse mapRoutes(Long itineraryId) {
         ItineraryResponseDTO dto = itineraryService.getById(itineraryId);
@@ -64,6 +71,7 @@ public class ItineraryMapRouteService {
         int hits = 0;
         int processed = 0;
         int maxSegments = Math.max(1, props.getMaxSegmentsPerRequest());
+        List<DailyWeather> weather = weatherFor(dto);
 
         if (dto != null && dto.getDayPlans() != null) {
             for (DayPlan day : dto.getDayPlans()) {
@@ -132,7 +140,36 @@ public class ItineraryMapRouteService {
                 dto == null ? "" : dto.getDestination(),
                 status,
                 days,
-                usage);
+                usage,
+                weather);
+    }
+
+    /** M15-1：按行程日期取天气（关闭/失败返回空，地图角标自然隐藏）。 */
+    private List<DailyWeather> weatherFor(ItineraryResponseDTO dto) {
+        if (dto == null || !weatherProps.isEnabled() || dto.getDayPlans() == null
+                || dto.getDayPlans().isEmpty()) {
+            return List.of();
+        }
+        LocalDate fallback = LocalDate.now().plusDays(1);
+        List<LocalDate> dates = new ArrayList<>(dto.getDayPlans().size());
+        int idx = 0;
+        for (DayPlan day : dto.getDayPlans()) {
+            LocalDate date = parseDate(day.getDate());
+            dates.add(date != null ? date : fallback.plusDays(idx));
+            idx++;
+        }
+        return weatherPort.forecastDates(dto.getDestination(), dates).orElse(List.of());
+    }
+
+    private static LocalDate parseDate(String text) {
+        if (text == null || text.isBlank()) {
+            return null;
+        }
+        try {
+            return LocalDate.parse(text.trim());
+        } catch (DateTimeParseException e) {
+            return null;
+        }
     }
 
     private Optional<RoutePlan> readRouteCache(String key) {

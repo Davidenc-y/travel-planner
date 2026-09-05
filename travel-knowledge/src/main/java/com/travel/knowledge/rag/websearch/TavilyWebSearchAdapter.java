@@ -60,9 +60,12 @@ public class TavilyWebSearchAdapter implements WebSearchPort {
             return Optional.empty();
         }
         WebSearchProperties.ProviderProperties p = provider.get();
-        String apiKey = System.getenv(p.getApiKeyEnv());
+        String apiKey = p.getApiKey() == null || p.getApiKey().isBlank()
+                ? System.getenv(p.getApiKeyEnv())
+                : p.getApiKey();
         if (apiKey == null || apiKey.isBlank()) {
-            log.warn("[WebSearch] Tavily 未配置 API Key（env={}），跳过", p.getApiKeyEnv());
+            log.warn("[WebSearch] Tavily 未配置 API Key（apiKey/apiKeyEnv={}），跳过",
+                    p.getApiKeyEnv());
             return Optional.empty();
         }
         if (!rateLimiter.tryAcquire("web_search_tavily")) {

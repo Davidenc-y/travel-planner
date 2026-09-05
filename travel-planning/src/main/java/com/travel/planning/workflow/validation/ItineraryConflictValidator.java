@@ -31,7 +31,10 @@ import java.util.regex.Pattern;
  *   <li>DurationCapacityRule（ERROR：实际 timeSlot 总时长超可用窗口；WARNING：推荐时长
  *       总和超窗口，仅提示）；</li>
  *   <li>BudgetConsistencyRule（WARNING，不触发重试）：budgetEstimate.ticketCost 与候选
- *       ticketPrice 之和偏差 &gt; 30%。</li>
+ *       ticketPrice 之和偏差 &gt; 30%；</li>
+ *   <li>ConsumeLevelBudgetRule（M14-1b，WARNING，不触发重试）：按画像 consumeLevel
+ *       计算期望餐费区间（ECONOMICAL×0.6 / STANDARD×1.0 / COMFORT×1.8，基准
+ *       200 元/人/天，容差 ±30%），超区间提示「消费水平与预算不一致」。</li>
  * </ul>
  *
  * <p>名称匹配复用 {@link AttractionGroundingChecker#matches}（双向 contains + 后缀归一），
@@ -44,6 +47,16 @@ public class ItineraryConflictValidator {
 
     public static final String SEVERITY_ERROR = "ERROR";
     public static final String SEVERITY_WARNING = "WARNING";
+
+    /** M14-1b：餐费基准（与 agent_budget_instruction.st 三顿基准 20+80+100 元/人/天对齐） */
+    private static final double DAILY_MEAL_BASE_PER_PERSON = 200;
+    /** M14-1b：期望区间容差 */
+    private static final double MEAL_TOLERANCE = 0.30;
+
+    private static final Pattern PERSON_PATTERN =
+            Pattern.compile("(\\d+)\\s*(?:人|位)");
+    private static final Pattern ADULT_CHILD_PATTERN =
+            Pattern.compile("(\\d+)\\s*大\\s*(\\d+)\\s*小");
 
     private final ItineraryConflictCheckProperties properties;
 
@@ -111,6 +124,47 @@ public class ItineraryConflictValidator {
                             ticketCost, candidateSum, deviation * 100)));
         }
         return List.of();
+    }
+
+    /**
+     * M14-1b：消费水平餐费硬约束（WARNING 级；确定性校验，不触发重试）。
+     *
+     * <p>按画像 consumeLevel 与出行人数计算期望餐费区间；画像/人数/餐费任一
+     * 不可确定时跳过（确定性降级，不误报）。</p>
+     */
+    public List<Violation> validateConsumeLevelBudget(String routePlanJson, String budgetJson,
+                                                      String consumeLevel, String party) {
+        if (budgetJson == null || budgetJson.isBlank()) {
+            return List.of();
+        }
+        double mealCost = BudgetJsonParser.extractMealCost(budgetJson);
+        if (mealCost <= 0) {
+            return List.of();
+        }
+        int days = countRouteDays(routePlanJson);
+        if (days <= 0) {
+            return List.of();
+        }
+        Double factor = mealFactor(consumeLevel);
+        if (factor == null) {
+            return List.of();
+        }
+        int people = parsePeople(party);
+        if (people <= 0) {
+            return List.of();
+        }
+        double expected = days * people * DAILY_MEAL_BASE_PER_PERSON * factor;
+        double low = expected * (1 - MEAL_TOLERANCE);
+        double high = expected * (1 + MEAL_TOLERANCE);
+        if (mealCost >= low && mealCost <= high) {
+            return List.of();
+        }
+        String direction = mealCost > high ? "高于" : "低于";
+        return List.of(new Violation("ConsumeLevelBudget", SEVERITY_WARNING, "-", "-",
+                String.format("餐饮估算 %.0f 元%s消费水平 %s 的期望区间 %.0f~%.0f 元"
+                                + "（%d天×%d人×200元/人/天×%.1f，±30%%），消费水平与预算不一致",
+                        mealCost, direction, consumeLevel.trim().toUpperCase(),
+                        low, high, days, people, factor)));
     }
 
     /** 是否含 ERROR 级违规（冲突重试触发条件） */
@@ -249,6 +303,16 @@ public class ItineraryConflictValidator {
         return days;
     }
 
+    /** 取 routePlan 天数（不可解析/非数组 → 0） */
+    private static int countRouteDays(String routePlanJson) {
+        JsonNode root = readTree(routePlanJson);
+        if (root == null || !root.isObject() || !root.has("days")) {
+            return 0;
+        }
+        JsonNode days = root.get("days");
+        return days != null && days.isArray() ? days.size() : 0;
+    }
+
     private Map<String, Candidate> parseCandidates(String candidatesJson) {
         JsonNode root = readTree(candidatesJson);
         if (root == null || !root.isArray()) {
@@ -321,5 +385,68 @@ public class ItineraryConflictValidator {
 
     private LocalTime dayEnd() {
         return LocalTime.parse(properties.getDayEnd());
+    }
+
+    // ==================== M14-1b 消费水平餐费规则 ====================
+
+    /** consumeLevel → 餐费倍数（非法/缺失返回 null → 跳过校验） */
+    private static Double mealFactor(String consumeLevel) {
+        if (consumeLevel == null || consumeLevel.isBlank()) {
+            return null;
+        }
+        return switch (consumeLevel.trim().toUpperCase()) {
+            case "ECONOMICAL" -> 0.6;
+            case "STANDARD" -> 1.0;
+            case "COMFORT" -> 1.8;
+            default -> null;
+        };
+    }
+
+    /**
+     * 出行人数解析：数字（"2人/3位"）、"2大1小"合计、常见标签；
+     * 无法确定返回 0（跳过校验，避免按 1 人误报）。
+     */
+    static int parsePeople(String party) {
+        if (party == null || party.isBlank()) {
+            return 0;
+        }
+        String text = party.trim();
+        Matcher ac = ADULT_CHILD_PATTERN.matcher(text);
+        if (ac.find()) {
+            int adult = parseInt(ac.group(1));
+            int child = parseInt(ac.group(2));
+            return adult > 0 && child >= 0 ? adult + child : 0;
+        }
+        Matcher m = PERSON_PATTERN.matcher(text);
+        if (m.find()) {
+            return parseInt(m.group(1));
+        }
+        if (containsAny(text, "独行", "独自", "自己", "单人", "一人")) {
+            return 1;
+        }
+        if (containsAny(text, "情侣", "两人", "双人", "亲子", "带娃", "带小孩")) {
+            return 2;
+        }
+        if (containsAny(text, "三口之家", "一家三口")) {
+            return 3;
+        }
+        return 0;
+    }
+
+    private static int parseInt(String s) {
+        try {
+            return Integer.parseInt(s);
+        } catch (NumberFormatException e) {
+            return 0;
+        }
+    }
+
+    private static boolean containsAny(String text, String... keywords) {
+        for (String k : keywords) {
+            if (text.contains(k)) {
+                return true;
+            }
+        }
+        return false;
     }
 }

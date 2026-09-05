@@ -9,6 +9,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { ErrorState } from '@/components/ui/error-state';
 import { Dialog, type DialogOriginRect } from '@/components/ui/dialog';
 import dynamic from 'next/dynamic';
+import { ItineraryVersionDialog } from '@/components/feature/itinerary-version-dialog';
 
 const BudgetSection = dynamic(() => import('@/components/feature/budget-section').then((m) => m.BudgetSection), {
   ssr: false,
@@ -39,6 +40,7 @@ export function ItineraryCardModal({ itineraryId, onClose, originRect }: Props) 
   const [data, setData] = useState<ItineraryResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [versionsOpen, setVersionsOpen] = useState(false);
 
   const load = useCallback(async () => {
     if (itineraryId == null) return;
@@ -67,7 +69,8 @@ export function ItineraryCardModal({ itineraryId, onClose, originRect }: Props) 
   /** 行程名片弹窗（F103）+ B3 迁移 ui/dialog 基座（F-09：Esc/滚动锁/焦点圈禁/进出动画）；
       关闭方式保持：× / 点击遮罩 / Esc */
   return (
-    <Dialog open={itineraryId != null} onClose={onClose} ariaLabel="行程详情" originRect={originRect}>
+    <>
+      <Dialog open={itineraryId != null} onClose={onClose} ariaLabel="行程详情" originRect={originRect}>
       {loading && (
         <div className="space-y-3">
           <Skeleton className="h-7 w-1/2" />
@@ -82,7 +85,16 @@ export function ItineraryCardModal({ itineraryId, onClose, originRect }: Props) 
 
       {!loading && !error && data && (
           <>
-            <h2 className="text-xl font-bold mb-4">{data.title}</h2>
+            <div className="mb-4 flex items-start justify-between gap-2">
+              <h2 className="text-xl font-bold">{data.title}</h2>
+              <button
+                type="button"
+                onClick={() => setVersionsOpen(true)}
+                className="shrink-0 rounded-lg border border-line px-2.5 py-1.5 text-xs text-ink-secondary hover:border-brand-400 hover:text-brand-500 focus-ring"
+              >
+                历史版本
+              </button>
+            </div>
 
             <div className="grid grid-cols-2 gap-3 mb-5 md:grid-cols-4">
               <div className="rounded-lg bg-slate-50 dark:bg-slate-800/50 p-3">
@@ -94,6 +106,11 @@ export function ItineraryCardModal({ itineraryId, onClose, originRect }: Props) 
                 <Calendar className="h-4 w-4 text-brand-500 mb-1" />
                 <p className="text-xs text-slate-400">天数</p>
                 <p className="font-medium">{data.days} 天</p>
+              </div>
+              <div className="rounded-lg bg-slate-50 dark:bg-slate-800/50 p-3">
+                <DollarSign className="h-4 w-4 text-brand-500 mb-1" />
+                <p className="text-xs text-slate-400">预算</p>
+                <p className="font-medium">{data.budget ? formatCurrency(data.budget) : '未指定'}</p>
               </div>
               <div className="rounded-lg bg-slate-50 dark:bg-slate-800/50 p-3">
                 <DollarSign className="h-4 w-4 text-brand-500 mb-1" />
@@ -158,6 +175,14 @@ export function ItineraryCardModal({ itineraryId, onClose, originRect }: Props) 
             />
         </>
       )}
-    </Dialog>
+      </Dialog>
+      <ItineraryVersionDialog
+        open={versionsOpen}
+        itineraryId={itineraryId}
+        activeVersion={data?.version ?? null}
+        onClose={() => setVersionsOpen(false)}
+        onActivated={() => { void load(); }}
+      />
+    </>
   );
 }

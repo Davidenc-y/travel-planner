@@ -10,6 +10,7 @@ import { useAuth } from '@/lib/auth-context';
 import type { ItineraryResponse } from '@/types';
 import { formatCurrency, formatDate } from '@/lib/utils';
 import { MarkmapView } from '@/components/markmap-view';
+import { ItineraryVersionDialog } from '@/components/feature/itinerary-version-dialog';
 import dynamic from 'next/dynamic';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Button } from '@/components/ui/button';
@@ -68,8 +69,6 @@ function ItineraryDetailContent() {
   const [data, setData] = useState<ItineraryResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [versionsOpen, setVersionsOpen] = useState(false);
-  const [versions, setVersions] = useState<Array<Record<string, unknown>>>([]);
-  const [versionDetail, setVersionDetail] = useState<Record<string, unknown> | null>(null);
   // B3（04 §4.5）：思维导图全屏查看
   const [mindmapFull, setMindmapFull] = useState(false);
 
@@ -99,26 +98,8 @@ function ItineraryDetailContent() {
     }
   };
 
-  const openVersions = async () => {
+  const openVersions = () => {
     setVersionsOpen(true);
-    setVersionDetail(null);
-    if (!data) return;
-    try {
-      const res = await itineraryApi.versions(data.id);
-      setVersions(res.data.data ?? []);
-    } catch (err) {
-      toast.error('版本加载失败: ' + getErrorMessage(err));
-    }
-  };
-
-  const selectVersion = async (v: number) => {
-    if (!data) return;
-    try {
-      const res = await itineraryApi.version(data.id, v);
-      setVersionDetail(res.data.data);
-    } catch (err) {
-      toast.error('版本详情加载失败: ' + getErrorMessage(err));
-    }
   };
 
   // B3（04 §4.5）：返回安全化——无历史（直达 URL）时回列表页
@@ -274,55 +255,14 @@ function ItineraryDetailContent() {
         )}
       </Dialog>
 
-      {/* M11-1：历史版本抽屉（只读回看 + diff 摘要） */}
-      <Dialog open={versionsOpen} onClose={() => setVersionsOpen(false)} className="max-w-xl p-4" ariaLabel="历史版本">
-        <div>
-          <h3 className="mb-3 font-semibold">历史版本</h3>
-          {versions.length === 0 && <p className="text-sm text-ink-faint">暂无历史版本</p>}
-          <div className="max-h-72 space-y-2 overflow-y-auto">
-            {versions.map((v) => (
-              <button
-                key={String(v.version)}
-                type="button"
-                onClick={() => selectVersion(Number(v.version))}
-                className="w-full rounded-lg border border-line bg-surface px-3 py-2 text-left text-sm hover:border-brand-400 focus-ring"
-              >
-                <span className="font-medium">v{String(v.version)}</span>
-                <span className="ml-2 text-ink-faint">{String(v.createdAt ?? '')}</span>
-              </button>
-            ))}
-          </div>
-          {versionDetail && (
-            <div className="mt-3 rounded-lg border border-line bg-surface-2 p-3 text-xs">
-              <VersionDiff diff={versionDetail.versionDiff as Record<string, unknown> | null} />
-            </div>
-          )}
-        </div>
-      </Dialog>
-    </div>
-  );
-}
-
-/** M11-1：diff 四列表可视化（保留灰/调整橙/新增绿/删除红） */
-function VersionDiff({ diff }: { diff: Record<string, unknown> | null }) {
-  if (!diff) return <p className="text-ink-faint">v1 初始版本，无 diff</p>;
-  const rows: Array<[string, string, string]> = [
-    ['kept', '保留', 'text-ink-secondary'],
-    ['adjusted', '调整', 'text-amber-600'],
-    ['added', '新增', 'text-green-600'],
-    ['removed', '删除', 'text-red-600 line-through'],
-  ];
-  return (
-    <div className="space-y-1">
-      {rows.map(([key, label, cls]) => {
-        const items = (diff[key] as string[] | undefined) ?? [];
-        if (items.length === 0) return null;
-        return (
-          <div key={key}>
-            <span className={cls}>{label}：{items.join('、')}</span>
-          </div>
-        );
-      })}
+      {/* M11-1/M15-4：历史版本（固定总数，切换激活不新增版本） */}
+      <ItineraryVersionDialog
+        open={versionsOpen}
+        itineraryId={data.id}
+        activeVersion={data.version ?? null}
+        onClose={() => setVersionsOpen(false)}
+        onActivated={() => { void loadData(); }}
+      />
     </div>
   );
 }

@@ -3,6 +3,7 @@ package com.travel.planning.service;
 import com.travel.common.dto.ItineraryGenerateRequestDTO;
 import com.travel.common.dto.ItineraryResponseDTO;
 import com.travel.common.entity.Itinerary;
+import com.travel.common.entity.TravelProfile;
 import com.travel.common.enums.ItineraryStatus;
 import com.travel.common.exception.BusinessException;
 import com.travel.common.exception.ItineraryGenerationException;
@@ -14,6 +15,7 @@ import com.travel.planning.repository.ItineraryMapper;
 import com.travel.planning.workflow.ItineraryTaskSnapshotPort;
 import com.travel.planning.workflow.ItineraryStateMachineProperties;
 import com.travel.planning.workflow.TravelWorkflowBuilder;
+import com.travel.planning.weather.WeatherContextBuilder;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.messages.UserMessage;
@@ -49,6 +51,7 @@ public class ItineraryResumeCoordinator {
     private final ItineraryTaskSnapshotPort snapshotPort;
     private final ItineraryDtoAssembler dtoAssembler;
     private final ItineraryGraphExecutor graphExecutor;
+    private final WeatherContextBuilder weatherContextBuilder;
 
     /** M4-9/P1-5：显式断点续跑入口（守卫 + 归属校验）。 */
     public ItineraryResponseDTO resume(Long id, Long userId) {
@@ -82,7 +85,8 @@ public class ItineraryResumeCoordinator {
                 task.getId(), resumeFrom, snapshots.keySet());
 
         ItineraryGenerateRequestDTO req = rebuildRequest(task);
-        String profileContext = profileContextAssembler.assemble(profilePort.getOrCreate(task.getUserId()));
+        TravelProfile profile = profilePort.getOrCreate(task.getUserId());
+        String profileContext = profileContextAssembler.assemble(profile);
         String userInput = promptTemplates.itineraryUserInput().formatted(
                 req.getDestination(), req.getDays(),
                 req.getBudget() != null ? req.getBudget() + "元" : "不限",
@@ -92,12 +96,25 @@ public class ItineraryResumeCoordinator {
         if (!profileContext.isBlank()) {
             userInput = profileContext + "\n\n" + userInput;
         }
+        // M15-1：续跑同样注入天气（不改变断点语义；关闭时为空串）
+        String weatherContext = weatherContextBuilder.build(
+                task.getDestination(), task.getStartDate(), req.getDays());
+        if (weatherContext != null && !weatherContext.isBlank()) {
+            userInput = weatherContext + "\n\n" + userInput;
+        }
         Map<String, Object> initialState = new HashMap<>();
         initialState.put("userInput", userInput);
         initialState.put("userId", task.getUserId());
         initialState.put("retryCount", 0);
         initialState.put("retrievalQuery", buildRetrievalQuery(req));
         initialState.put(com.travel.planning.workflow.SnapshotNodeWrapper.TASK_ID_KEY, task.getId());
+        // M14-1b：消费水平/出行人数确定性下传（resume 子图同样生效）
+        if (profile != null && profile.getConsumeLevel() != null) {
+            initialState.put("consumeLevel", profile.getConsumeLevel());
+        }
+        if (req.getParty() != null && !req.getParty().isBlank()) {
+            initialState.put("party", req.getParty());
+        }
         injectSnapshot(initialState, "preference_analysis", "preference", snapshots);
         injectSnapshot(initialState, "attraction_filter", "attractions", snapshots);
         injectSnapshot(initialState, "route_arrangement", "routePlan", snapshots);

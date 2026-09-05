@@ -1,10 +1,12 @@
 package com.travel.common.entity;
 
 import com.baomidou.mybatisplus.annotation.TableName;
+import com.baomidou.mybatisplus.annotation.TableField;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
 
 import java.math.BigDecimal;
+import java.time.LocalDateTime;
 
 /**
  * M11-1：行程历史版本快照（t_itinerary_version）。
@@ -30,4 +32,8 @@ public class ItineraryVersion extends BaseEntity {
 
     /** 上次→本次 diff JSON（四列表） */
     private String versionDiff;
+
+    /** t_itinerary_version 无 updated_at 列：覆盖父类字段避免 MyBatis-Plus 查询报错 */
+    @TableField(exist = false)
+    private LocalDateTime updatedAt;
 }

@@ -19,9 +19,8 @@ public class RouteModeResolver {
         if (containsAny(text, "步行", "漫步", "观光", "骑行")) {
             return MapRouteMode.WALKING;
         }
-        if (containsAny(text, "地铁", "公交", "高铁", "火车", "大巴")) {
-            return MapRouteMode.UNSUPPORTED;
-        }
+        // 公交/地铁等暂不单独接入方向 API：可视化统一走驾车路网，
+        // 近距离（≤5km）仍按步行处理，避免“虚线示意”影响地图体验。
         return haversineMeters(a, b) > 5000 ? MapRouteMode.DRIVING : MapRouteMode.WALKING;
     }
 

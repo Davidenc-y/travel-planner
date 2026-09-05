@@ -24,6 +24,10 @@ public class ItineraryResponseDTO {
     private String title;
     private String destination;
     private Integer days;
+    /** M15-4：当前启用的版本号（版本切换不再递增；供前端高亮“当前使用”） */
+    private Integer version;
+    /** M13-2g：生成请求/聊天声明的预算上限（chat 创建行程后应回填） */
+    private BigDecimal budget;
     private List<DayPlan> dayPlans;
     private BigDecimal estimatedCost;
     private BudgetBreakdown budgetBreakdown;
@@ -62,6 +66,8 @@ public class ItineraryResponseDTO {
         private String timeSlot;
         private BigDecimal cost;
         private String notes;
+        /** M15-2：景点类型（CULTURE/NATURE/FOOD/SHOPPING/FAMILY/LEISURE；无匹配为 null） */
+        private String type;
         /** M11-2：景点坐标（由行程详情读取时按名称回查 t_attraction；缺失为 null） */
         private Double latitude;
         private Double longitude;

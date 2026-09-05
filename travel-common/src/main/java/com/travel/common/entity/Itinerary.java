@@ -56,6 +56,9 @@ public class Itinerary extends BaseEntity {
     /** 幂等键 UUID */
     private String clientRequestId;
 
+    /** M13-2a：发起会话 ID（chat 规划/REFINE 回写关联；页面生成为空时 null） */
+    private String sessionId;
+
     /** M11-1：版本号（每次终态内容变化递增，默认 1） */
     private Integer version;
 
