@@ -95,7 +95,7 @@ public class ItineraryVersionPortImpl implements ItineraryVersionPort {
                     log.warn("[ItineraryWriteback] 会话行程归属不符，跳过回写: sessionId={}", sessionId);
                     return Optional.empty();
                 }
-                Optional<Long> refined = refine(existing, sessionId, routePlanJson, budgetJson);
+                Optional<Long> refined = refine(existing, sessionId, userInput, routePlanJson, budgetJson);
                 refined.ifPresent(id -> triggerBehaviorRecompute(userId));
                 return refined;
             }
@@ -112,8 +112,8 @@ public class ItineraryVersionPortImpl implements ItineraryVersionPort {
         }
     }
 
-    private Optional<Long> refine(Itinerary current, String sessionId, String routePlanJson,
-                                  String budgetJson) {
+    private Optional<Long> refine(Itinerary current, String sessionId, String userInput,
+                                  String routePlanJson, String budgetJson) {
         CostedContent merged = mergeContent(
                 current.getContent(), routePlanJson, budgetJson);
         String mindmapData = buildMindmap(current, merged.content());
@@ -126,6 +126,9 @@ public class ItineraryVersionPortImpl implements ItineraryVersionPort {
         if (rows <= 0) {
             return Optional.empty();
         }
+        // M26-F1：用本轮确定性解析更新约束列（预算改成 5000 → t_itinerary.budget=5000；
+        // 天数变更同理；未提及的字段保持原值）——行程详情页预算展示与偏好回写的数据源
+        applyRefinedConstraints(current, userInput);
         sliceWriter.writeAfterGenerated(sessionId, current.getId(), merged.content());
         log.info("[ItineraryWriteback] REFINE 回写完成: itineraryId={}, sessionId={}",
                 current.getId(), sessionId);
@@ -165,6 +168,46 @@ public class ItineraryVersionPortImpl implements ItineraryVersionPort {
                 entity.getId(), destination, days);
         sliceWriter.writeAfterGenerated(sessionId, entity.getId(), entity.getContent());
         return Optional.of(entity.getId());
+    }
+
+    /**
+     * M26-F1：REFINE 后同步约束列（确定性 parse；null=未提及不覆盖）。
+     * 直接 UpdateWrapper 定向更新，避免与 updateCompleted 的全量更新耦合。
+     */
+    private void applyRefinedConstraints(Itinerary current, String userInput) {
+        if (userInput == null || userInput.isBlank()) {
+            return;
+        }
+        try {
+            java.math.BigDecimal newBudget = parseBudget(userInput);
+            Integer newDays = parseDays(userInput);
+            boolean budgetChanged = newBudget != null
+                    && (current.getBudget() == null || newBudget.compareTo(current.getBudget()) != 0);
+            boolean daysChanged = newDays != null && newDays > 0
+                    && !newDays.equals(current.getDays());
+            if (!budgetChanged && !daysChanged) {
+                return;
+            }
+            com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper<Itinerary> uw =
+                    new com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper<Itinerary>()
+                            .eq("id", current.getId());
+            if (budgetChanged) {
+                uw.set("budget", newBudget);
+                current.setBudget(newBudget);
+            }
+            if (daysChanged) {
+                uw.set("days", newDays);
+                current.setDays(newDays);
+            }
+            itineraryMapper.update(null, uw);
+            log.info("[ItineraryWriteback] 约束列已更新: itineraryId={}, budget={}, days={}",
+                    current.getId(),
+                    budgetChanged ? newBudget.toPlainString() : "(unchanged)",
+                    daysChanged ? newDays : "(unchanged)");
+        } catch (Exception e) {
+            log.warn("[ItineraryWriteback] 约束列更新失败（不阻断回写）: id={}, error={}",
+                    current.getId(), e.getMessage());
+        }
     }
 
     /** 用确定性 MindmapGenerator 根据最新 content 生成思维导图；失败保留原值/null。 */

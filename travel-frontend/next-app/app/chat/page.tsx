@@ -18,6 +18,7 @@ import { Composer } from '@/components/chat/Composer';
 import { AnchorDotButton, AnchorPanel, AnchorTags } from '@/components/chat/composer/anchor-panel';
 import { useSessionAnchor } from '@/hooks/useSessionAnchor';
 import { useSessionPreference } from '@/hooks/useSessionPreference';
+import { mergePreferenceSync } from '@/lib/schemas';
 import { PreferenceDotButton, PreferencePanel, PreferenceTagsRow } from '@/components/chat/composer/preference-panel';
 import { ChatHeader } from '@/components/chat/ChatHeader';
 import {
@@ -426,6 +427,10 @@ function ChatContent() {
           itineraryId: streamed.suggestion.itineraryId,
           title: streamed.suggestion.title,
         });
+      }
+      // M26-F3：本轮有效约束回写 → 偏好标签动态同步（合并语义见 mergePreferenceSync）
+      if (streamed.preferenceSync) {
+        preference.setTags(sid!, mergePreferenceSync(preference.tagsOf(sid!), streamed.preferenceSync));
       }
       if (streamed.handled) return; // M10-1b：40303 已在 hook 内完成提示与气泡
       const stages = chatStream.getThinkingLines(sid!);

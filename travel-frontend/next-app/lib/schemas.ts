@@ -68,3 +68,34 @@ export function removePreferenceField(tags: PreferenceTags, key: string): Prefer
   }
   return next;
 }
+
+/**
+ * M26-F3：done.preferenceSync → 偏好标签合并。
+ *
+ * <p>sync 来自行程约束列（本轮有效约束的权威值），覆盖同名字段；
+ * startDate/remember 等本地字段保留；budget 为纯数字字符串需转 number，
+ * 非法值（NaN/负数）忽略不改写。</p>
+ */
+export function mergePreferenceSync(
+  current: PreferenceTags,
+  sync: {
+    destination?: string;
+    days?: number;
+    budget?: string;
+    party?: string;
+    interests?: string[];
+  },
+): PreferenceTags {
+  const merged: PreferenceTags = { ...current };
+  if (sync.destination) merged.destination = sync.destination;
+  if (sync.days != null) merged.days = sync.days;
+  if (sync.budget != null) {
+    const budgetNum = Number(sync.budget);
+    if (Number.isFinite(budgetNum) && budgetNum >= 0) merged.budget = budgetNum;
+  }
+  if (sync.party) merged.party = sync.party as PreferenceTags['party'];
+  if (sync.interests && sync.interests.length > 0) {
+    merged.interests = sync.interests as PreferenceTags['interests'];
+  }
+  return merged;
+}

@@ -165,6 +165,16 @@ public class ItineraryService {
         return toResponseDTO(entity);
     }
 
+    /** M26-F2：按 session_id 查行程 id 列表（webflux 内部桥：suggestion 资格判定）。 */
+    public java.util.List<Long> findSessionItineraryIds(String sessionId) {
+        if (sessionId == null || sessionId.isBlank()) {
+            return java.util.List.of();
+        }
+        return itineraryMapper.selectList(new com.baomidou.mybatisplus.core.conditions.query.QueryWrapper<Itinerary>()
+                        .eq("session_id", sessionId).select("id"))
+                .stream().map(Itinerary::getId).toList();
+    }
+
     /** M7 D6：未知/禁用/不可选模型 → 40005，不静默回退。 */
     private void validateModel(String model) {
         if (model == null || model.isBlank()) {

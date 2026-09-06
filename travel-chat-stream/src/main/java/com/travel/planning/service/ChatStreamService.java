@@ -164,6 +164,29 @@ public class ChatStreamService extends AbstractStreamingPipeline {
                             "preferredDestination", result.preferenceConflict().preferredDestination(),
                             "anchoredDestination", result.preferenceConflict().anchoredDestination()));
                 }
+                // M26-F3：本轮有效约束回写（null 不追加；前端同步偏好标签）
+                if (result.preferenceSync() != null) {
+                    java.util.Map<String, Object> sync = new LinkedHashMap<>();
+                    if (result.preferenceSync().destination() != null) {
+                        sync.put("destination", result.preferenceSync().destination());
+                    }
+                    if (result.preferenceSync().days() != null) {
+                        sync.put("days", result.preferenceSync().days());
+                    }
+                    if (result.preferenceSync().budget() != null) {
+                        sync.put("budget", result.preferenceSync().budget());
+                    }
+                    if (result.preferenceSync().party() != null) {
+                        sync.put("party", result.preferenceSync().party());
+                    }
+                    if (result.preferenceSync().interests() != null
+                            && !result.preferenceSync().interests().isEmpty()) {
+                        sync.put("interests", result.preferenceSync().interests());
+                    }
+                    if (!sync.isEmpty()) {
+                        done.put("preferenceSync", sync);
+                    }
+                }
                 // M23（P-D）：锚定询问载荷（null 不追加=旧契约字节不变；parity 兼容）
                 if (result.suggestion() != null) {
                     done.put("suggestion", Map.of(

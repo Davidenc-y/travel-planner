@@ -294,7 +294,17 @@ public class ChatRoutingStep {
     /** M15-1：PLANNING/REFINE 前拼接天气参考段；不可用时不改变输入。 */
     private String withWeather(ChatIntent intent, String composed) {
         if (intent != ChatIntent.PLANNING && intent != ChatIntent.REFINE
-                || chatWeatherContextPort == null || composed == null) {
+                || composed == null) {
+            return composed;
+        }
+        // M26-F4：注入当前日期上下文（确定性；用户未指定出发日期时禁止编造过去日期）
+        java.time.LocalDate today = java.time.LocalDate.now();
+        String dow = today.getDayOfWeek().getDisplayName(
+                java.time.format.TextStyle.FULL, java.util.Locale.CHINESE);
+        String dateLine = "\n【当前日期】" + today + "（" + dow + "）。用户未指定出发日期时，"
+                + "行程日期从今天之后合理选择或用『第N天』相对表述，禁止编造已过去的日期。\n";
+        composed = composed + dateLine;
+        if (chatWeatherContextPort == null) {
             return composed;
         }
         String weather = chatWeatherContextPort.build(composed);

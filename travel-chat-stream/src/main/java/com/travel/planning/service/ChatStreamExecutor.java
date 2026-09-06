@@ -60,19 +60,37 @@ public interface ChatStreamExecutor {
     record ChatStreamResult(String response, long aiTokens, boolean fallback,
                             Long assistantMessageId, String sessionTitle,
                             AnchorSuggestion suggestion,
-                            PreferenceConflict preferenceConflict) {
+                            PreferenceConflict preferenceConflict,
+                            PreferenceSync preferenceSync) {
 
-        /** M23 前的五参兼容构造（suggestion/conflict=null），既有调用点零改动。 */
+        /** M23 前的五参兼容构造（suggestion/conflict/sync=null），既有调用点零改动。 */
         public ChatStreamResult(String response, long aiTokens, boolean fallback,
                                 Long assistantMessageId, String sessionTitle) {
-            this(response, aiTokens, fallback, assistantMessageId, sessionTitle, null, null);
+            this(response, aiTokens, fallback, assistantMessageId, sessionTitle, null, null, null);
         }
 
-        /** M23 的六参兼容构造（conflict=null）。 */
+        /** M23 的六参兼容构造（conflict/sync=null）。 */
         public ChatStreamResult(String response, long aiTokens, boolean fallback,
                                 Long assistantMessageId, String sessionTitle,
                                 AnchorSuggestion suggestion) {
-            this(response, aiTokens, fallback, assistantMessageId, sessionTitle, suggestion, null);
+            this(response, aiTokens, fallback, assistantMessageId, sessionTitle, suggestion, null, null);
+        }
+
+        /** M25 的七参兼容构造（sync=null）。 */
+        public ChatStreamResult(String response, long aiTokens, boolean fallback,
+                                Long assistantMessageId, String sessionTitle,
+                                AnchorSuggestion suggestion,
+                                PreferenceConflict preferenceConflict) {
+            this(response, aiTokens, fallback, assistantMessageId, sessionTitle,
+                    suggestion, preferenceConflict, null);
+        }
+
+        /**
+         * M26-F3：本轮规划/精修后的有效约束回写（结构化；来源=回写行程的约束列，
+         * 前端据此同步偏好标签）。null=本轮无规划资产变化，不触发同步。
+         */
+        public record PreferenceSync(String destination, Integer days, String budget,
+                                    String party, java.util.List<String> interests) {
         }
 
         /** M25（E4 收尾）：偏好目的地 vs 锚定目的地冲突结构化信号（供前端提示条）。 */

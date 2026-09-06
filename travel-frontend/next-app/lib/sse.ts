@@ -24,6 +24,14 @@ export interface StreamDonePayload {
   suggestion?: { type: string; itineraryId: number; title: string };
   // M25（E4 收尾）：偏好目的地 vs 锚定目的地冲突
   preferenceConflict?: { preferredDestination: string; anchoredDestination: string };
+  // M26-F3：本轮有效约束回写（来自行程约束列；空字段由后端过滤）
+  preferenceSync?: {
+    destination?: string;
+    days?: number;
+    budget?: string;
+    party?: string;
+    interests?: string[];
+  };
   // M6-16：行程流式 done（/itineraries/generate/stream）
   itineraryId?: number;
   status?: string;

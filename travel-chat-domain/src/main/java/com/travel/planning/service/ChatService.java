@@ -560,10 +560,19 @@ public class ChatService implements ChatStreamExecutor {
                                 "ANCHOR_NEW_ITINERARY", b.id(), b.title()))
                         .orElse(null);
             }
+            // M26-F3：本轮有效约束回写——回写成功后从行程约束列构建（含 F1 更新后的 budget/days）
+            com.travel.planning.service.ChatStreamExecutor.ChatStreamResult.PreferenceSync preferenceSync = null;
+            if (routedItineraryId != null) {
+                preferenceSync = itineraryBriefPort.briefOf(userId, routedItineraryId)
+                        .map(b -> new com.travel.planning.service.ChatStreamExecutor.ChatStreamResult.PreferenceSync(
+                                b.destination(), b.days(), b.budget(), b.party(), null))
+                        .filter(ps -> ps.destination() != null || ps.days() != null || ps.budget() != null)
+                        .orElse(null);
+            }
             return new ChatStreamExecutor.ChatStreamResult(
                     response, aiTokens, routed.fallback(),
                     assistantMessageId, prepared.sessionTitle(),
-                    suggestion);
+                    suggestion, preferenceConflict, preferenceSync);
         } catch (TurnInterruptedException e) {
             // M6-36/46：中断终止——不落库 assistant 回答。
             // 幂等状态：PENDING→INTERRUPTED（用户停止可恢复；覆盖 SSE abort 与

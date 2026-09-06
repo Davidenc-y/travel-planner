@@ -63,6 +63,10 @@ public class WebConfig implements WebMvcConfigurer {
                         "/api/v1/auth/refresh",
                         // M22-1：进程间回写桥走 X-Internal-Token（M21-2 fail-closed），不走用户 Bearer
                         "/api/v1/itineraries/chat-writeback",
+                        // M26-F2：webflux 内部桥（brief/会话行程/天气；X-Internal-Token fail-closed）
+                        "/api/v1/itineraries/chat-brief",
+                        "/api/v1/itineraries/chat-session-itineraries",
+                        "/api/v1/itineraries/chat-weather",
                         // M25（E5）：分享公开只读面（授权=签名 token；匿名限流面覆盖）
                         "/api/v1/share/**");
     }

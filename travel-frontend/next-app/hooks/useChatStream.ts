@@ -33,6 +33,14 @@ export interface StreamedResult {
   suggestion?: AnchorSuggestion;
   /** M25（E4 收尾）：偏好目的地 vs 锚定目的地冲突（供提示条） */
   preferenceConflict?: { preferredDestination: string; anchoredDestination: string };
+  /** M26-F3：本轮有效约束回写（供偏好标签动态同步） */
+  preferenceSync?: {
+    destination?: string;
+    days?: number;
+    budget?: string;
+    party?: string;
+    interests?: string[];
+  };
 }
 
 /** M10-1b：业务错误展示回调（page 只注入能力，不承载提示/气泡拼装逻辑） */
@@ -156,6 +164,13 @@ export function useChatStream(
       tokens?: number;
       suggestion?: { type: string; itineraryId: number; title: string };
       preferenceConflict?: { preferredDestination: string; anchoredDestination: string };
+      preferenceSync?: {
+        destination?: string;
+        days?: number;
+        budget?: string;
+        party?: string;
+        interests?: string[];
+      };
     } = {};
     thinkingRef.current[sid] = [];
     for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
@@ -200,6 +215,7 @@ export function useChatStream(
             doneState.tokens = p.tokens;
             doneState.suggestion = p.suggestion;
             doneState.preferenceConflict = p.preferenceConflict;
+            doneState.preferenceSync = p.preferenceSync;
           },
           onId: (id) => {
             lastId = id;
@@ -218,6 +234,7 @@ export function useChatStream(
           tokens: doneState.tokens,
           suggestion: doneState.suggestion,
           preferenceConflict: doneState.preferenceConflict,
+          preferenceSync: doneState.preferenceSync,
         };
       } catch (err: unknown) {
         if (isAbortError(err)) throw err;
