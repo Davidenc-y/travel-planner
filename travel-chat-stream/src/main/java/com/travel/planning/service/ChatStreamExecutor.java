@@ -18,18 +18,37 @@ public interface ChatStreamExecutor {
         return prepareStream(userId, sessionId, message, clientMessageId, model);
     }
 
+    /** M23b（E4）：携带偏好标签的七参准备（六参 default 委托，preferences=null 语义不变）。 */
+    default ChatStreamPrepared prepareStream(Long userId, String sessionId, String message,
+                                             String clientMessageId, String model,
+                                             java.util.List<Long> anchorIds,
+                                             com.travel.common.dto.PreferenceTagsDTO preferences) {
+        return prepareStream(userId, sessionId, message, clientMessageId, model, anchorIds);
+    }
+
     ChatStreamResult runStream(ChatStreamPrepared prepared, ChatProgressListener listener);
 
     /** 流式准备产物（gate 供流式路径复用，避免幂等门禁重复执行） */
     record ChatStreamPrepared(String sessionId, String message, Long userId,
                               String clientMessageId, TurnGate gate,
                               String sessionTitle, String model,
-                              java.util.List<Long> anchorIds) {
-        /** M23 前的七参兼容构造（锚定空集），既有测试/调用点零改动。 */
+                              java.util.List<Long> anchorIds,
+                              com.travel.common.dto.PreferenceTagsDTO preferences) {
+        /** M23 前的七参兼容构造（锚定空集/无偏好），既有测试/调用点零改动。 */
         public ChatStreamPrepared(String sessionId, String message, Long userId,
                                   String clientMessageId, TurnGate gate,
                                   String sessionTitle, String model) {
-            this(sessionId, message, userId, clientMessageId, gate, sessionTitle, model, java.util.List.of());
+            this(sessionId, message, userId, clientMessageId, gate, sessionTitle, model,
+                    java.util.List.of(), null);
+        }
+
+        /** M23 的八参兼容构造（无偏好）。 */
+        public ChatStreamPrepared(String sessionId, String message, Long userId,
+                                  String clientMessageId, TurnGate gate,
+                                  String sessionTitle, String model,
+                                  java.util.List<Long> anchorIds) {
+            this(sessionId, message, userId, clientMessageId, gate, sessionTitle, model,
+                    anchorIds, null);
         }
 
         public boolean replay() {

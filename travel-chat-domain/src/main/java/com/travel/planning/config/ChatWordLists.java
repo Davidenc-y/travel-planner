@@ -55,6 +55,9 @@ public class ChatWordLists {
     /** 组5：偏好陈述触发词 + 消费风格映射词 */
     private Preference preference = new Preference();
 
+    /** 组6（M23b/E3）：偶然偏移（DETOUR）高频模式——与主线无关的提问主题词（观测期判定用） */
+    private List<String> detour = new ArrayList<>();
+
     @Data
     public static class Heuristics {
         private List<String> planning = new ArrayList<>();
@@ -110,6 +113,10 @@ public class ChatWordLists {
         requireGroup(fact.getPartyPatterns(), "travel.chat.word-lists.fact.party-patterns");
         requireGroup(fact.getStylePatterns(), "travel.chat.word-lists.fact.style-patterns");
         requireGroup(preference.getStatementKeywords(), "travel.chat.word-lists.preference.statement-keywords");
+        // M23b（E3）：detour 组允许为空（空=判定器全部按主线处理，等价关闭）——不强制 fail-fast
+        if (detour == null) {
+            detour = new ArrayList<>();
+        }
 
         // 意图词跨组重复：语义提示（不阻断——优先级靠前的意图生效是既有语义）
         Set<String> seen = new HashSet<>();

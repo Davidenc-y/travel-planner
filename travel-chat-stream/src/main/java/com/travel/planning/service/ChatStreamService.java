@@ -50,7 +50,8 @@ public class ChatStreamService extends AbstractStreamingPipeline {
         try {
             ChatStreamExecutor.ChatStreamPrepared prepared = executor.prepareStream(
                     request.userId(), request.sessionId(), request.input(),
-                    request.clientMessageId(), modelOf(request), anchorIdsOf(request));
+                    request.clientMessageId(), modelOf(request), anchorIdsOf(request),
+                    preferencesOf(request));
             return StreamPreflight.ok(prepared);
         } catch (BusinessException e) {
             return StreamPreflight.fail(e.getCode(), e.getMessage());
@@ -58,6 +59,21 @@ public class ChatStreamService extends AbstractStreamingPipeline {
             log.error("[ChatStream] preflight 意外异常: sessionId={}", request.sessionId(), e);
             return StreamPreflight.fail(50000, "流式处理失败，请稍后重试");
         }
+    }
+
+    /** M23b（E4）：从 StreamRequest.attributes 读取偏好标签（Map→DTO， Jackson 容错）。 */
+    @SuppressWarnings("unchecked")
+    private static com.travel.common.dto.PreferenceTagsDTO preferencesOf(StreamRequest request) {
+        Object prefs = request.attributes().get("preferences");
+        if (prefs instanceof Map<?, ?> map) {
+            try {
+                return new com.fasterxml.jackson.databind.ObjectMapper()
+                        .convertValue(map, com.travel.common.dto.PreferenceTagsDTO.class);
+            } catch (Exception e) {
+                return null;
+            }
+        }
+        return null;
     }
 
     /** M23（E1）：从 StreamRequest.attributes 读取消息内锚定快照（per-turn truth）。 */

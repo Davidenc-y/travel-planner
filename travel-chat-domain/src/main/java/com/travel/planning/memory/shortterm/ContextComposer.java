@@ -34,13 +34,23 @@ public class ContextComposer {
                 sessionContext, candidates, message, "");
     }
 
-    /** M23（E1）：八参重载——anchorSection（【锚定行程】段）插在历史之后、最新确认之前。 */
+    /** M23（E1）：九参重载——anchorSection（【锚定行程】段）插在历史之后、最新确认之前。 */
     public ComposedContext compose(String sessionId, Long userId,
                                    String profileContext, String historySection,
                                    String consensus, String sessionContext,
                                    String candidates, String message, String anchorSection) {
+        return compose(sessionId, userId, profileContext, historySection, consensus,
+                sessionContext, candidates, message, anchorSection, "");
+    }
+
+    /** M23b（E4）：十参重载——preferenceSection（【本轮偏好约束】段）紧随锚定段（丢弃顺位最低）。 */
+    public ComposedContext compose(String sessionId, Long userId,
+                                   String profileContext, String historySection,
+                                   String consensus, String sessionContext,
+                                   String candidates, String message, String anchorSection,
+                                   String preferenceSection) {
         ComposedInput ci = composeWithTokens(profileContext, historySection, consensus,
-                sessionContext, candidates, message, anchorSection);
+                sessionContext, candidates, message, anchorSection, preferenceSection);
         String composed = ci.text();
         int inputTokens = ci.tokens();
 
@@ -50,7 +60,7 @@ public class ContextComposer {
             if (hasSummary) {
                 historySection = Markers.SESSION_SUMMARY + "\n" + summaryOnly;
                 ComposedInput c1 = composeWithTokens(profileContext, historySection, consensus,
-                        sessionContext, candidates, message, anchorSection);
+                        sessionContext, candidates, message, anchorSection, preferenceSection);
                 composed = c1.text();
                 inputTokens = c1.tokens();
             }
@@ -61,7 +71,7 @@ public class ContextComposer {
                         summaryOnly, Math.max(100, memoryProps.getInputMaxTokens() - reserve));
                 historySection = Markers.SESSION_SUMMARY + "\n" + cut;
                 ComposedInput c2 = composeWithTokens(profileContext, historySection, consensus,
-                        sessionContext, candidates, message, anchorSection);
+                        sessionContext, candidates, message, anchorSection, preferenceSection);
                 composed = c2.text();
                 inputTokens = c2.tokens();
                 log.warn("[ContextComposer] 注入总预算超限，已压缩摘要: tokens={}", inputTokens);
@@ -72,7 +82,7 @@ public class ContextComposer {
                 profileContext = profileContextAssembler.assemble(
                         profilePort.getOrCreate(userId), memoryProps.getProfileMaxTokens() / 2);
                 ComposedInput c3 = composeWithTokens(profileContext, historySection, consensus,
-                        sessionContext, candidates, message, anchorSection);
+                        sessionContext, candidates, message, anchorSection, preferenceSection);
                 composed = c3.text();
                 inputTokens = c3.tokens();
                 log.warn("[ContextComposer] 注入总预算超限，已收紧画像段: tokens={}", inputTokens);
@@ -83,14 +93,16 @@ public class ContextComposer {
 
     private ComposedInput composeWithTokens(String profileContext, String historySection,
                                             String consensus, String sessionContext,
-                                            String candidates, String message, String anchorSection) {
+                                            String candidates, String message, String anchorSection,
+                                            String preferenceSection) {
         String composed = composeInput(profileContext, historySection, consensus,
-                sessionContext, candidates, message, anchorSection);
+                sessionContext, candidates, message, anchorSection, preferenceSection);
         return new ComposedInput(composed, sessionMemoryPort.estimateTokens(composed));
     }
 
     private String composeInput(String profileContext, String historySection, String consensus,
-                                String sessionContext, String candidates, String message, String anchorSection) {
+                                String sessionContext, String candidates, String message, String anchorSection,
+                                String preferenceSection) {
         StringBuilder input = new StringBuilder();
         if (!profileContext.isBlank()) {
             input.append(profileContext).append("\n\n");
@@ -101,6 +113,11 @@ public class ContextComposer {
         // M23（E1）：锚定段紧随历史（锚定=讨论对象，先于结论/知识段；紧预算丢弃顺位低于最新确认）
         if (anchorSection != null && !anchorSection.isBlank()) {
             input.append(anchorSection).append("\n\n");
+        }
+
+        // M23b（E4）：偏好段紧随锚定（用户显式输入，丢弃顺位最低=最后被丢弃）
+        if (preferenceSection != null && !preferenceSection.isBlank()) {
+            input.append(preferenceSection).append("\n\n");
         }
         if (consensus != null && !consensus.isBlank()) {
             input.append(consensus).append("\n\n");

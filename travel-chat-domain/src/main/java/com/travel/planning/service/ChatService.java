@@ -86,6 +86,10 @@ public class ChatService implements ChatStreamExecutor {
     /** M23（E1）：锚定存储（brief 渲染 + 会话锚定集合）。 */
     private final com.travel.planning.memory.anchor.SessionAnchorStore sessionAnchorStore;
     private final com.travel.planning.memory.anchor.ItineraryBriefPort itineraryBriefPort;
+    /** M23b（E4）：偏好段渲染器（确定性；含目的地冲突提示行）。 */
+    private final com.travel.planning.memory.preference.PreferenceSectionRenderer preferenceSectionRenderer;
+    /** M23b（E3）：注意力焦点判定器（观测模式：仅日志，不隔离）。 */
+    private final com.travel.planning.memory.focus.AttentionFocusResolver attentionFocusResolver;
 
     /**
      * 创建会话
@@ -437,10 +441,20 @@ public class ChatService implements ChatStreamExecutor {
                 int totalHistoryTokens = memory.totalHistoryTokens();
                 l.onThinking("budget", "正在组装上下文…");
                 // M3-16：步骤 7 预算（检索注入+组装+四档预算兜底；语义同 F63/F66/F78/F83/F85）
+                // M23b（E3，P-F 第一阶段）：焦点判定（观测模式——仅结构化日志，三闸门隔离待观测期达标）
+                var focus = attentionFocusResolver.resolve(intent, message);
+                log.info("[ChatFocus] sessionId={}, intent={}, focus={}, anchorCount={}",
+                        sessionId, intent, focus, anchorIds.size());
                 // M23（E1）：锚定段渲染（空集→空段不注入）；切片过滤在 BudgetStep 内按 anchorIds 执行
                 String anchorSection = sessionAnchorStore.renderSection(userId, anchorIds);
+                // M23b（E4）：偏好段渲染（含与锚定目的地的冲突提示行）+ 检索 query 偏好拼接
+                com.travel.common.dto.PreferenceTagsDTO preferences = prepared.preferences();
+                String preferenceSection = preferenceSectionRenderer.render(
+                        preferences,
+                        anchorBriefsDestination(anchorSection));
                 ChatBudgetStep.BudgetContext budget = chatBudgetStep.compose(sessionId, userId, intent,
-                        message, profileContext, historySection, anchorSection, anchorIds);
+                        message, profileContext, historySection, anchorSection, anchorIds,
+                        preferenceSection, preferenceSectionRenderer.querySuffix(preferences));
                 composed = budget.composed();
                 inputTokens = budget.inputTokens();
                 profileContext = budget.profileContext();
@@ -508,6 +522,7 @@ public class ChatService implements ChatStreamExecutor {
             if (!routed.streamed()) {
                 l.onResponse(response);
             }
+
             // M23（P-D）："可选规划为空"确定性判定——本轮回写成功且会话无锚定、无关联行程
             Long routedItineraryId = routed == null ? null : routed.writtenItineraryId();
             com.travel.planning.service.ChatStreamExecutor.ChatStreamResult.AnchorSuggestion suggestion = null;
@@ -569,6 +584,16 @@ public class ChatService implements ChatStreamExecutor {
         } finally {
             cancellationRegistry.remove(clientMessageId);
         }
+    }
+
+    /** M23b（E4）：从【锚定行程】段提取首个锚定目的地（单锚定首发；无则 null）。 */
+    private String anchorBriefsDestination(String anchorSection) {
+        if (anchorSection == null) {
+            return null;
+        }
+        java.util.regex.Matcher m = java.util.regex.Pattern
+                .compile("目的地:([^\s]+)").matcher(anchorSection);
+        return m.find() ? m.group(1) : null;
     }
 
     /** 异常链中是否存在 InterruptedException（含 Lettuce RedisCommandInterruptedException）。 */

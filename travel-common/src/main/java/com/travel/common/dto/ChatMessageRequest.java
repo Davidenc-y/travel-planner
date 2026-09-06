@@ -2,6 +2,7 @@ package com.travel.common.dto;
 
 import java.util.List;
 
+import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
 import jakarta.validation.constraints.Pattern;
@@ -29,4 +30,8 @@ public class ChatMessageRequest {
     /** M23（E1）：消息内锚定快照（per-turn truth；≤3，单锚定首发由前端互斥约束）。 */
     @Size(max = 3, message = "锚定行程数量超限")
     private List<Long> anchoredItineraryIds;
+
+    /** M23b（E4）：本轮偏好标签（结构化约束，不自动写长期画像）。 */
+    @Valid
+    private PreferenceTagsDTO preferences;
 }

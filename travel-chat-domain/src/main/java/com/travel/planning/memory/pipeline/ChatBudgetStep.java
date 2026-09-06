@@ -64,12 +64,22 @@ public class ChatBudgetStep {
     public BudgetContext compose(String sessionId, Long userId, ChatIntent intent,
                                  String message, String profileContext, String historySection,
                                  String anchorSection, java.util.List<Long> anchorIds) {
+        return compose(sessionId, userId, intent, message, profileContext, historySection,
+                anchorSection, anchorIds, "", "");
+    }
+
+    /** M23b（E4）：十参重载——preferenceSection 注入 + querySuffix 检索拼接。 */
+    public BudgetContext compose(String sessionId, Long userId, ChatIntent intent,
+                                 String message, String profileContext, String historySection,
+                                 String anchorSection, java.util.List<Long> anchorIds,
+                                 String preferenceSection, String preferenceQuerySuffix) {
         // F63：确定性预检索注入——把知识库候选景点放入上下文，确保聊天链消费知识库。
         // F66：非检索意图（画像/偏好/闲聊类）跳过预检索，避免无关候选污染上下文。
         // M4-2：topK 配置化（travel.rag.*，默认值等于 F63/F83 硬编码）
         String candidates = needsKnowledgeRetrievalByIntent(intent)
                 ? knowledgeRetrievalService.retrieveCandidates(
-                        message, ragInjectionProperties.getAttractionCandidatesTopK()) : "[]";
+                        message + (preferenceQuerySuffix == null ? "" : preferenceQuerySuffix),
+                        ragInjectionProperties.getAttractionCandidatesTopK()) : "[]";
         // Phase C/F78（C3）：按需检索本会话历史知识（结构化，供共识层与注入共用，只检索一次）
         // F83：topK 放大（默认 8），避免类型加分把行程切片挤出注入（E4 召回问题）
         List<Map<String, Object>> sessionHits = sessionKnowledgeWriter.searchStructured(
