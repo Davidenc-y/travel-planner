@@ -41,6 +41,42 @@ public class SessionMemoryServiceImpl implements SessionMemoryPort {
     // M3-20：Prompt 模板外置（P1-17）
     private final PromptTemplates promptTemplates;
 
+    // M24（E3）：DETOUR 摘要过滤（闸门 3）——可选依赖（测试直构时为 null=不过滤）
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.travel.planning.config.DetourIsolationProperties detourIsolationProperties;
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.travel.planning.memory.focus.DetourWordMatcher detourWordMatcher;
+
+    /** M24（E3）闸门 3：摘要输入剔除 DETOUR 轮（确定性重评：用户消息命中→该轮 user+紧随 assistant 一并剔除）。 */
+    static java.util.List<ChatMessage> filterDetourTurns(java.util.List<ChatMessage> messages,
+                                                         java.util.function.Predicate<String> detourPredicate) {
+        if (messages == null || messages.isEmpty()) {
+            return messages;
+        }
+        java.util.List<ChatMessage> out = new java.util.ArrayList<>();
+        boolean skipAssistant = false;
+        for (ChatMessage m : messages) {
+            boolean isUser = m.getRole() != null && "user".equalsIgnoreCase(m.getRole());
+            if (isUser) {
+                boolean detour = detourPredicate.test(m.getContent());
+                skipAssistant = detour;
+                if (detour) {
+                    continue;
+                }
+            } else if (skipAssistant) {
+                continue; // 剔除 detour 用户消息紧随的 assistant 回复
+            }
+            out.add(m);
+        }
+        return out;
+    }
+
+    /** M24（E3）：闸门 3 生效判定（配置/匹配器缺失 = 不过滤）。 */
+    private boolean summaryFilterActive() {
+        return detourIsolationProperties != null && detourWordMatcher != null
+                && detourIsolationProperties.isEnabled() && detourIsolationProperties.isSummaryFilter();
+    }
+
     /** M3-9：请求内消息快照（同一请求多次读取只查一次库；异步线程各自独立加载） */
     private final ThreadLocal<Map<String, List<ChatMessage>>> requestMessages =
             ThreadLocal.withInitial(LinkedHashMap::new);
@@ -153,6 +189,11 @@ public class SessionMemoryServiceImpl implements SessionMemoryPort {
                 return true; // 空会话：无需收口，视为成功（由调用方落空摘要标记）
             }
             SummaryInfo info = getSummaryInfo(sessionId);
+            // M24（E3）闸门 3：收口摘要同样剔除 DETOUR 轮
+            if (summaryFilterActive()) {
+                messages = filterDetourTurns(messages,
+                        content -> detourWordMatcher.isLikelyDetour(content));
+            }
             String fullText = buildFullText(messages, props.getSummaryMaxChars());
             String summary = callSummarize(fullText, props.getSummaryHardMaxTokens());
             if (summary.isBlank()) {
@@ -283,6 +324,11 @@ public class SessionMemoryServiceImpl implements SessionMemoryPort {
                     refreshTtl(sessionId);
                     return;
                 }
+            }
+            // M24（E3）闸门 3：摘要输入剔除 DETOUR 轮（确定性重评；默认关=零变化）
+            if (summaryFilterActive()) {
+                newMessages = filterDetourTurns(newMessages,
+                        content -> detourWordMatcher.isLikelyDetour(content));
             }
             String incremental = buildFullText(newMessages, props.getSummaryMaxChars());
             if (incremental.isBlank()) {

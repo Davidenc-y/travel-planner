@@ -11,7 +11,8 @@ travel:
   # M22-1（Phase 3A）：路径级认证强制模式（planning MVC 拦截器消费）
   # observe=灰度观测（would-deny 日志不阻断）；on=未认证一律 40101；off=回退纯解析
   auth:
-    enforce-mode: observe
+    # M24（M22 遗留收紧）：observe 观测期 would-deny 零误伤 → 收紧为 on（未认证拦截器层 40101）
+    enforce-mode: "on"
   # M21-2（SEC-02-02）：服务间内部调用共享密钥（8083→8081 chat-writeback 桥）；
   # 空缺省 = fail-closed（未配置时桥端点拒绝一切内部调用）。本地开发在 application-local.yml 覆盖。
   internal:
@@ -149,7 +150,7 @@ travel:
         planning: [规划, 行程, 推荐, 景点, 日游, 预算, 攻略, 哪里]
         recall: [上次, 之前, 回顾, 安排了哪些, 都去了, 去过, 行程记录]
         change: [优化, 调整, 重新规划, 改成, 换, 重新安排]
-      # M23b（E3）：偶然偏移（DETOUR）高频模式——与主线无关的提问主题（观测期；isolation 三闸门待 D-V8-4 观测期达标后开启）
+      # M23b（E3）：偶然偏移（DETOUR）高频模式——与主线无关的提问主题（观测期判定词表）
       detour: [天气, 穿什么, 汇率, 翻译, 签证, 时差, 纪念币, 彩票, 星座]
       chunker:
         constraint-substrings: [预算改成, 预算是, 预算上限, 预算控制, 预算调整, 降低预算, 想去, 喜欢, 不要, 必须, 带, 免费, 亲子, 家庭, 独行, 情侣, 朋友, 住, 酒店, 门票]
@@ -164,6 +165,13 @@ travel:
         statement-keywords: [记住, 偏好, 设为, 改为, 设置为, 预算, 喜欢, 消费]
         style-economy: [经济, 穷游, 实惠]
         style-comfort: [品质, 舒适, 享受]
+    # M24（E3）：三闸门隔离（默认关=观测模式；D-V8-4 达标后改 enabled: true；
+    # 子闸门可分批开启/单闸回退：slice-skip 切片 / profile-skip 偏好 / summary-filter 摘要）
+    detour-isolation:
+      enabled: false
+      slice-skip: true
+      profile-skip: true
+      summary-filter: true
     supervisor:
       # M9-4：聊天规划路径冲突观测（只写 trace，不阻断；false=行为等价现状）
       conflict-observe:

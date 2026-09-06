@@ -90,6 +90,10 @@ public class ChatService implements ChatStreamExecutor {
     private final com.travel.planning.memory.preference.PreferenceSectionRenderer preferenceSectionRenderer;
     /** M23b（E3）：注意力焦点判定器（观测模式：仅日志，不隔离）。 */
     private final com.travel.planning.memory.focus.AttentionFocusResolver attentionFocusResolver;
+    /** M24（E3）：DETOUR 词表匹配器（意图无关预判，供写通道闸门）。 */
+    private final com.travel.planning.memory.focus.DetourWordMatcher detourWordMatcher;
+    /** M24（E3）：三闸门隔离配置（默认关；D-V8-4 观测期达标后开启）。 */
+    private final com.travel.planning.config.DetourIsolationProperties detourIsolationProperties;
 
     /**
      * 创建会话
@@ -421,11 +425,24 @@ public class ChatService implements ChatStreamExecutor {
                 candidates = (String) breakpoint.get("candidates");
             } else {
                 l.onThinking("preference", "正在分析您的偏好…");
+                // M24（E3）：DETOUR 闸门（默认关）——detour 轮跳过偏好落库/会话切片，
+                // 主线记忆不被偶然偏移污染（闸门 1/2；观察日志见 [ChatFocus]）
+                boolean detourSkip = detourIsolationProperties.isEnabled()
+                        && detourWordMatcher.isLikelyDetour(message);
+                if (detourSkip) {
+                    log.info("[ChatFocus] DETOUR 隔离生效: sessionId={}, profileSkip={}, sliceSkip={}",
+                            sessionId, detourIsolationProperties.isProfileSkip(),
+                            detourIsolationProperties.isSliceSkip());
+                }
                 // M3-12：步骤 3 偏好（确定性偏好保存；语义同 F71）
-                chatPreferenceStep.saveIfPreference(userId, message);
+                if (!(detourSkip && detourIsolationProperties.isProfileSkip())) {
+                    chatPreferenceStep.saveIfPreference(userId, message);
+                }
                 l.onThinking("knowledge", "正在整理会话知识…");
                 // M3-13：步骤 4 知识（切片+异步写入；语义同 Phase C/F78 C1）
-                chatKnowledgeStep.writeUserMessageAsync(sessionId, message);
+                if (!(detourSkip && detourIsolationProperties.isSliceSkip())) {
+                    chatKnowledgeStep.writeUserMessageAsync(sessionId, message);
+                }
                 l.onThinking("intent", "正在理解您的意图…");
                 // M3-14：步骤 5 意图（分类+追溯填充；语义同 F85/F89）
                 intent = chatIntentStep.classify(sessionId, userId, message);
