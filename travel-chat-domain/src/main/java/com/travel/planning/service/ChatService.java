@@ -83,6 +83,9 @@ public class ChatService implements ChatStreamExecutor {
     private final ModelRegistry modelRegistry;
     // M7：实际路由模型追溯记录（direct 路径由 runStream 包裹捕获）
     private final ModelRouteTracker modelRouteTracker;
+    /** M23（E1）：锚定存储（brief 渲染 + 会话锚定集合）。 */
+    private final com.travel.planning.memory.anchor.SessionAnchorStore sessionAnchorStore;
+    private final com.travel.planning.memory.anchor.ItineraryBriefPort itineraryBriefPort;
 
     /**
      * 创建会话
@@ -123,8 +126,15 @@ public class ChatService implements ChatStreamExecutor {
      */
     public ChatResponseDTO sendMessage(String sessionId, String message, Long userId,
                                        String clientMessageId, String model) {
+        return sendMessage(sessionId, message, userId, clientMessageId, model, java.util.List.of());
+    }
+
+    /** M23（E1）：JSON 兜底路径同样携带锚定快照（与 SSE 路径 per-turn truth 一致）。 */
+    public ChatResponseDTO sendMessage(String sessionId, String message, Long userId,
+                                       String clientMessageId, String model,
+                                       java.util.List<Long> anchorIds) {
         ChatStreamExecutor.ChatStreamPrepared prepared =
-                prepareStream(userId, sessionId, message, clientMessageId, model);
+                prepareStream(userId, sessionId, message, clientMessageId, model, anchorIds);
         if (prepared.replay()) {
             // 命中 COMPLETED：直接重放，不落任何库（豁免会话状态校验——已归档会话也应可重放）
             return ChatResponseDTO.builder()
@@ -152,6 +162,18 @@ public class ChatService implements ChatStreamExecutor {
     @Override
     public ChatStreamExecutor.ChatStreamPrepared prepareStream(
             Long userId, String sessionId, String message, String clientMessageId, String model) {
+        // M23（E1）：旧五参委托六参（锚定空集）——既有调用点零破坏
+        return prepareStream(userId, sessionId, message, clientMessageId, model, java.util.List.of());
+    }
+
+    /** M23（E1）：六参实现——消息内锚定快照经 prepared 贯穿 runStream（per-turn truth）。 */
+    @Override
+    public ChatStreamExecutor.ChatStreamPrepared prepareStream(
+            Long userId, String sessionId, String message, String clientMessageId, String model,
+            java.util.List<Long> anchorIds) {
+        if (anchorIds == null) {
+            anchorIds = java.util.List.of();
+        }
         // F52：防御脏 userId（兜底 0 会导致 user_id=0 画像/会话）。
         if (userId == null || userId <= 0) {
             throw new BusinessException(40101, "用户未登录");
@@ -207,7 +229,7 @@ public class ChatService implements ChatStreamExecutor {
             }
         }
         return new ChatStreamExecutor.ChatStreamPrepared(
-                sessionId, message, userId, clientMessageId, gate, updatedSessionTitle, model);
+                sessionId, message, userId, clientMessageId, gate, updatedSessionTitle, model, anchorIds);
     }
 
     /** M7 D6：未知/禁用/不可选模型 → 40005，不静默回退。 */
@@ -352,6 +374,9 @@ public class ChatService implements ChatStreamExecutor {
 
     private ChatStreamExecutor.ChatStreamResult runStreamInternal(
             ChatStreamExecutor.ChatStreamPrepared prepared, ChatProgressListener listener) {
+        // M23（E1）：消息内锚定快照（per-turn truth；切换/勾选随消息生效）
+        java.util.List<Long> anchorIds = prepared.anchorIds() == null
+                ? java.util.List.of() : prepared.anchorIds();
         String sessionId = prepared.sessionId();
         String message = prepared.message();
         Long userId = prepared.userId();
@@ -412,8 +437,10 @@ public class ChatService implements ChatStreamExecutor {
                 int totalHistoryTokens = memory.totalHistoryTokens();
                 l.onThinking("budget", "正在组装上下文…");
                 // M3-16：步骤 7 预算（检索注入+组装+四档预算兜底；语义同 F63/F66/F78/F83/F85）
+                // M23（E1）：锚定段渲染（空集→空段不注入）；切片过滤在 BudgetStep 内按 anchorIds 执行
+                String anchorSection = sessionAnchorStore.renderSection(userId, anchorIds);
                 ChatBudgetStep.BudgetContext budget = chatBudgetStep.compose(sessionId, userId, intent,
-                        message, profileContext, historySection);
+                        message, profileContext, historySection, anchorSection, anchorIds);
                 composed = budget.composed();
                 inputTokens = budget.inputTokens();
                 profileContext = budget.profileContext();
@@ -481,9 +508,21 @@ public class ChatService implements ChatStreamExecutor {
             if (!routed.streamed()) {
                 l.onResponse(response);
             }
+            // M23（P-D）："可选规划为空"确定性判定——本轮回写成功且会话无锚定、无关联行程
+            Long routedItineraryId = routed == null ? null : routed.writtenItineraryId();
+            com.travel.planning.service.ChatStreamExecutor.ChatStreamResult.AnchorSuggestion suggestion = null;
+            if (routedItineraryId != null
+                    && sessionAnchorStore.getAnchors(prepared.sessionId()).isEmpty()
+                    && itineraryBriefPort.findSessionItineraryIds(prepared.sessionId()).isEmpty()) {
+                suggestion = itineraryBriefPort.briefOf(userId, routedItineraryId)
+                        .map(b -> new com.travel.planning.service.ChatStreamExecutor.ChatStreamResult.AnchorSuggestion(
+                                "ANCHOR_NEW_ITINERARY", b.id(), b.title()))
+                        .orElse(null);
+            }
             return new ChatStreamExecutor.ChatStreamResult(
                     response, aiTokens, routed.fallback(),
-                    assistantMessageId, prepared.sessionTitle());
+                    assistantMessageId, prepared.sessionTitle(),
+                    suggestion);
         } catch (TurnInterruptedException e) {
             // M6-36/46：中断终止——不落库 assistant 回答。
             // 幂等状态：PENDING→INTERRUPTED（用户停止可恢复；覆盖 SSE abort 与

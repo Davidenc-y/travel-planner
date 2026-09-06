@@ -41,4 +41,7 @@ public class ChatMessage implements Serializable {
 
     /** token 消耗 */
     private Integer tokens;
+
+    /** M23（E1）：该轮消息携带的锚定快照（JSON 数组文本；per-turn truth 留痕）。 */
+    private String anchoredItineraryIds;
 }

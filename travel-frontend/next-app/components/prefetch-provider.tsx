@@ -19,7 +19,7 @@ export function PrefetchProvider() {
 
   useEffect(() => {
     // 路由级预取（Next 内部处理请求生命周期）
-    router.prefetch('/plan');
+
     router.prefetch('/itinerary');
     router.prefetch('/chat');
     router.prefetch('/attractions');

@@ -5,7 +5,7 @@ import type { NextRequest } from 'next/server';
  * 路由守卫（F91）：未登录访问受保护页 → /login。
  * 前端登录时由 auth-context 写入 accessToken cookie（F91 双写）。
  */
-const PROTECTED = ['/plan', '/itinerary', '/chat', '/profile', '/admin/reliability'];
+const PROTECTED = ['/itinerary', '/chat', '/profile', '/admin/reliability']; // M23（E1/P-C）：/plan 已收敛为 /chat 重定向
 
 function tokenExpired(token: string): boolean {
   try {

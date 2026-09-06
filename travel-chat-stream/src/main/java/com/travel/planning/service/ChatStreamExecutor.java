@@ -11,12 +11,27 @@ public interface ChatStreamExecutor {
     ChatStreamPrepared prepareStream(Long userId, String sessionId, String message,
                                      String clientMessageId, String model);
 
+    /** M23（E1）：携带消息内锚定快照的六参准备（旧五参 default 委托，双栈/既有实现零破坏）。 */
+    default ChatStreamPrepared prepareStream(Long userId, String sessionId, String message,
+                                             String clientMessageId, String model,
+                                             java.util.List<Long> anchorIds) {
+        return prepareStream(userId, sessionId, message, clientMessageId, model);
+    }
+
     ChatStreamResult runStream(ChatStreamPrepared prepared, ChatProgressListener listener);
 
     /** 流式准备产物（gate 供流式路径复用，避免幂等门禁重复执行） */
     record ChatStreamPrepared(String sessionId, String message, Long userId,
                               String clientMessageId, TurnGate gate,
-                              String sessionTitle, String model) {
+                              String sessionTitle, String model,
+                              java.util.List<Long> anchorIds) {
+        /** M23 前的七参兼容构造（锚定空集），既有测试/调用点零改动。 */
+        public ChatStreamPrepared(String sessionId, String message, Long userId,
+                                  String clientMessageId, TurnGate gate,
+                                  String sessionTitle, String model) {
+            this(sessionId, message, userId, clientMessageId, gate, sessionTitle, model, java.util.List.of());
+        }
+
         public boolean replay() {
             return !gate.proceed();
         }
@@ -24,6 +39,17 @@ public interface ChatStreamExecutor {
 
     /** 流式执行结果 */
     record ChatStreamResult(String response, long aiTokens, boolean fallback,
-                            Long assistantMessageId, String sessionTitle) {
+                            Long assistantMessageId, String sessionTitle,
+                            AnchorSuggestion suggestion) {
+
+        /** M23 前的五参兼容构造（suggestion=null），既有调用点零改动。 */
+        public ChatStreamResult(String response, long aiTokens, boolean fallback,
+                                Long assistantMessageId, String sessionTitle) {
+            this(response, aiTokens, fallback, assistantMessageId, sessionTitle, null);
+        }
+
+        /** M23（P-D）：done.suggestion 载荷（null=done.data 不追加该键，旧契约字节不变）。 */
+        public record AnchorSuggestion(String type, Long itineraryId, String title) {
+        }
     }
 }

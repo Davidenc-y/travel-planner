@@ -20,6 +20,8 @@ export interface StreamDonePayload {
   tokens?: number;
   sessionTitle?: string;
   replayed?: boolean;
+  // M23（P-D）：锚定询问（AI 生成新规划且会话无可选规划）
+  suggestion?: { type: string; itineraryId: number; title: string };
   // M6-16：行程流式 done（/itineraries/generate/stream）
   itineraryId?: number;
   status?: string;

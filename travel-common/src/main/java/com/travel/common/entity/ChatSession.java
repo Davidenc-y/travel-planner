@@ -37,6 +37,9 @@ public class ChatSession extends BaseEntity {
      */
     private String summaryFinal;
 
+    /** M23（E1）：会话锚定的行程 id 集合（JSON 数组文本；由 SessionAnchorStore 解析）。 */
+    private String anchoredItineraryIds;
+
     /**
      * M6-49：最后一条消息时间（非表列，仅会话列表按最近消息置顶排序时
      * 由 SQL 子查询映射回填；无消息会话为 null）。

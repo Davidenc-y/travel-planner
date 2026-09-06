@@ -11,8 +11,7 @@ import { UserAvatar } from './ui/user-avatar';
 import { useConfirm } from './ui/confirm-dialog';
 
 const navItems = [
-  // F96：原"首页"改为"规划"（进入 /plan 规划功能页）；"/" 现为欢迎展示页（点击 Logo 返回）
-  { href: '/plan', label: '规划', icon: Compass },
+  // M23（E1/P-C）：规划独立入口移除——规划收敛为聊天会话内"行程话题锚定"（/plan 常驻 307 到 /chat）
   { href: '/itinerary', label: '行程', icon: MapPin },
   { href: '/chat', label: '聊天', icon: MessageSquare },
   { href: '/attractions', label: '景点', icon: Search },

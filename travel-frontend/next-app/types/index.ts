@@ -276,3 +276,15 @@ export interface ModelOption {
   provider: string;
   selectable: boolean;
 }
+
+/** M23（E1）：锚定行程 brief（会话锚定标签/注入视图）。 */
+export interface AnchorBrief {
+  id: number;
+  title: string;
+  destination?: string | null;
+  days?: number | null;
+  budget?: string | null;
+  party?: string | null;
+  version?: number | null;
+  attractionNames?: string[] | null;
+}

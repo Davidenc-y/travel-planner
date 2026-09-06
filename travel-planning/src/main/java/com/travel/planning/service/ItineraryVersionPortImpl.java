@@ -43,6 +43,8 @@ public class ItineraryVersionPortImpl implements ItineraryVersionPort {
 
     /** M18-2：解析词表/算法迁 ItineraryWritebackProperties（默认值=原字面量，可 yml 覆盖） */
     private final ItineraryWritebackProperties parseProps;
+    /** M23（P-D/E2）：单锚定时 REFINE 目标=锚定行程。 */
+    private final com.travel.planning.memory.anchor.SessionAnchorStore sessionAnchorStore;
     /** M20-1：聊天建行程/REFINE 成功后异步重算行为画像（此前仅 /generate 与 /resume 触发） */
     private final com.travel.planning.memory.longterm.behavior.BehaviorProfileService behaviorProfileService;
 
@@ -86,7 +88,8 @@ public class ItineraryVersionPortImpl implements ItineraryVersionPort {
             return Optional.empty();
         }
         try {
-            Itinerary existing = findLatestBySession(sessionId);
+            Itinerary existing = findLatestBySession(sessionId,
+                    sessionAnchorStore.getAnchors(sessionId));
             if (existing != null) {
                 if (!userId.equals(existing.getUserId())) {
                     log.warn("[ItineraryWriteback] 会话行程归属不符，跳过回写: sessionId={}", sessionId);
@@ -187,6 +190,21 @@ public class ItineraryVersionPortImpl implements ItineraryVersionPort {
     }
 
     private Itinerary findLatestBySession(String sessionId) {
+        return findLatestBySession(sessionId, null);
+    }
+
+    /**
+     * M23（P-D/E2）：单锚定时 REFINE 目标=锚定行程（确定性，替代隐式"最近更新"）；
+     * 锚定行程仍要求归属本人（selectById 校验在调用方 syncAfterPlanning 语义内）。
+     * 多锚定/无锚定回退原"最近更新"语义。
+     */
+    private Itinerary findLatestBySession(String sessionId, List<Long> anchorIds) {
+        if (anchorIds != null && anchorIds.size() == 1) {
+            Itinerary anchored = itineraryMapper.selectById(anchorIds.get(0));
+            if (anchored != null) {
+                return anchored;
+            }
+        }
         return itineraryMapper.selectOne(new QueryWrapper<Itinerary>()
                 .eq("session_id", sessionId)
                 .orderByDesc("updated_at")

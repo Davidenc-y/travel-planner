@@ -17,6 +17,12 @@ export interface StreamState {
   streamingText: string;
 }
 
+export interface AnchorSuggestion {
+  type: string;
+  itineraryId: number;
+  title: string;
+}
+
 export interface StreamedResult {
   text: string;
   sessionTitle?: string;
@@ -24,6 +30,7 @@ export interface StreamedResult {
   tokens?: number;
   /** M10-1b：业务错误已在 hook 内处理（如 40303 已提示+气泡），调用方不再兜底 */
   handled?: boolean;
+  suggestion?: AnchorSuggestion;
 }
 
 /** M10-1b：业务错误展示回调（page 只注入能力，不承载提示/气泡拼装逻辑） */
@@ -136,11 +143,16 @@ export function useChatStream(
     text: string,
     key: string,
     model?: string,
+    anchorIds?: number[],
   ): Promise<StreamedResult> => {
     const maxAttempts = 4;
     let acc = '';
     let lastId = '';
-    const doneState: { sessionTitle?: string; tokens?: number } = {};
+    const doneState: {
+      sessionTitle?: string;
+      tokens?: number;
+      suggestion?: { type: string; itineraryId: number; title: string };
+    } = {};
     thinkingRef.current[sid] = [];
     for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
       const controller = new AbortController();
@@ -182,6 +194,7 @@ export function useChatStream(
           onDone: (p) => {
             doneState.sessionTitle = p.sessionTitle;
             doneState.tokens = p.tokens;
+            doneState.suggestion = p.suggestion;
           },
           onId: (id) => {
             lastId = id;
@@ -191,10 +204,15 @@ export function useChatStream(
             e.code = p.code;
             throw e;
           },
-        }, lastId || undefined, model);
+        }, lastId || undefined, model, anchorIds);
         // M6-5：流结束不代表展示结束——等逐字揭示完成后才返回最终文本
         await waitForRevealComplete();
-        return { text: acc, sessionTitle: doneState.sessionTitle, tokens: doneState.tokens };
+        return {
+          text: acc,
+          sessionTitle: doneState.sessionTitle,
+          tokens: doneState.tokens,
+          suggestion: doneState.suggestion,
+        };
       } catch (err: unknown) {
         if (isAbortError(err)) throw err;
         const code = httpErrorCode(err);

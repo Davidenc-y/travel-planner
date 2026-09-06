@@ -19,7 +19,7 @@ const WELCOME_LINES = [
 ];
 
 const CAPABILITIES = [
-  { href: '/plan', icon: Map, title: '表单规划', desc: '输入偏好，AI 生成每日行程' },
+  { href: '/chat', icon: Map, title: '会话式规划', desc: '聊天中锚定行程，AI 生成并迭代行程' },
   { href: '/chat', icon: MessagesSquare, title: '对话规划', desc: '多轮对话，边聊边完善计划' },
   { href: '/attractions', icon: Search, title: '景点发现', desc: '语义检索与城市浏览' },
   { href: '/itinerary', icon: ClipboardList, title: '我的行程', desc: '管理、续跑与导出行程' },
@@ -70,7 +70,7 @@ function WelcomePage() {
       </div>
 
       <button
-        onClick={() => router.push('/plan')}
+        onClick={() => router.push('/chat')}
         className={cn(
           'flex items-center gap-2 px-8 py-3 rounded-2xl bg-brand-500 text-white font-medium',
           'hover:bg-brand-600 transition-all magnetic shadow-lg shadow-brand-500/20 focus-ring',
@@ -78,7 +78,7 @@ function WelcomePage() {
         )}
       >
         <Sparkles className="h-5 w-5" />
-        开始规划
+        开始对话
         <ArrowRight className="h-5 w-5" />
       </button>
 

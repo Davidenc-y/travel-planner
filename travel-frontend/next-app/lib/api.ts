@@ -257,11 +257,12 @@ export const chatApi = {
     planningApi.get<R<import('@/types').ChatMessage[]>>(`/api/v1/chat/sessions/${sessionId}/history`),
   /** M4-9：clientMessageId 为消息幂等键——超时/40904 退避重试须携带同键 */
   /** M7 Batch 3：model 可选——请求级模型（null=角色默认） */
-  sendMessage: (sessionId: string, message: string, clientMessageId?: string, model?: string) =>
+  sendMessage: (sessionId: string, message: string, clientMessageId?: string, model?: string, anchoredItineraryIds?: number[]) =>
     planningApi.post<R<import('@/types').ChatResponse>>(`/api/v1/chat/sessions/${sessionId}/messages`, {
       message,
       clientMessageId,
       ...(model ? { model } : {}),
+      ...(anchoredItineraryIds && anchoredItineraryIds.length > 0 ? { anchoredItineraryIds } : {}),
     }),
   /** M4-9：显式关闭会话（归档+收口摘要；禁止 beforeunload 触发） */
   closeSession: (sessionId: string) =>
@@ -294,6 +295,7 @@ export const chatApi = {
     handlers: SseStreamHandlers,
     lastEventId?: string,
     model?: string,
+    anchoredItineraryIds?: number[],
   ) => {
     const headers: Record<string, string> = {};
     if (typeof window !== 'undefined') {
@@ -306,7 +308,12 @@ export const chatApi = {
     const attempt = (base: string) =>
       consumeSseStream(
         `${base}/api/v1/chat/sessions/${sessionId}/messages/stream`,
-        { message, clientMessageId, ...(model ? { model } : {}) },
+        {
+          message,
+          clientMessageId,
+          ...(model ? { model } : {}),
+          ...(anchoredItineraryIds && anchoredItineraryIds.length > 0 ? { anchoredItineraryIds } : {}),
+        },
         headers,
         signal,
         handlers,
@@ -328,6 +335,20 @@ export const chatApi = {
 };
 
 // ==================== Models（M7 Batch 3：模型清单） ====================
+
+/** M23（E1）：会话锚定 API——GET 回读（含 brief）/ PUT 全量替换（幂等，返回有效集合）。 */
+export const anchorApi = {
+  getAnchors: (sessionId: string) =>
+    planningApi.get<R<import('@/types').AnchorBrief[]>>(
+      `/api/v1/chat/sessions/${sessionId}/anchored-itineraries`,
+    ),
+  replaceAnchors: (sessionId: string, itineraryIds: number[]) =>
+    planningApi.put<R<number[]>>(
+      `/api/v1/chat/sessions/${sessionId}/anchored-itineraries`,
+      { itineraryIds },
+    ),
+};
+
 export const modelApi = {
   /** 前端可选模型清单（后端仅返回 enabled 且 selectable；embedding/rerank 不可选） */
   list: () =>

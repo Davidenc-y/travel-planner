@@ -13,7 +13,10 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { Dialog } from '@/components/ui/dialog';
 import { SessionList } from '@/components/chat/SessionList';
 import { TurnScrollbar } from '@/components/chat/TurnScrollbar';
+import { Button } from '@/components/ui/button';
 import { Composer } from '@/components/chat/Composer';
+import { AnchorDotButton, AnchorPanel, AnchorTags } from '@/components/chat/composer/anchor-panel';
+import { useSessionAnchor } from '@/hooks/useSessionAnchor';
 import { ChatHeader } from '@/components/chat/ChatHeader';
 import {
   InterruptedBubble,
@@ -150,6 +153,11 @@ function ChatContent() {
   });
   // M7 Batch 3：用户模型偏好（'' = 智能默认）
   const modelPref = useModelPreference();
+  // M23（E1/E2）：会话锚定（per-turn truth 随消息发送；服务端存储仅恢复用）
+  const anchor = useSessionAnchor(currentSessionId);
+  const [anchorPanelOpen, setAnchorPanelOpen] = useState(false);
+  const [pendingSuggestion, setPendingSuggestion] = useState<{ itineraryId: number; title: string } | null>(null);
+  const anchorState = anchor.stateOf(currentSessionId);
 
   const activeDraftKey = currentSessionId ?? '__new__';
   const input = drafts[activeDraftKey] ?? '';
@@ -402,7 +410,14 @@ function ChatContent() {
     try {
       // M6：优先 SSE 流式；失败自动回退 JSON 端点
       const streamed = await chatStream.sendStreamWithRetry(
-        sid!, text, clientMessageId, modelPref.model);
+        sid!, text, clientMessageId, modelPref.model, anchorState.ids);
+      // M23（P-D）：AI 生成新规划且会话无可选规划 → 询问是否加入（done.suggestion）
+      if (streamed.suggestion && streamed.suggestion.type === 'ANCHOR_NEW_ITINERARY') {
+        setPendingSuggestion({
+          itineraryId: streamed.suggestion.itineraryId,
+          title: streamed.suggestion.title,
+        });
+      }
       if (streamed.handled) return; // M10-1b：40303 已在 hook 内完成提示与气泡
       const stages = chatStream.getThinkingLines(sid!);
       const aiMsg: ChatMessage = {
@@ -713,8 +728,58 @@ function ChatContent() {
           modelSlot={
             <ModelSelector value={modelPref.model} onChange={modelPref.select} dropUp compact />
           }
+          anchorSlot={
+            <div className="relative flex items-center gap-1">
+              <AnchorDotButton
+                count={anchorState.ids.length}
+                active={anchorState.ids.length > 0}
+                onClick={() => setAnchorPanelOpen((v) => !v)}
+              />
+              <AnchorPanel
+                open={anchorPanelOpen}
+                onClose={() => setAnchorPanelOpen(false)}
+                anchoredIds={anchorState.ids}
+                onToggle={(id) => {
+                  if (currentSessionId) void anchor.toggle(currentSessionId, id);
+                }}
+              />
+            </div>
+          }
+          anchorTags={
+            <AnchorTags
+              briefs={anchorState.briefs}
+              ids={anchorState.ids}
+              onRemove={(id) => {
+                if (currentSessionId) void anchor.toggle(currentSessionId, id);
+              }}
+            />
+          }
           textareaRef={textareaRef}
         />
+        {/* M23（P-D）：锚定询问确认卡片（确定性 done.suggestion，非 LLM 问句） */}
+        {pendingSuggestion && (
+          <div className="mx-2 mb-2 flex items-center gap-2 rounded-lg border border-brand/40 bg-brand/5 px-3 py-2 text-sm">
+            <span className="min-w-0 flex-1 truncate">
+              是否将「{pendingSuggestion.title}」加入本会话作为基准规划？
+            </span>
+            <Button
+              size="sm"
+              onClick={() => {
+                if (currentSessionId) {
+                  void anchor
+                    .toggle(currentSessionId, pendingSuggestion.itineraryId)
+                    .then(() => anchor.load(currentSessionId));
+                }
+                setPendingSuggestion(null);
+              }}
+            >
+              加入
+            </Button>
+            <Button variant="ghost" size="sm" onClick={() => setPendingSuggestion(null)}>
+              暂不
+            </Button>
+          </div>
+        )}
       </div>
 
       {/* 窄屏会话抽屉（C-05） */}

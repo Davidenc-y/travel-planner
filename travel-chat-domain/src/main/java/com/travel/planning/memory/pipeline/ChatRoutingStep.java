@@ -41,7 +41,12 @@ public class ChatRoutingStep {
      *
      * @param fallback M4-3：true=异常兜底文案（幂等登记 FAILED，重试不重放兜底）
      */
-    public record RouteResult(String response, long aiTokens, boolean fallback) {
+    public record RouteResult(String response, long aiTokens, boolean fallback,
+                              Long writtenItineraryId) {
+        /** M23 前的三参兼容构造。 */
+        public RouteResult(String response, long aiTokens, boolean fallback) {
+            this(response, aiTokens, fallback, null);
+        }
     }
 
     /**
@@ -52,7 +57,11 @@ public class ChatRoutingStep {
      *                 onResponse 统一分块输出
      */
     public record StreamRouteResult(String response, long aiTokens, boolean fallback,
-                                    boolean streamed) {
+                                    boolean streamed, Long writtenItineraryId) {
+        /** M23 前的四参兼容构造。 */
+        public StreamRouteResult(String response, long aiTokens, boolean fallback, boolean streamed) {
+            this(response, aiTokens, fallback, streamed, null);
+        }
     }
 
     private final TravelSupervisorAgent supervisorAgent;
@@ -115,6 +124,7 @@ public class ChatRoutingStep {
                              String sessionId,
                              List<Map<String, Object>> sessionHits,
                              TurnCancellation cancellation) {
+        Long writtenItineraryId = null; // M23（P-D）：回写成功的行程 id（供 suggestion 判定）
         TurnCancellation cancel = cancellation == null ? TurnCancellation.NOOP : cancellation;
         long routeStart = System.currentTimeMillis();
         String response;
@@ -155,7 +165,7 @@ public class ChatRoutingStep {
                     // M8-9：行程生成后写入 itinerary_day 切片（REFINE 覆盖旧版本）
                     observeConflictIfEnabled(composed, result.routePlanJson());
                     writeItineraryChunks(sessionId, result.routePlanJson());
-                    writebackIfEnabled(intent, userId, sessionId, composed,
+                    writtenItineraryId = writebackIfEnabled(intent, userId, sessionId, composed,
                             result.routePlanJson(), result.budgetJson());
                 }
             }
@@ -174,7 +184,7 @@ public class ChatRoutingStep {
         long routeElapsed = System.currentTimeMillis() - routeStart;
         log.info("[ChatRouting] intent={}, router={}, elapsedMs={}, fallback={}",
                 intent, routerOf(intent), routeElapsed, fallback);
-        return new RouteResult(response, aiTokens, fallback);
+        return new RouteResult(response, aiTokens, fallback, writtenItineraryId);
     }
 
     /**
@@ -221,11 +231,11 @@ public class ChatRoutingStep {
                                     groundingChecker, composed, r.answer());
                             observeConflictIfEnabled(composed, r.routePlanJson());
                             writeItineraryChunks(sessionId, r.routePlanJson());
-                            writebackIfEnabled(intent, userId, sessionId, composed,
+                            Long writtenId = writebackIfEnabled(intent, userId, sessionId, composed,
                                     r.routePlanJson(), r.budgetJson());
                             logElapsed(intent, routeStart, r.fallback());
                             return new StreamRouteResult(r.answer(), r.totalTokens(),
-                                    r.fallback(), true);
+                                    r.fallback(), true, writtenId);
                         }
                         catch (InterruptedException e) {
                             Thread.currentThread().interrupt();
@@ -322,29 +332,33 @@ public class ChatRoutingStep {
      * M13-2：聊天规划/REFINE 结果同步为行程资产（create-on-chat / REFINE 回写建版）。
      * 仅观测/资产层变化，不参与回答组装；失败静默降级。
      */
-    private void writebackIfEnabled(ChatIntent intent, Long userId, String sessionId,
+    private Long writebackIfEnabled(ChatIntent intent, Long userId, String sessionId,
                                     String userInput, String routePlanJson, String budgetJson) {
+        final Long[] writtenIdHolder = {null}; // M23（P-D）：lambda 内赋值用数组持有
         if (!itineraryWritebackEnabled || itineraryVersionPort == null
                 || intent != ChatIntent.PLANNING && intent != ChatIntent.REFINE) {
-            return;
+            return null;
         }
         if (routePlanJson == null || routePlanJson.isBlank()) {
             // M20-1：不再静默——2026-09-06 实证 REFINE 因图流输出丢失而无声跳过建版，
             // 用户仅在详情页发现"少了一个版本"。WARN 暴露原因供诊断。
             log.warn("[ItineraryWriteback] 跳过回写（routePlan 为空，图流子Agent 输出未合并或走了直答兜底）: "
                     + "sessionId={}, intent={}, answer将不建版", sessionId, intent);
-            return;
+            return null;
         }
         try {
             java.util.Optional<Long> itineraryId = itineraryVersionPort.syncAfterPlanning(
                     userId, sessionId, userInput, routePlanJson, budgetJson);
-            itineraryId.ifPresent(id -> log.info(
-                    "[ItineraryWriteback] 行程资产已同步: itineraryId={}, sessionId={}, intent={}",
-                    id, sessionId, intent));
+            itineraryId.ifPresent(id -> {
+                writtenIdHolder[0] = id;
+                log.info("[ItineraryWriteback] 行程资产已同步: itineraryId={}, sessionId={}, intent={}",
+                        id, sessionId, intent);
+            });
         } catch (Exception e) {
             log.warn("[ItineraryWriteback] 同步失败（不影响主流程）: sessionId={}, error={}",
                     sessionId, e.getMessage());
         }
+        return writtenIdHolder[0];
     }
 
     /**

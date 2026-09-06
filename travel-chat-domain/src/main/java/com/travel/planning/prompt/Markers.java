@@ -34,6 +34,8 @@ public final class Markers {
 
     /** 会话知识参考段。 */
     public static final String SESSION_KNOWLEDGE = "【会话知识参考】";
+    /** M23（E1）：锚定行程段——生产方 SessionAnchorStore.renderSection，消费方各 Agent prompt。 */
+    public static final String ANCHORED_ITINERARIES = "【锚定行程】";
 
     /** 知识库检索候选景点段。 */
     public static final String ATTRACTION_CANDIDATES = "【知识库检索候选景点】";

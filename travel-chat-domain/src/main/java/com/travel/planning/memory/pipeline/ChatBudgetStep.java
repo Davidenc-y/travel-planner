@@ -56,6 +56,14 @@ public class ChatBudgetStep {
      */
     public BudgetContext compose(String sessionId, Long userId, ChatIntent intent,
                                  String message, String profileContext, String historySection) {
+        return compose(sessionId, userId, intent, message, profileContext, historySection,
+                "", java.util.List.of());
+    }
+
+    /** M23（E1）：八参重载——anchorSection 由 ChatService 渲染传入；anchorIds 过滤行程切片。 */
+    public BudgetContext compose(String sessionId, Long userId, ChatIntent intent,
+                                 String message, String profileContext, String historySection,
+                                 String anchorSection, java.util.List<Long> anchorIds) {
         // F63：确定性预检索注入——把知识库候选景点放入上下文，确保聊天链消费知识库。
         // F66：非检索意图（画像/偏好/闲聊类）跳过预检索，避免无关候选污染上下文。
         // M4-2：topK 配置化（travel.rag.*，默认值等于 F63/F83 硬编码）
@@ -66,6 +74,19 @@ public class ChatBudgetStep {
         // F83：topK 放大（默认 8），避免类型加分把行程切片挤出注入（E4 召回问题）
         List<Map<String, Object>> sessionHits = sessionKnowledgeWriter.searchStructured(
                 sessionId, message, ragInjectionProperties.getSessionContextTopK());
+        // M23（E2）：锚定非空时，itinerary_day 切片只保留锚定集合内的行程——
+        // 注意力切换的结构保证（AI 不再沿用切换前的旧规划）
+        if (anchorIds != null && !anchorIds.isEmpty()) {
+            sessionHits = sessionHits.stream()
+                    .filter(h -> {
+                        Object seq = h.get("seq");
+                        if (seq == null || !seq.toString().startsWith("itin:")) {
+                            return true; // 非行程切片不受过滤
+                        }
+                        return anchorIds.stream().anyMatch(id -> seq.toString().startsWith("itin:" + id + ":"));
+                    })
+                    .toList();
+        }
         // M4-5b：二次取父——itinerary_day 命中被 topK 截断丢天时，按 seq 前缀补全该行程全部天块
         sessionHits = expandItineraryParentView(sessionId, sessionHits);
         String sessionContext = SessionKnowledgeWriter.format(sessionHits);
@@ -83,7 +104,8 @@ public class ChatBudgetStep {
         }
         // M3-9：上下文组装与四档预算兜底收敛到 ContextComposer（行为等价）
         ContextComposer.ComposedContext cc = contextComposer.compose(sessionId, userId,
-                profileContext, historySection, consensus, sessionContext, candidates, message);
+                profileContext, historySection, consensus, sessionContext, candidates, message,
+                anchorSection);
         return new BudgetContext(cc.text(), cc.tokens(), cc.profileContext(), cc.historySection(),
                 candidates, sessionHits);
     }

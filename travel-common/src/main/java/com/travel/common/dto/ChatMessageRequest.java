@@ -1,6 +1,9 @@
 package com.travel.common.dto;
 
+import java.util.List;
+
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.Size;
 import jakarta.validation.constraints.Pattern;
 import lombok.Data;
 
@@ -22,4 +25,8 @@ public class ChatMessageRequest {
     /** M7：请求级模型 key（可选；null=角色默认） */
     @Pattern(regexp = "^[a-zA-Z0-9._-]{1,64}$", message = "模型参数非法")
     private String model;
+
+    /** M23（E1）：消息内锚定快照（per-turn truth；≤3，单锚定首发由前端互斥约束）。 */
+    @Size(max = 3, message = "锚定行程数量超限")
+    private List<Long> anchoredItineraryIds;
 }

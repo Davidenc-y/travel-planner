@@ -50,7 +50,7 @@ public class ChatStreamService extends AbstractStreamingPipeline {
         try {
             ChatStreamExecutor.ChatStreamPrepared prepared = executor.prepareStream(
                     request.userId(), request.sessionId(), request.input(),
-                    request.clientMessageId(), modelOf(request));
+                    request.clientMessageId(), modelOf(request), anchorIdsOf(request));
             return StreamPreflight.ok(prepared);
         } catch (BusinessException e) {
             return StreamPreflight.fail(e.getCode(), e.getMessage());
@@ -58,6 +58,18 @@ public class ChatStreamService extends AbstractStreamingPipeline {
             log.error("[ChatStream] preflight 意外异常: sessionId={}", request.sessionId(), e);
             return StreamPreflight.fail(50000, "流式处理失败，请稍后重试");
         }
+    }
+
+    /** M23（E1）：从 StreamRequest.attributes 读取消息内锚定快照（per-turn truth）。 */
+    private static java.util.List<Long> anchorIdsOf(StreamRequest request) {
+        Object ids = request.attributes().get("anchorIds");
+        if (ids instanceof java.util.List<?> list) {
+            return list.stream()
+                    .filter(x -> x instanceof Number)
+                    .map(x -> ((Number) x).longValue())
+                    .toList();
+        }
+        return java.util.List.of();
     }
 
     /** M7 Batch 2：从 StreamRequest.attributes 读取请求级 model（无则 null）。 */
@@ -128,6 +140,13 @@ public class ChatStreamService extends AbstractStreamingPipeline {
                 done.put("tokens", result.aiTokens());
                 if (result.sessionTitle() != null) {
                     done.put("sessionTitle", result.sessionTitle());
+                }
+                // M23（P-D）：锚定询问载荷（null 不追加=旧契约字节不变；parity 兼容）
+                if (result.suggestion() != null) {
+                    done.put("suggestion", Map.of(
+                            "type", result.suggestion().type(),
+                            "itineraryId", result.suggestion().itineraryId(),
+                            "title", result.suggestion().title() == null ? "" : result.suggestion().title()));
                 }
                 done.put("replayed", false);
                 sink.next(StreamEvent.done(meta, done,
