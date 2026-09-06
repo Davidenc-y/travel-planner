@@ -37,6 +37,10 @@ public final class TraceContext {
         public String chatConflictViolations;
         /** M9-3：图流节点执行次数超阈值告警 JSON 数组（null=无震荡） */
         public String graphFlowWarnings;
+        /** M27（S5/E3 观测支撑）：本轮注意力焦点判定（MAINLINE/DETOUR；null=未判定） */
+        public String focusKind;
+        /** M27（S5/E3 观测支撑）：DETOUR 隔离是否生效（null=开关关/未命中） */
+        public Boolean detourSkipped;
 
         public void addPath(String node) {
             path.add(node);

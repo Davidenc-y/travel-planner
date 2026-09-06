@@ -1,19 +1,16 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import {
-  Bar,
-  BarChart,
-  CartesianGrid,
-  Legend,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from 'recharts';
+import dynamic from 'next/dynamic';
 import { adminApi, getErrorMessage } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 import { formatTokenCount } from '@/lib/usage-format';
+
+// M27（S6）：recharts ~222KB 按需加载（降 /admin/reliability First Load JS；仅访问时拉取）
+const ReliabilityCharts = dynamic(() => import('./charts'), {
+  ssr: false,
+  loading: () => <div className="h-64 animate-pulse rounded-xl bg-surface-2" />,
+});
 
 interface ModelRow {
   model: string;
@@ -53,14 +50,14 @@ interface QuotaRow {
  * M11-3 + M14-1c：可靠性看板（后端白名单门控；含 token 趋势/模型耗时/地图配额水位）。
  */
 export default function ReliabilityPage() {
-  const { isAuthenticated, mounted } = useAuth();
+  const { isAuthenticated, isAdmin, mounted } = useAuth();
   const [days, setDays] = useState(7);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [stats, setStats] = useState<Record<string, unknown> | null>(null);
 
   useEffect(() => {
-    if (!mounted || !isAuthenticated) return;
+    if (!mounted || !isAuthenticated || !isAdmin) return;
     setLoading(true);
     setError('');
     adminApi.reliabilityStats(days)
@@ -71,13 +68,15 @@ export default function ReliabilityPage() {
       })
       .catch((err: unknown) => setError(getErrorMessage(err)))
       .finally(() => setLoading(false));
-  }, [days, isAuthenticated, mounted]);
+  }, [days, isAuthenticated, isAdmin, mounted]);
 
   const modelRows = (stats?.modelDistribution as ModelRow[] | undefined) ?? [];
   const nodeRows = (stats?.topNodes as NodeRow[] | undefined) ?? [];
   const trendData = (stats?.tokenDailyTrend as TrendPoint[] | undefined) ?? [];
   const durationRows = (stats?.modelDuration as DurationRow[] | undefined) ?? [];
   const quotaRows = (stats?.mapQuota as QuotaRow[] | undefined) ?? [];
+  // M27（S5/E3 观测支撑）：焦点分布（focusDistribution 为 {DETOUR, MAINLINE} 计数）
+  const focusRows = (stats?.focusDistribution as Record<string, number> | undefined) ?? {};
   const barData = modelRows.map((r) => ({
     name: r.model,
     total: r.total,
@@ -87,6 +86,16 @@ export default function ReliabilityPage() {
     tokens: r.tokens,
   }));
   const tokenTotal = Number(stats?.tokensTotal ?? 0);
+
+  // M27（S6）：非管理员直访防御（后端 40302 为权威；此处避免无谓请求与闪烁）
+  if (mounted && (!isAuthenticated || !isAdmin)) {
+    return (
+      <div className="mx-auto max-w-6xl px-4 py-16 text-center">
+        <p className="text-lg font-medium">无权访问</p>
+        <p className="mt-2 text-sm text-ink-faint">可靠性看板仅对白名单管理员开放。</p>
+      </div>
+    );
+  }
 
   return (
     <div className="mx-auto max-w-6xl px-4 py-8 space-y-6">
@@ -120,43 +129,30 @@ export default function ReliabilityPage() {
             <Metric label="Token 总量" value={formatTokenCount(tokenTotal)} />
           </div>
 
+          {/* M27（S5/E3 观测支撑）：焦点隔离观测卡（三闸门开启前的达标量化） */}
           <section className="rounded-xl border border-line bg-surface p-4">
-            <h2 className="mb-3 text-sm font-medium">Token 日趋势（成本观测）</h2>
-            {trendBarData.length > 0 ? (
-              <div className="h-64">
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={trendBarData}>
-                    <CartesianGrid strokeDasharray="3 3" />
-                    <XAxis dataKey="name" />
-                    <YAxis allowDecimals={false} />
-                    <Tooltip />
-                    <Legend />
-                    <Bar dataKey="tokens" name="Token 数" fill="#10b981" />
-                  </BarChart>
-                </ResponsiveContainer>
+            <h2 className="mb-3 text-sm font-medium">焦点隔离观测（E3 观测期）</h2>
+            <div className="grid gap-3 sm:grid-cols-3">
+              <div className="rounded-lg bg-surface-2 p-3">
+                <p className="text-xs text-ink-faint">DETOUR 样本（门槛 ≥30）</p>
+                <p className="text-lg font-semibold">{focusRows.DETOUR ?? 0}</p>
               </div>
-            ) : (
-              <p className="py-6 text-center text-sm text-ink-faint">
-                暂无 token 数据（itinerary 图 token 采集启用后可见）
-              </p>
-            )}
+              <div className="rounded-lg bg-surface-2 p-3">
+                <p className="text-xs text-ink-faint">主线样本（MAINLINE）</p>
+                <p className="text-lg font-semibold">{focusRows.MAINLINE ?? 0}</p>
+              </div>
+              <div className="rounded-lg bg-surface-2 p-3">
+                <p className="text-xs text-ink-faint">隔离生效次数（开关开启后）</p>
+                <p className="text-lg font-semibold">{String(stats.detourIsolated ?? 0)}</p>
+              </div>
+            </div>
+            <p className="mt-2 text-xs text-ink-faint">
+              判定来自 t_agent_trace.callPath 的 focus=/detourSkip= 标记；达标核对
+              （误判率/严重误伤）用 scripts/regression/check_e3_observation.py 人工标注后计算。
+            </p>
           </section>
 
-          <section className="rounded-xl border border-line bg-surface p-4">
-            <h2 className="mb-3 text-sm font-medium">模型调用分布（Top）</h2>
-            <div className="h-64">
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={barData}>
-                  <CartesianGrid strokeDasharray="3 3" />
-                  <XAxis dataKey="name" />
-                  <YAxis allowDecimals={false} />
-                  <Tooltip />
-                  <Legend />
-                  <Bar dataKey="total" name="调用次数" fill="#6366f1" />
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
-          </section>
+          <ReliabilityCharts trendBarData={trendBarData} barData={barData} />
 
           <div className="grid gap-4 lg:grid-cols-2">
             <section className="rounded-xl border border-line bg-surface p-4">

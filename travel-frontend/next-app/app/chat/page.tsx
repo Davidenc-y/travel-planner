@@ -794,14 +794,30 @@ function ChatContent() {
           }
           textareaRef={textareaRef}
         />
-        {/* M25（E4 收尾）：偏好目的地冲突提示条（确定性 done.preferenceConflict） */}
+        {/* M27（S6）：偏好-锚定冲突处理卡（M25 提示条升级：按偏好=解除锚定 / 保留=按锚定继续） */}
         {conflictNotice && (
-          <div className="mx-2 mb-2 flex items-center gap-2 rounded-lg border border-amber-500/40 bg-amber-500/5 px-3 py-2 text-sm">
-            <span className="min-w-0 flex-1 truncate">
+          <div className="mx-2 mb-2 flex flex-wrap items-center gap-2 rounded-lg border border-amber-500/40 bg-amber-500/5 px-3 py-2 text-sm">
+            <span className="min-w-0 flex-1">
               本轮按偏好目的地「{conflictNotice.preferredDestination}」处理（锚定行程目的地：{conflictNotice.anchoredDestination}）
             </span>
+            <Button
+              variant="secondary"
+              size="sm"
+              title="解除当前锚定，后续轮次按偏好目的地重新规划"
+              onClick={() => {
+                if (currentSessionId) {
+                  void anchor.clear(currentSessionId).then(() => {
+                    toast.success('已解除锚定，后续将按偏好目的地规划');
+                    anchor.load(currentSessionId);
+                  });
+                }
+                setConflictNotice(null);
+              }}
+            >
+              按偏好规划
+            </Button>
             <Button variant="ghost" size="sm" onClick={() => setConflictNotice(null)}>
-              知道了
+              保留锚定
             </Button>
           </div>
         )}

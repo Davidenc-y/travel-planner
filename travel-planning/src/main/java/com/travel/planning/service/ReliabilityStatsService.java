@@ -49,7 +49,9 @@ public class ReliabilityStatsService {
         Map<String, Long> nodeCount = new LinkedHashMap<>();
         Map<LocalDate, long[]> dailyTokens = new TreeMap<>();
         Map<String, List<Double>> durationsByModel = new LinkedHashMap<>();
+        Map<String, Long> focusCount = new LinkedHashMap<>();
         long tokensTotal = 0;
+        long detourIsolated = 0;
         int degraded = 0;
         for (AgentTrace t : rows) {
             if (t.getGroundingRate() != null) {
@@ -60,6 +62,18 @@ public class ReliabilityStatsService {
             }
             if ("DEGRADED".equalsIgnoreCase(t.getStatus())) {
                 degraded++;
+            }
+            // M27（S5/E3 观测支撑）：焦点分布与隔离生效计数（callPath 编码标记）
+            String callPathText = t.getCallPath();
+            if (callPathText != null) {
+                if (callPathText.contains("focus=DETOUR")) {
+                    focusCount.merge("DETOUR", 1L, Long::sum);
+                } else if (callPathText.contains("focus=MAINLINE")) {
+                    focusCount.merge("MAINLINE", 1L, Long::sum);
+                }
+                if (callPathText.contains("detourSkip=true")) {
+                    detourIsolated++;
+                }
             }
             String model = t.getModelName() == null || t.getModelName().isBlank()
                     ? "unknown" : t.getModelName();
@@ -98,6 +112,9 @@ public class ReliabilityStatsService {
         out.put("modelDistribution", toModelRows(modelStatus));
         out.put("topNodes", topNodes(nodeCount, 5));
         out.put("mapQuota", mapQuotaGuardService.usageSnapshot());
+        // M27（S5/E3 观测支撑）：看板焦点观测卡数据（DETOUR 样本/主线分布/隔离生效数）
+        out.put("focusDistribution", focusCount);
+        out.put("detourIsolated", detourIsolated);
         return out;
     }
 

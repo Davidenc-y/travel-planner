@@ -75,7 +75,7 @@ travel:
     user-ids: ${ADMIN_USER_IDS:2}
   # F104 P1：MinIO 业务对象存储（头像 avatars 桶）
   minio:
-    endpoint: http://192.168.253.129:9000
+    endpoint: http://${MIDDLEWARE_HOST:192.168.253.129}:9000
     access-key: minioadmin
     secret-key: minioadmin
     attractions-bucket: attractions

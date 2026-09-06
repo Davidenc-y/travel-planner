@@ -436,6 +436,14 @@ public class ChatService implements ChatStreamExecutor {
                             sessionId, detourIsolationProperties.isProfileSkip(),
                             detourIsolationProperties.isSliceSkip());
                 }
+                // M27（S5/E3 观测支撑）：隔离生效标记进 trace（callPath 编码；开关关时不记录）
+                if (detourSkip) {
+                    com.travel.planning.trace.TraceContext.Holder traceHolder =
+                            com.travel.planning.trace.TraceContext.current();
+                    if (traceHolder != null) {
+                        traceHolder.detourSkipped = true;
+                    }
+                }
                 // M3-12：步骤 3 偏好（确定性偏好保存；语义同 F71）
                 if (!(detourSkip && detourIsolationProperties.isProfileSkip())) {
                     chatPreferenceStep.saveIfPreference(userId, message);
@@ -464,6 +472,12 @@ public class ChatService implements ChatStreamExecutor {
                 var focus = attentionFocusResolver.resolve(intent, message);
                 log.info("[ChatFocus] sessionId={}, intent={}, focus={}, anchorCount={}",
                         sessionId, intent, focus, anchorIds.size());
+                // M27（S5/E3 观测支撑）：焦点判定进 trace（callPath 编码，供达标检查脚本/看板量化）
+                com.travel.planning.trace.TraceContext.Holder traceHolder =
+                        com.travel.planning.trace.TraceContext.current();
+                if (traceHolder != null) {
+                    traceHolder.focusKind = focus.name();
+                }
                 // M23（E1）：锚定段渲染（空集→空段不注入）；切片过滤在 BudgetStep 内按 anchorIds 执行
                 String anchorSection = sessionAnchorStore.renderSection(userId, anchorIds);
                 // M23b（E4）：偏好段渲染（含与锚定目的地的冲突提示行）+ 检索 query 偏好拼接

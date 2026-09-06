@@ -223,6 +223,19 @@ export const itineraryApi = {
   },
   getById: (id: number) =>
     planningApi.get<R<import('@/types').ItineraryResponse>>(`/api/v1/itineraries/${id}`),
+  /** M27（E7）：导出 .ics——二进制下载（fetch 带 Bearer；返回 Blob 供触发保存） */
+  exportIcs: async (id: number): Promise<Blob> => {
+    const headers: Record<string, string> = {};
+    if (typeof window !== 'undefined') {
+      const token = localStorage.getItem('accessToken');
+      if (token) headers.Authorization = `Bearer ${token}`;
+    }
+    const res = await fetch(`${PLANNING_BASE}/api/v1/itineraries/${id}/export.ics`, { headers });
+    if (!res.ok) {
+      throw Object.assign(new Error(`日历导出失败: HTTP ${res.status}`), { status: res.status });
+    }
+    return res.blob();
+  },
   list: (page = 1, size = 10) =>
     planningApi.get<R<import('@/types').PageResult<import('@/types').ItineraryResponse>>>('/api/v1/itineraries', { params: { page, size } }),
   delete: (id: number) =>

@@ -74,5 +74,22 @@ export function useSessionAnchor(currentSessionId?: string | null) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentSessionId]);
 
-  return { anchors, stateOf, load, toggle };
+  /** M27（S6）：清空会话锚定（偏好-锚定冲突卡"按偏好规划"动作；乐观更新失败回滚）。 */
+  const clear = useCallback(async (sid: string) => {
+    const prevIds = anchors[sid]?.ids ?? [];
+    setAnchors((prev) => ({
+      ...prev,
+      [sid]: { ...(prev[sid] ?? { ids: [], briefs: {} }), ids: [] },
+    }));
+    try {
+      await anchorApi.replaceAnchors(sid, []);
+    } catch {
+      setAnchors((prev) => ({
+        ...prev,
+        [sid]: { ...(prev[sid] ?? { ids: [], briefs: {} }), ids: prevIds },
+      }));
+    }
+  }, [anchors]);
+
+  return { anchors, stateOf, load, toggle, clear };
 }

@@ -43,6 +43,7 @@ public class ItineraryController {
     private final ItineraryVersionService itineraryVersionService;
     private final com.travel.planning.service.share.ShareTokenService shareTokenService;
     private final ItineraryMapRouteService itineraryMapRouteService;
+    private final com.travel.planning.service.export.ItineraryIcsService itineraryIcsService;
 
     /**
      * 生成行程
@@ -95,6 +96,19 @@ public class ItineraryController {
     @GetMapping("/{id}")
     public R<ItineraryResponseDTO> getById(@PathVariable Long id) {
         return R.ok(itineraryService.getById(id, AuthUtils.resolveUserId()));
+    }
+
+    /**
+     * M27（E7）：导出行程 .ics（iCalendar）——确定性生成，零 LLM。
+     * 认证 + 归属（40401/40302 与详情端点同语义）。
+     */
+    @GetMapping("/{id}/export.ics")
+    public ResponseEntity<byte[]> exportIcs(@PathVariable Long id) {
+        byte[] body = itineraryIcsService.exportIcs(AuthUtils.resolveUserId(), id);
+        return ResponseEntity.ok()
+                .header("Content-Type", "text/calendar;charset=UTF-8")
+                .header("Content-Disposition", "attachment; filename=\"itinerary-" + id + ".ics\"")
+                .body(body);
     }
 
     /**

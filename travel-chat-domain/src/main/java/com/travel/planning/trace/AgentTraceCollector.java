@@ -76,6 +76,13 @@ public class AgentTraceCollector {
         if (holder.graphFlowWarnings != null) {
             holder.path.add("graphFlowWarnings=" + holder.graphFlowWarnings);
         }
+        // M27（S5/E3 观测支撑）：焦点判定与隔离生效编码进 callPath（观测期达标量化数据源）
+        if (holder.focusKind != null) {
+            holder.path.add("focus=" + holder.focusKind);
+        }
+        if (Boolean.TRUE.equals(holder.detourSkipped)) {
+            holder.path.add("detourSkip=true");
+        }
         if (!holder.path.isEmpty()) {
             t.setCallPath(com.travel.common.util.JsonUtils.toJson(holder.path));
         }
