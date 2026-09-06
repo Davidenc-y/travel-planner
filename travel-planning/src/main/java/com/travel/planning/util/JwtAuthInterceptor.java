@@ -43,6 +43,12 @@ public class JwtAuthInterceptor implements HandlerInterceptor {
 
     @Override
     public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler) {
+        // M25 补缺：CORS 预检（OPTIONS）按规范不携带 Authorization 等自定义头，与认证无关——
+        // 放行交由 CORS 处理器响应；否则 enforce=on 会拦截预检，浏览器所有跨域请求
+        // 表现为 Network Error（2026-09-06 实测回归，行程页/模型列表全中）
+        if ("OPTIONS".equalsIgnoreCase(request.getMethod())) {
+            return true;
+        }
         boolean authenticated = false;
         String auth = request.getHeader("Authorization");
         if (auth != null && auth.startsWith(BEARER_PREFIX)) {
