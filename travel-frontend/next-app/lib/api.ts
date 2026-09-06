@@ -257,12 +257,14 @@ export const chatApi = {
     planningApi.get<R<import('@/types').ChatMessage[]>>(`/api/v1/chat/sessions/${sessionId}/history`),
   /** M4-9：clientMessageId 为消息幂等键——超时/40904 退避重试须携带同键 */
   /** M7 Batch 3：model 可选——请求级模型（null=角色默认） */
-  sendMessage: (sessionId: string, message: string, clientMessageId?: string, model?: string, anchoredItineraryIds?: number[]) =>
+  sendMessage: (sessionId: string, message: string, clientMessageId?: string, model?: string,
+                anchoredItineraryIds?: number[], preferences?: Record<string, unknown>) =>
     planningApi.post<R<import('@/types').ChatResponse>>(`/api/v1/chat/sessions/${sessionId}/messages`, {
       message,
       clientMessageId,
       ...(model ? { model } : {}),
       ...(anchoredItineraryIds && anchoredItineraryIds.length > 0 ? { anchoredItineraryIds } : {}),
+      ...(preferences && Object.keys(preferences).length > 0 ? { preferences } : {}),
     }),
   /** M4-9：显式关闭会话（归档+收口摘要；禁止 beforeunload 触发） */
   closeSession: (sessionId: string) =>
@@ -296,6 +298,7 @@ export const chatApi = {
     lastEventId?: string,
     model?: string,
     anchoredItineraryIds?: number[],
+    preferences?: Record<string, unknown>,
   ) => {
     const headers: Record<string, string> = {};
     if (typeof window !== 'undefined') {
@@ -313,6 +316,7 @@ export const chatApi = {
           clientMessageId,
           ...(model ? { model } : {}),
           ...(anchoredItineraryIds && anchoredItineraryIds.length > 0 ? { anchoredItineraryIds } : {}),
+          ...(preferences && Object.keys(preferences).length > 0 ? { preferences } : {}),
         },
         headers,
         signal,

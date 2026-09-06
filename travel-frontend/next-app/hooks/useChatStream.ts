@@ -144,6 +144,7 @@ export function useChatStream(
     key: string,
     model?: string,
     anchorIds?: number[],
+    preferences?: Record<string, unknown>,
   ): Promise<StreamedResult> => {
     const maxAttempts = 4;
     let acc = '';
@@ -204,7 +205,7 @@ export function useChatStream(
             e.code = p.code;
             throw e;
           },
-        }, lastId || undefined, model, anchorIds);
+        }, lastId || undefined, model, anchorIds, preferences);
         // M6-5：流结束不代表展示结束——等逐字揭示完成后才返回最终文本
         await waitForRevealComplete();
         return {

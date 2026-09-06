@@ -17,6 +17,8 @@ import { Button } from '@/components/ui/button';
 import { Composer } from '@/components/chat/Composer';
 import { AnchorDotButton, AnchorPanel, AnchorTags } from '@/components/chat/composer/anchor-panel';
 import { useSessionAnchor } from '@/hooks/useSessionAnchor';
+import { useSessionPreference } from '@/hooks/useSessionPreference';
+import { PreferenceDotButton, PreferencePanel, PreferenceTagsRow } from '@/components/chat/composer/preference-panel';
 import { ChatHeader } from '@/components/chat/ChatHeader';
 import {
   InterruptedBubble,
@@ -158,6 +160,11 @@ function ChatContent() {
   const [anchorPanelOpen, setAnchorPanelOpen] = useState(false);
   const [pendingSuggestion, setPendingSuggestion] = useState<{ itineraryId: number; title: string } | null>(null);
   const anchorState = anchor.stateOf(currentSessionId);
+  // M23c（E4）：本轮偏好标签（按会话隔离 + localStorage 持久化；不自动写长期画像）
+  const preference = useSessionPreference(currentSessionId);
+  const [prefPanelOpen, setPrefPanelOpen] = useState(false);
+  const prefTags = preference.tagsOf(currentSessionId);
+  const prefTagTexts = Object.keys(prefTags).length;
 
   const activeDraftKey = currentSessionId ?? '__new__';
   const input = drafts[activeDraftKey] ?? '';
@@ -410,7 +417,8 @@ function ChatContent() {
     try {
       // M6：优先 SSE 流式；失败自动回退 JSON 端点
       const streamed = await chatStream.sendStreamWithRetry(
-        sid!, text, clientMessageId, modelPref.model, anchorState.ids);
+        sid!, text, clientMessageId, modelPref.model, anchorState.ids,
+        Object.keys(prefTags).length > 0 ? prefTags : undefined);
       // M23（P-D）：AI 生成新规划且会话无可选规划 → 询问是否加入（done.suggestion）
       if (streamed.suggestion && streamed.suggestion.type === 'ANCHOR_NEW_ITINERARY') {
         setPendingSuggestion({
@@ -743,6 +751,18 @@ function ChatContent() {
                   if (currentSessionId) void anchor.toggle(currentSessionId, id);
                 }}
               />
+              <PreferenceDotButton
+                active={prefTagTexts > 0}
+                onClick={() => setPrefPanelOpen((v) => !v)}
+              />
+              <PreferencePanel
+                open={prefPanelOpen}
+                tags={prefTags}
+                onChange={(t) => {
+                  if (currentSessionId) preference.setTags(currentSessionId, t);
+                }}
+                onClose={() => setPrefPanelOpen(false)}
+              />
             </div>
           }
           anchorTags={
@@ -751,6 +771,18 @@ function ChatContent() {
               ids={anchorState.ids}
               onRemove={(id) => {
                 if (currentSessionId) void anchor.toggle(currentSessionId, id);
+              }}
+            />
+          }
+          preferenceTags={
+            <PreferenceTagsRow
+              tags={prefTags}
+              onRemoveField={(key) => {
+                if (currentSessionId) {
+                  const next = { ...prefTags } as Record<string, unknown>;
+                  delete next[key];
+                  preference.setTags(currentSessionId, next as typeof prefTags);
+                }
               }}
             />
           }

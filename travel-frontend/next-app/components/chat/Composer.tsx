@@ -26,10 +26,14 @@ export interface ComposerProps {
   anchorSlot?: ReactNode;
   /** M23（E1）：锚定标签行（发送区上侧，横向排布） */
   anchorTags?: ReactNode;
+  /** M23c（E4）：偏好圆钮+选择面板（page 注入，锚定钮右侧） */
+  preferenceSlot?: ReactNode;
+  /** M23c（E4）：偏好标签行（发送区上侧，横向排布，每枚独立 ×） */
+  preferenceTags?: ReactNode;
   textareaRef: RefObject<HTMLTextAreaElement>;
 }
 
-export function Composer({ value, onChange, onSend, onStop, showStop, canSend, modelSlot, anchorSlot, anchorTags, textareaRef }: ComposerProps) {
+export function Composer({ value, onChange, onSend, onStop, showStop, canSend, modelSlot, anchorSlot, anchorTags, preferenceSlot, preferenceTags, textareaRef }: ComposerProps) {
   // B3/09 C-01：textarea 自动增高（1~8 行）
   useEffect(() => {
     const el = textareaRef.current;
@@ -43,6 +47,7 @@ export function Composer({ value, onChange, onSend, onStop, showStop, canSend, m
       <div className="rounded-2xl border border-line bg-surface shadow-1 transition-colors focus-within:border-brand-400">
         {/* M23（E1/E4）：锚定与偏好标签行——横向排布于发送区上侧 */}
         {anchorTags}
+        {preferenceTags}
         <Textarea
           ref={textareaRef}
           value={value}
@@ -63,7 +68,10 @@ export function Composer({ value, onChange, onSend, onStop, showStop, canSend, m
         />
         <div className="flex items-center justify-between gap-1 px-3 pb-2.5 pt-1">
           {/* M23（E1）：左下角锚定圆钮（+右侧预留偏好按钮位） */}
-          {anchorSlot && <div className="flex items-center gap-1">{anchorSlot}</div>}
+          <div className="flex items-center gap-1">
+            {anchorSlot}
+            {preferenceSlot}
+          </div>
           {(!anchorSlot) && <span />}
           {/* M7 Batch 3 + C1r3：模型选择固定宽度容器（w-48 + 截断）——修复紧凑形态随模型名伸缩的问题 */}
           <div className="w-48 flex-shrink-0">
