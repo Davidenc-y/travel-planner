@@ -153,6 +153,18 @@ public class ItineraryService {
         log.info("行程删除: id={}, userId={}", id, userId);
     }
 
+    /**
+     * M25（E5）：分享只读读取——凭有效签名 token 授权（无用户校验；
+     * DTO 不含用户字段天然脱敏）。不做坐标装饰（分享页无地图）。
+     */
+    public ItineraryResponseDTO getByIdForShare(Long id) {
+        Itinerary entity = itineraryMapper.selectById(id);
+        if (entity == null) {
+            throw new com.travel.common.exception.BusinessException(40401, "行程不存在: " + id);
+        }
+        return toResponseDTO(entity);
+    }
+
     /** M7 D6：未知/禁用/不可选模型 → 40005，不静默回退。 */
     private void validateModel(String model) {
         if (model == null || model.isBlank()) {

@@ -14,6 +14,8 @@ export const preferenceTagsSchema = z.object({
   party: z.enum(['独行', '情侣', '家庭', '朋友']).optional(),
   interests: z.array(z.enum(INTEREST_OPTIONS)).max(6, '兴趣标签最多 6 项').optional(),
   startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, '日期格式 yyyy-MM-dd').optional().or(z.literal('')),
+  /** M25（E4 收尾）：勾选"记住为长期偏好"（不作为标签渲染，仅随消息落画像） */
+  remember: z.boolean().optional(),
 });
 
 export type PreferenceTags = z.infer<typeof preferenceTagsSchema>;

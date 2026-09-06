@@ -48,6 +48,23 @@ public class PreferenceSaveService {
     /**
      * 偏好陈述消息 → 轻量抽取 → 确定性保存；非偏好消息或无有效偏好时直接返回（不阻断）。
      */
+    /**
+     * M25（E4 收尾）："记住为长期偏好"——结构化标签直映射画像合并语义
+     * （destination/interests/budget；party 不映射 travelStyle；null 不覆盖）。
+     * 确定性，零 LLM。
+     */
+    public void saveStructuredTags(Long userId, com.travel.common.dto.PreferenceTagsDTO tags) {
+        if (userId == null || userId <= 0 || tags == null) {
+            return;
+        }
+        profilePort.update(userId,
+                tags.getDestination(),
+                (tags.getInterests() == null || tags.getInterests().isEmpty())
+                        ? null : String.join("、", tags.getInterests()),
+                tags.getBudget() == null ? null : tags.getBudget().toPlainString(),
+                null);
+    }
+
     public void saveIfPreferenceStatement(Long userId, String message) {
         if (userId == null || userId <= 0 || !isPreferenceStatement(message)) {
             return;

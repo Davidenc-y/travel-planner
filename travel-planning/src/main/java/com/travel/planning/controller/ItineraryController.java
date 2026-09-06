@@ -41,6 +41,7 @@ public class ItineraryController {
     private final SseStreamAdapter sseStreamAdapter;
     private final ItineraryStreamProperties itineraryStreamProps;
     private final ItineraryVersionService itineraryVersionService;
+    private final com.travel.planning.service.share.ShareTokenService shareTokenService;
     private final ItineraryMapRouteService itineraryMapRouteService;
 
     /**
@@ -158,5 +159,15 @@ public class ItineraryController {
                 AuthUtils.resolveUserId(), id, version);
         return R.ok(java.util.Map.of(
                 "itineraryId", id, "version", activeVersion, "activeVersion", activeVersion));
+    }
+
+    /**
+     * M25（E5）：生成行程分享链接（本人行程；token 无状态 HMAC 签名，默认 7 天有效 ≤30 clamp）。
+     */
+    @PostMapping("/{id}/share")
+    public R<java.util.Map<String, Object>> share(@PathVariable Long id) {
+        Long userId = AuthUtils.resolveUserId();
+        String token = shareTokenService.issue(userId, id);
+        return R.ok(java.util.Map.of("token", token));
     }
 }

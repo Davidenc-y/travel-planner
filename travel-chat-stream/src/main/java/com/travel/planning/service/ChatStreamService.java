@@ -157,6 +157,13 @@ public class ChatStreamService extends AbstractStreamingPipeline {
                 if (result.sessionTitle() != null) {
                     done.put("sessionTitle", result.sessionTitle());
                 }
+
+                // M25（E4 收尾）：目的地冲突信号（null 不追加=旧契约字节不变）
+                if (result.preferenceConflict() != null) {
+                    done.put("preferenceConflict", Map.of(
+                            "preferredDestination", result.preferenceConflict().preferredDestination(),
+                            "anchoredDestination", result.preferenceConflict().anchoredDestination()));
+                }
                 // M23（P-D）：锚定询问载荷（null 不追加=旧契约字节不变；parity 兼容）
                 if (result.suggestion() != null) {
                     done.put("suggestion", Map.of(

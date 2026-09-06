@@ -2,10 +2,11 @@
 
 import { useEffect, useState } from 'react';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
+import { Share2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { ArrowLeft, MapPin, Calendar, DollarSign, Clock, Maximize2, Copy, History } from 'lucide-react';
 import { decodeItineraryId } from '@/lib/url-guard';
-import { itineraryApi, getErrorMessage } from '@/lib/api';
+import { itineraryApi, getErrorMessage, shareApi } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 import type { ItineraryResponse } from '@/types';
 import { formatCurrency, formatDate } from '@/lib/utils';
@@ -141,6 +142,8 @@ function ItineraryDetailContent() {
             <History className="h-3.5 w-3.5" /> 历史版本
           </Button>
           <CopyMarkdownButton data={data} />
+          {/* M25（E5）：分享链接（本人行程；签名 token 7 天有效） */}
+          <ShareButton itineraryId={data.id} />
         </div>
       </div>
 
@@ -269,4 +272,33 @@ function ItineraryDetailContent() {
 
 export default function ItineraryDetailPage() {
   return <ItineraryDetailContent />;
+}
+
+
+/** M25（E5）：行程分享按钮——生成签名链接并复制到剪贴板（7 天有效）。 */
+function ShareButton({ itineraryId }: { itineraryId: number }) {
+  const [busy, setBusy] = useState(false);
+  const copy = async () => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const res = await shareApi.createShare(itineraryId);
+      const token = res.data.data?.token;
+      if (token) {
+        const url = `${window.location.origin}/share?token=${token}`;
+        const { copyText } = await import('@/lib/clipboard');
+        await copyText(url);
+        toast.success('分享链接已复制（7 天有效）');
+      }
+    } catch {
+      toast.error('分享链接生成失败');
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <Button variant="secondary" size="sm" onClick={copy} disabled={busy}>
+      <Share2 className="h-3.5 w-3.5" /> {busy ? '生成中…' : '分享'}
+    </Button>
+  );
 }

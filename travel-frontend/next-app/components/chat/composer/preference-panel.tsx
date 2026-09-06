@@ -179,6 +179,15 @@ export function PreferencePanel({
         />
       </div>
       {error && <p className="text-xs text-danger">{error}</p>}
+      <label className="flex cursor-pointer items-center gap-2 text-xs text-ink-faint">
+        <input
+          type="checkbox"
+          checked={tags.remember === true}
+          onChange={(e) => onChange({ ...tags, remember: e.target.checked || undefined })}
+          className="h-3.5 w-3.5 accent-[var(--brand)]"
+        />
+        记住为长期偏好（写入个人画像，可随时修改）
+      </label>
       <div className="flex items-center justify-between pt-1">
         <Button variant="ghost" size="sm" onClick={() => onChange({})}>
           清除全部

@@ -38,4 +38,7 @@ public class PreferenceTagsDTO {
 
     @Pattern(regexp = "^\\d{4}-\\d{2}-\\d{2}$", message = "出发日期格式应为 yyyy-MM-dd")
     private String startDate;
+
+    /** M25（E4 收尾）：勾选"记住为长期偏好" -> 标签经画像合并语义落库（null/false=不写画像）。 */
+    private Boolean remember;
 }

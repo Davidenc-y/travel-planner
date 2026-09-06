@@ -67,6 +67,9 @@ mybatis-plus:
 
 # ============ 应用专属配置（进程独有） ============
 travel:
+  # M25（E5）：分享 token 有效期（天，1~30 clamp）
+  share:
+    token-ttl-days: ${SHARE_TOKEN_TTL_DAYS:7}
   # M11-3：可靠性看板管理员白名单（空=无管理员，生产用环境变量 ADMIN_USER_IDS 注入）
   admin:
     user-ids: ${ADMIN_USER_IDS:2}

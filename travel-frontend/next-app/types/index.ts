@@ -50,6 +50,8 @@ export interface MindmapData {
 
 export interface ItineraryResponse {
   id: number;
+  /** M25（E5）：同行人（分享页展示） */
+  party?: string;
   title: string;
   destination: string;
   days: number;

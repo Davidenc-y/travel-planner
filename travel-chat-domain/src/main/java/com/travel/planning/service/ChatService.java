@@ -385,6 +385,8 @@ public class ChatService implements ChatStreamExecutor {
         // M23（E1）：消息内锚定快照（per-turn truth；切换/勾选随消息生效）
         java.util.List<Long> anchorIds = prepared.anchorIds() == null
                 ? java.util.List.of() : prepared.anchorIds();
+        // M25（E4 收尾）：偏好冲突信号（gate 块内赋值；方法级声明供 Result 组装）
+        com.travel.planning.service.ChatStreamExecutor.ChatStreamResult.PreferenceConflict preferenceConflict = null;
         String sessionId = prepared.sessionId();
         String message = prepared.message();
         Long userId = prepared.userId();
@@ -469,6 +471,12 @@ public class ChatService implements ChatStreamExecutor {
                 String preferenceSection = preferenceSectionRenderer.render(
                         preferences,
                         anchorBriefsDestination(anchorSection));
+                // M25（E4 收尾）："记住为长期偏好"——用户显式勾选才落画像（合并语义）
+                if (preferences != null && Boolean.TRUE.equals(preferences.getRemember())) {
+                    chatPreferenceStep.saveStructuredTags(userId, preferences);
+                }
+                // M25（E4 收尾）：目的地冲突确定性信号（渲染器已附提示行；此处结构化供前端卡片）
+                preferenceConflict = preferenceConflictOf(preferences, anchorSection);
                 ChatBudgetStep.BudgetContext budget = chatBudgetStep.compose(sessionId, userId, intent,
                         message, profileContext, historySection, anchorSection, anchorIds,
                         preferenceSection, preferenceSectionRenderer.querySuffix(preferences));
@@ -540,6 +548,7 @@ public class ChatService implements ChatStreamExecutor {
                 l.onResponse(response);
             }
 
+            // M25（E4 收尾）：conflict 于 gate 块内计算（见 preferenceConflictOf 赋值）
             // M23（P-D）："可选规划为空"确定性判定——本轮回写成功且会话无锚定、无关联行程
             Long routedItineraryId = routed == null ? null : routed.writtenItineraryId();
             com.travel.planning.service.ChatStreamExecutor.ChatStreamResult.AnchorSuggestion suggestion = null;
@@ -601,6 +610,20 @@ public class ChatService implements ChatStreamExecutor {
         } finally {
             cancellationRegistry.remove(clientMessageId);
         }
+    }
+
+    /** M25（E4 收尾）：偏好目的地 vs 锚定目的地冲突（确定性；无冲突/无偏好 → null）。 */
+    private com.travel.planning.service.ChatStreamExecutor.ChatStreamResult.PreferenceConflict preferenceConflictOf(
+            com.travel.common.dto.PreferenceTagsDTO preferences, String anchorSection) {
+        if (preferences == null || preferences.getDestination() == null || preferences.getDestination().isBlank()) {
+            return null;
+        }
+        String anchored = anchorBriefsDestination(anchorSection);
+        if (anchored == null || anchored.equals(preferences.getDestination())) {
+            return null;
+        }
+        return new com.travel.planning.service.ChatStreamExecutor.ChatStreamResult.PreferenceConflict(
+                preferences.getDestination(), anchored);
     }
 
     /** M23b（E4）：从【锚定行程】段提取首个锚定目的地（单锚定首发；无则 null）。 */

@@ -59,12 +59,24 @@ public interface ChatStreamExecutor {
     /** 流式执行结果 */
     record ChatStreamResult(String response, long aiTokens, boolean fallback,
                             Long assistantMessageId, String sessionTitle,
-                            AnchorSuggestion suggestion) {
+                            AnchorSuggestion suggestion,
+                            PreferenceConflict preferenceConflict) {
 
-        /** M23 前的五参兼容构造（suggestion=null），既有调用点零改动。 */
+        /** M23 前的五参兼容构造（suggestion/conflict=null），既有调用点零改动。 */
         public ChatStreamResult(String response, long aiTokens, boolean fallback,
                                 Long assistantMessageId, String sessionTitle) {
-            this(response, aiTokens, fallback, assistantMessageId, sessionTitle, null);
+            this(response, aiTokens, fallback, assistantMessageId, sessionTitle, null, null);
+        }
+
+        /** M23 的六参兼容构造（conflict=null）。 */
+        public ChatStreamResult(String response, long aiTokens, boolean fallback,
+                                Long assistantMessageId, String sessionTitle,
+                                AnchorSuggestion suggestion) {
+            this(response, aiTokens, fallback, assistantMessageId, sessionTitle, suggestion, null);
+        }
+
+        /** M25（E4 收尾）：偏好目的地 vs 锚定目的地冲突结构化信号（供前端提示条）。 */
+        public record PreferenceConflict(String preferredDestination, String anchoredDestination) {
         }
 
         /** M23（P-D）：done.suggestion 载荷（null=done.data 不追加该键，旧契约字节不变）。 */

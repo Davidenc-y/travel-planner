@@ -159,6 +159,7 @@ function ChatContent() {
   const anchor = useSessionAnchor(currentSessionId);
   const [anchorPanelOpen, setAnchorPanelOpen] = useState(false);
   const [pendingSuggestion, setPendingSuggestion] = useState<{ itineraryId: number; title: string } | null>(null);
+  const [conflictNotice, setConflictNotice] = useState<{ preferredDestination: string; anchoredDestination: string } | null>(null);
   const anchorState = anchor.stateOf(currentSessionId);
   // M23c（E4）：本轮偏好标签（按会话隔离 + localStorage 持久化；不自动写长期画像）
   const preference = useSessionPreference(currentSessionId);
@@ -788,6 +789,17 @@ function ChatContent() {
           }
           textareaRef={textareaRef}
         />
+        {/* M25（E4 收尾）：偏好目的地冲突提示条（确定性 done.preferenceConflict） */}
+        {conflictNotice && (
+          <div className="mx-2 mb-2 flex items-center gap-2 rounded-lg border border-amber-500/40 bg-amber-500/5 px-3 py-2 text-sm">
+            <span className="min-w-0 flex-1 truncate">
+              本轮按偏好目的地「{conflictNotice.preferredDestination}」处理（锚定行程目的地：{conflictNotice.anchoredDestination}）
+            </span>
+            <Button variant="ghost" size="sm" onClick={() => setConflictNotice(null)}>
+              知道了
+            </Button>
+          </div>
+        )}
         {/* M23（P-D）：锚定询问确认卡片（确定性 done.suggestion，非 LLM 问句） */}
         {pendingSuggestion && (
           <div className="mx-2 mb-2 flex items-center gap-2 rounded-lg border border-brand/40 bg-brand/5 px-3 py-2 text-sm">

@@ -23,4 +23,12 @@ public class ChatPreferenceStep {
     public void saveIfPreference(Long userId, String message) {
         preferenceSaveService.saveIfPreferenceStatement(userId, message);
     }
+
+    /**
+     * M25（E4 收尾）："记住为长期偏好"——本轮结构化偏好标签直映射画像
+     * （委托 {@link PreferenceSaveService#saveStructuredTags}；调用方决定是否调用）。
+     */
+    public void saveStructuredTags(Long userId, com.travel.common.dto.PreferenceTagsDTO tags) {
+        preferenceSaveService.saveStructuredTags(userId, tags);
+    }
 }
