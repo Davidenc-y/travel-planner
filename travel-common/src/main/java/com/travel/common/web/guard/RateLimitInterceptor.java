@@ -1,4 +1,4 @@
-package com.travel.webmvc.guard;
+package com.travel.common.web.guard;
 
 import com.travel.common.util.JsonUtils;
 import com.travel.common.result.R;

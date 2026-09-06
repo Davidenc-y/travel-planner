@@ -2,7 +2,7 @@ package com.travel.knowledge.config;
 
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Configuration;
-import com.travel.webmvc.guard.RateLimitInterceptor;
+import com.travel.common.web.guard.RateLimitInterceptor;
 import org.springframework.web.servlet.config.annotation.CorsRegistry;
 import org.springframework.web.servlet.config.annotation.InterceptorRegistry;
 import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
@@ -62,6 +62,6 @@ public class WebConfig implements WebMvcConfigurer {
                 .addPathPatterns("/api/v1/attractions/**");
         // M21-3（SEC-02-04/05/07/08）：管理面端点服务间共享密钥（fail-closed）
         registry.addInterceptor(internalTokenInterceptor)
-                .addPathPatterns("/api/v1/etl/**", "/api/v1/memory/**", "/api/v1/files/images");
+                .addPathPatterns("/api/v1/etl/**", "/api/v1/memory/**", "/api/v1/rag/**", "/api/v1/files/images");
     }
 }

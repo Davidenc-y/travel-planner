@@ -1,7 +1,8 @@
 package com.travel.planning.util;
 
 import com.travel.common.auth.TokenAuthService;
-import com.travel.webmvc.guard.RateLimitInterceptor;
+import com.travel.common.exception.BusinessException;
+import com.travel.common.web.guard.RateLimitInterceptor;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
@@ -31,9 +32,18 @@ public class JwtAuthInterceptor implements HandlerInterceptor {
     private final TokenAuthService tokenAuthService;
     // M21-4：登出吊销黑名单（jti 级，Redis TTL=剩余有效期）
     private final AccessTokenBlacklistService blacklistService;
+    /**
+     * M22-1（Phase 3A，D-V8-1）：路径级认证强制模式——
+     * observe（默认）：解析失败仅记录 would-deny WARN，不阻断（灰度观测）；
+     * on：非豁免路径（WebConfig excludePathPatterns）未认证一律 40101，结构性杜绝"逐点调用遗漏"复发；
+     * off：回退纯解析语义（等价 M21-4 前行为，回滚开关）。
+     */
+    @org.springframework.beans.factory.annotation.Value("${travel.auth.enforce-mode:observe}")
+    private String enforceMode;
 
     @Override
     public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler) {
+        boolean authenticated = false;
         String auth = request.getHeader("Authorization");
         if (auth != null && auth.startsWith(BEARER_PREFIX)) {
             String token = auth.substring(BEARER_PREFIX.length()).trim();
@@ -48,10 +58,21 @@ public class JwtAuthInterceptor implements HandlerInterceptor {
                         UserContextHolder.setUsername(username);
                         // M3-1：同步写请求属性，供限流/日志使用（防 X-User-Id 伪造）
                         request.setAttribute(RateLimitInterceptor.ATTR_USER_ID, userId);
+                        authenticated = true;
                     }
                 }
             } catch (Exception e) {
                 log.warn("[Auth] accessToken 解析失败（回退显式 userId）: {}", e.getMessage());
+            }
+        }
+        // M22-1：路径级强制（"默认拒绝+显式豁免"——豁免由 WebConfig excludePathPatterns 框架层完成）
+        if (!authenticated) {
+            // null 兜底=observe（未走 Spring 装配的构造路径/未配置时保持观测态，不阻断）
+            switch (enforceMode == null ? "observe" : enforceMode) {
+                case "on" -> throw new BusinessException(40101, "用户未登录");
+                case "observe" -> log.warn("[Auth][observe] would-deny: {} {}",
+                        request.getMethod(), request.getRequestURI());
+                default -> { /* off：保持纯解析语义 */ }
             }
         }
         return true;

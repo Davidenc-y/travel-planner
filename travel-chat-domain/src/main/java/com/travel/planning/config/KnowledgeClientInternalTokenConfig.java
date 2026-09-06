@@ -22,7 +22,9 @@ public class KnowledgeClientInternalTokenConfig {
             @Value("${travel.internal.token:}") String internalToken) {
         return template -> {
             if (internalToken != null && !internalToken.isBlank()
-                    && template.url() != null && template.url().contains("/api/v1/memory/")) {
+                    && template.url() != null
+                    && (template.url().contains("/api/v1/memory/")
+                        || template.url().contains("/api/v1/rag/"))) {
                 template.header("X-Internal-Token", internalToken);
             }
         };

@@ -105,6 +105,11 @@ public class EtlController {
         try {
             java.nio.file.Path base = java.nio.file.Paths.get(importBaseDir).toRealPath();
             java.nio.file.Path requested = java.nio.file.Paths.get(filePath).toAbsolutePath().normalize();
+            // M22-3（Reviewer #5）：requested 亦归一化真实路径（阻断符号链接前缀伪造）；
+            // 不存在的文件随后续读取自然报错，此处仅在可解析时做前缀断言
+            if (java.nio.file.Files.exists(requested)) {
+                requested = requested.toRealPath();
+            }
             if (!requested.startsWith(base)) {
                 throw new com.travel.common.exception.BusinessException(
                         40302, "数据文件必须位于配置的导入目录内");

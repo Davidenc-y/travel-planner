@@ -24,10 +24,7 @@
             <artifactId>travel-common</artifactId>
         </dependency>
         <!-- M6-9 P2：MVC 横切组件（全局异常/限流拦截器） -->
-        <dependency>
-            <groupId>com.travel.webmvc</groupId>
-            <artifactId>travel-web-mvc</artifactId>
-        </dependency>
+        <!-- M22-2：横切组件已下沉 travel-common/web，web-mvc 依赖移除（D-01-001） -->
         <!-- M6-19：RAG 流式（StreamPayloadMapper / 流式框架） -->
         <dependency>
             <groupId>com.travel.chatstream</groupId>

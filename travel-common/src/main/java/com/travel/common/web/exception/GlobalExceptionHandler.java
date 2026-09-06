@@ -1,4 +1,4 @@
-package com.travel.webmvc.exception;
+package com.travel.common.web.exception;
 
 import com.travel.common.exception.BusinessException;
 import com.travel.common.exception.ErrorCode;

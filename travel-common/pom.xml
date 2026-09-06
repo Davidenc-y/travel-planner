@@ -62,6 +62,18 @@
 
         <!-- JJWT（TokenAuthService 签发/校验，M6-25 自 travel-planning 下沉；
             版本由父 pom dependencyManagement 统一管理） -->
+        <!-- M22-2（D-01-001 下沉）：web 横切组件（GlobalExceptionHandler/RateLimitInterceptor）
+             自 web-mvc 迁入 com.travel.common.web——精确依赖 spring-webmvc+servlet-api，
+             不引入内嵌服务器（starter-web 由进程模块自带） -->
+        <dependency>
+            <groupId>org.springframework</groupId>
+            <artifactId>spring-webmvc</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>jakarta.servlet</groupId>
+            <artifactId>jakarta.servlet-api</artifactId>
+            <scope>provided</scope>
+        </dependency>
         <dependency>
             <groupId>io.jsonwebtoken</groupId>
             <artifactId>jjwt-api</artifactId>

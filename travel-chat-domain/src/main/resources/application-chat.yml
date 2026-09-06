@@ -8,6 +8,10 @@
 # 且进程 yml 中的同名键优先级高于本文件（可按进程覆盖）。
 # 键值与 2026-09-05 单源化前两进程重复段完全一致（行为等价红线）。
 travel:
+  # M22-1（Phase 3A）：路径级认证强制模式（planning MVC 拦截器消费）
+  # observe=灰度观测（would-deny 日志不阻断）；on=未认证一律 40101；off=回退纯解析
+  auth:
+    enforce-mode: observe
   # M21-2（SEC-02-02）：服务间内部调用共享密钥（8083→8081 chat-writeback 桥）；
   # 空缺省 = fail-closed（未配置时桥端点拒绝一切内部调用）。本地开发在 application-local.yml 覆盖。
   internal:
@@ -202,3 +206,4 @@ jwt:
   refresh-expiration: 604800000  # 7d
   # M21-4（SEC-01-02）：token type 强校验（refresh 冒充 access 被拒）；false=回退纯验签
   enforce-type: true
+

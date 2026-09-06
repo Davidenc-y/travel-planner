@@ -1,7 +1,7 @@
 package com.travel.planning.config;
 
 import com.travel.planning.util.JwtAuthInterceptor;
-import com.travel.webmvc.guard.RateLimitInterceptor;
+import com.travel.common.web.guard.RateLimitInterceptor;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Configuration;
@@ -60,6 +60,8 @@ public class WebConfig implements WebMvcConfigurer {
                 .excludePathPatterns(
                         "/api/v1/auth/register",
                         "/api/v1/auth/login",
-                        "/api/v1/auth/refresh");
+                        "/api/v1/auth/refresh",
+                        // M22-1：进程间回写桥走 X-Internal-Token（M21-2 fail-closed），不走用户 Bearer
+                        "/api/v1/itineraries/chat-writeback");
     }
 }

@@ -17,7 +17,7 @@ import org.springframework.scheduling.annotation.EnableScheduling;
  * @since 2026-07-28
  */
 @SpringBootApplication(scanBasePackages = {
-        "com.travel.knowledge", "com.travel.common", "com.travel.webmvc",
+        "com.travel.knowledge", "com.travel.common",
         "com.travel.planning.stream"})
 @EnableScheduling
 // M7 Batch 4：模型网关装配（travel.ai.model-registry.enabled=true 时提供 chatModel/lightModel）

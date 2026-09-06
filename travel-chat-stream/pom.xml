@@ -30,6 +30,14 @@
             <groupId>io.projectreactor</groupId>
             <artifactId>reactor-core</artifactId>
         </dependency>
+        <!-- M22-2（D-01-001 下沉）：SseStreamAdapter 迁入本模块（同包 com.travel.planning.stream）。
+             "chat-stream 无 Web"红线的边界注记：本模块仍无服务器/端点（无 controller/filter/启动器），
+             仅引入 spring-webmvc 以提供 SseEmitter 输出工具——它是 StreamPayloadMapper 契约的 MVC 出口，
+             由 MVC/WebFlux 双传输层消费；Phase 4A transport-spi 时再彻底接口化归位。 -->
+        <dependency>
+            <groupId>org.springframework</groupId>
+            <artifactId>spring-webmvc</artifactId>
+        </dependency>
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-test</artifactId>

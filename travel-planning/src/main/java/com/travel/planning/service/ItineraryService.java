@@ -87,7 +87,9 @@ public class ItineraryService {
     public ItineraryResponseDTO getById(Long id, Long userId) {
         Itinerary entity = itineraryMapper.selectById(id);
         if (entity == null) {
-            throw new ItineraryGenerationException("行程不存在: " + id);
+            // M22-3：缺失统一 40401（原 ItineraryGenerationException 被兜底为 50001，
+            // 与 delete 语义不一致；前端 getErrorMessage 走后端 message，天然兼容）
+            throw new BusinessException(40401, "行程不存在: " + id);
         }
         if (!userId.equals(entity.getUserId())) {
             throw new BusinessException(40302, "无权访问该行程");
