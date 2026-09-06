@@ -13,7 +13,7 @@ import com.travel.planning.service.ItineraryService;
 import com.travel.planning.service.ItineraryVersionService;
 import com.travel.planning.stream.ItineraryStreamProperties;
 import com.travel.planning.stream.StreamErrorMapper;
-import com.travel.webmvc.stream.SseStreamAdapter;
+import com.travel.planning.stream.SseStreamAdapter;
 import com.travel.planning.util.AuthUtils;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;

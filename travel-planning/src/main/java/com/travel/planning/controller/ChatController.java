@@ -13,7 +13,7 @@ import com.travel.planning.service.ChatService;
 import com.travel.planning.service.TurnCancellationRegistry;
 import com.travel.planning.stream.ChatStreamProperties;
 import com.travel.planning.stream.StreamErrorMapper;
-import com.travel.webmvc.stream.SseStreamAdapter;
+import com.travel.planning.stream.SseStreamAdapter;
 import com.travel.planning.util.AuthUtils;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;

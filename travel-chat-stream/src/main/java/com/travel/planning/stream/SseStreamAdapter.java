@@ -1,4 +1,4 @@
-package com.travel.webmvc.stream;
+package com.travel.planning.stream;
 
 import com.travel.core.stream.StreamEvent;
 import com.travel.core.stream.StreamMeta;

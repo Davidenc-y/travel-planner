@@ -10,7 +10,7 @@ import com.travel.knowledge.rag.model.SearchResult;
 import com.travel.knowledge.service.AttractionService;
 import com.travel.knowledge.stream.RagStreamProperties;
 import com.travel.planning.stream.StreamErrorMapper;
-import com.travel.webmvc.stream.SseStreamAdapter;
+import com.travel.planning.stream.SseStreamAdapter;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ResponseEntity;
