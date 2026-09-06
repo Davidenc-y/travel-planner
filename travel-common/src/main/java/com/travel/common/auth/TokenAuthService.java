@@ -30,15 +30,72 @@ public class TokenAuthService {
     private final String secret;
     private final long expiration;
     private final long refreshExpiration;
+    /** M21-4：token type 强校验开关（默认 true；false=回退为纯验签，回滚用）。 */
+    private final boolean enforceType;
 
+    @org.springframework.beans.factory.annotation.Autowired
     public TokenAuthService(
-            @Value("${jwt.secret:travel-planner-secret-key-2026-must-be-long-enough-32chars}")
+            @Value("${jwt.secret:}")
             String secret,
             @Value("${jwt.expiration:86400000}") long expiration,
-            @Value("${jwt.refresh-expiration:604800000}") long refreshExpiration) {
+            @Value("${jwt.refresh-expiration:604800000}") long refreshExpiration,
+            @Value("${travel.jwt.enforce-type:true}") boolean enforceType) {
+        // M21-1（SEC-01-01/D-04-001）：受控配置不再提供可用默认密钥；
+        // secret 为空即启动失败（fail-fast），拒绝"空密钥静默放行"。
+        if (secret == null || secret.isBlank()) {
+            throw new IllegalStateException(
+                    "[TokenAuthService] jwt.secret 未配置（受控配置不携带默认密钥，M21-1）："
+                            + "请设置环境变量 JWT_SECRET，或在 application-local.yml 显式配置 jwt.secret（仅本地开发）");
+        }
         this.secret = secret;
         this.expiration = expiration;
         this.refreshExpiration = refreshExpiration;
+        this.enforceType = enforceType;
+    }
+
+    /** 兼容构造（测试/显式装配）：默认启用 type 强校验。 */
+    public TokenAuthService(String secret, long expiration, long refreshExpiration) {
+        this(secret, expiration, refreshExpiration, true);
+    }
+
+    /**
+     * M21-4（SEC-01-02 止血）：accessToken 专用校验——验签之外还要求
+     * type=access（enforceType 开关控制）；refreshToken 冒充 access 在此被拒绝。
+     */
+    public boolean validateAccessToken(String token) {
+        return validateToken(token) && (!enforceType || "access".equals(getTokenType(token)));
+    }
+
+    /** M21-4：refreshToken 专用校验（/auth/refresh 只收 refresh）。 */
+    public boolean validateRefreshToken(String token) {
+        return validateToken(token) && (!enforceType || "refresh".equals(getTokenType(token)));
+    }
+
+    public String getTokenType(String token) {
+        try {
+            return parseToken(token).get("type", String.class);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /** M21-4（SEC-01-03）：jti 读取（登出吊销键）。 */
+    public String getJti(String token) {
+        try {
+            return parseToken(token).getId();
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /** M21-4（SEC-01-03）：剩余有效期毫秒（吊销 TTL 上界；已过期返回 -1）。 */
+    public long getRemainingMillis(String token) {
+        try {
+            long exp = parseToken(token).getExpiration().getTime();
+            return Math.max(0L, exp - System.currentTimeMillis());
+        } catch (Exception e) {
+            return -1L;
+        }
     }
 
     public String generateAccessToken(Long userId, String username) {

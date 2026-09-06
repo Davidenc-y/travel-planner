@@ -80,11 +80,17 @@ public class ItineraryService {
                 () -> resumeCoordinator.resume(id, userId));
     }
 
-    /** 查询行程详情 */
-    public ItineraryResponseDTO getById(Long id) {
+    /**
+     * 查询行程详情（M21-2 SEC-02-01 止血：增加归属校验——非本人行程 40302，
+     * 与 ItineraryVersionService.requireOwner 同语义）。
+     */
+    public ItineraryResponseDTO getById(Long id, Long userId) {
         Itinerary entity = itineraryMapper.selectById(id);
         if (entity == null) {
             throw new ItineraryGenerationException("行程不存在: " + id);
+        }
+        if (!userId.equals(entity.getUserId())) {
+            throw new BusinessException(40302, "无权访问该行程");
         }
         ensureMindmap(entity);
         ItineraryResponseDTO dto = toResponseDTO(entity);
@@ -132,10 +138,17 @@ public class ItineraryService {
         return PageResult.of(list.stream().map(this::toResponseDTO).toList(), total, page, size);
     }
 
-    /** 删除行程 */
-    public void delete(Long id) {
+    /** 删除行程（M21-2 SEC-02-01 止血：归属校验——不存在 40401，非本人 40302） */
+    public void delete(Long id, Long userId) {
+        Itinerary entity = itineraryMapper.selectById(id);
+        if (entity == null) {
+            throw new BusinessException(40401, "行程不存在: " + id);
+        }
+        if (!userId.equals(entity.getUserId())) {
+            throw new BusinessException(40302, "无权访问该行程");
+        }
         itineraryMapper.deleteById(id);
-        log.info("行程删除: id={}", id);
+        log.info("行程删除: id={}, userId={}", id, userId);
     }
 
     /** M7 D6：未知/禁用/不可选模型 → 40005，不静默回退。 */

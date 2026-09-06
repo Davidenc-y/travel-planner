@@ -15,6 +15,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.codec.ServerSentEvent;
+import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -50,7 +51,7 @@ public class ChatStreamWebfluxController {
     @PostMapping
     public Flux<ServerSentEvent<String>> stream(
             @PathVariable String sessionId,
-            @RequestBody ChatMessageRequest body,
+            @Valid @RequestBody ChatMessageRequest body,
             @RequestHeader(value = "Last-Event-ID", required = false) String lastEventId,
             ServerWebExchange exchange) {
         if (!props.isEnabled()) {

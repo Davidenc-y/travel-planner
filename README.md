@@ -58,7 +58,7 @@ The system addresses these issues through an **agentic + RAG + workflow** design
 
 ### 1.3 Development Context
 
-This is a **personal thesis project** developed iteratively under a milestone-driven workflow (M0 → M4), with **F1–F124 bug-fix series + M3 ten-phase optimization (MessagePipeline / dependency sinking / prompt externalization / etc.) + M4 three-direction optimization (agent session compression / RAG reliability / state recovery)**. Every milestone and fix is documented in `docs/business-records/` (170+ markdown files), following a strict "design → implement → self-review" discipline.
+This is a **personal thesis project** developed iteratively under a milestone-driven workflow (M0 → M6), with **F1–F124 bug-fix series + M3 ten-phase optimization (MessagePipeline / dependency sinking / prompt externalization / etc.) + M4 three-direction optimization (agent session compression / RAG reliability / state recovery) + M5 frontend experience optimization + M6 streaming & lifecycle hardening (SSE streaming, dual MVC/WebFlux transport, turn cancellation with stop/retry, itinerary resume fixes, external-review-driven architecture refactor)**. Every milestone and fix is documented in `docs/business-records/` (290+ markdown files), following a strict "design → implement → self-review" discipline.
 
 ---
 
@@ -74,6 +74,7 @@ This is a **personal thesis project** developed iteratively under a milestone-dr
 | **Spring AI**                           | 1.1.2                 | Unified LLM abstraction (`ChatClient`, `ChatModel`)                                                                 |
 | **Spring AI Alibaba**                   | 1.1.2.0               | **Agent Framework** (supervisor agents) + **Graph Core** (StateGraph workflow) — the core AI orchestration backbone |
 | **Spring AI Alibaba Starter DashScope** | 1.1.2.0               | Connects to Alibaba Cloud DashScope (Qwen LLM series)                                                               |
+| **Spring WebFlux / Reactor**            | 6.2.x / 3.7.x         | Reactive transport pilot (`travel-stream-webflux` :8083) and the `Flux<StreamEvent>` streaming pipeline (M6)        |
 | **MyBatis-Plus**                        | 3.5.7                 | ORM with rich CRUD, pagination, and codegen support                                                                 |
 | **Redisson**                            | 3.28.0                | Reserved for distributed locks/rate limiting: version-managed only in the parent POM since M3-19; not enabled (P3 evolution item) |
 | **Spring Data Redis**                   | 3.5.0                 | Redis read/write for refresh tokens and session summaries (explicitly introduced in planning since M3-19)                 |
@@ -116,8 +117,29 @@ This is a **personal thesis project** developed iteratively under a milestone-dr
 
 ### 2.4 LLM Provider
 
-- **Alibaba Cloud DashScope** (Qwen series models) via `spring-ai-alibaba-starter-dashscope`.
-- Model & key are configured through environment variables (see `.env.example`).
+- **Multi-model gateway (M7)**: `travel-ai-gateway` provides a model registry
+  (`travel.ai.model-registry.*`), a `ChatModel` factory (DashScope native /
+  OpenAI-compatible endpoints) and `RoleRoutingChatModel` proxies registered as
+  `chatModel` (@Primary, main role) and `lightModel` (light role).
+- **Runtime model selection**: chat and plan pages let users pick a model; the
+  request carries `model`, validated at the entry (unknown/disabled → `40005
+  MODEL_NOT_FOUND`). `GET /api/v1/models` exposes the selectable registry list.
+- **Roles**: user-selected models only override the **main** role; auxiliary calls
+  (intent classification / preference extraction / budget / RAG cheap judgments)
+  stay on the light default (`qwen-turbo`).
+- **Providers**: DashScope (Qwen series, native or compatible mode) and
+  OpenAI-compatible endpoints (DeepSeek / GLM). Keys are referenced by
+  environment-variable name in the registry (`DASHSCOPE_API_KEY`,
+  `DEEPSEEK_API_KEY`, `GLM_API_KEY`); see `.env.example`.
+- **Fallback switch**: `travel.ai.model-registry.enabled=false` (or missing)
+  falls back to legacy DashScope-only `chatModel`/`lightModel` beans.
+- **Reliability hardening (M7-6/7-8)**: light-role call sites are explicit
+  (`@Qualifier("lightModel")`, default `qwen-turbo`), agent-trace records the actually
+  routed model, and LLM-extracted structures are validated against the raw query
+  (type must be supported by the query text; keywords are anchored to it) before
+  filtering or caching. The supervisor main agent routes through `RoutingChatClient`,
+  which normalizes "prose + trailing JSON array" replies to the pure array the graph
+  framework requires, so the 4-sub-agent pipeline is never skipped by formatting drift.
 
 ---
 
@@ -164,11 +186,42 @@ This is a **personal thesis project** developed iteratively under a milestone-dr
 └────────────────────┘
 ```
 
+**Model gateway (M7)** — `travel-ai-gateway` owns the model registry
+(`travel.ai.model-registry.*`) and exposes `chatModel` (@Primary, main role) and
+`lightModel` proxies that every LLM call point injects. The registry is the single
+source of truth for providers, roles, and selectable models; request-level `model`
+is threaded from the controller DTOs into `ChatService.runStream` / itinerary
+generation, and `travel.ai.model-registry.enabled=false` restores the legacy
+DashScope-only beans.
+
+Streaming transport (M6) — the chat pipeline is transport-agnostic:
+
+```
+                        ┌──────────────────────────────────────────────┐
+                        │          travel-chat-stream (shared)         │
+                        │  ChatStreamService → Flux<StreamEvent>       │
+                        │  events: thinking / token / done / error / id│
+                        └───────────────┬──────────────────────────────┘
+                                        │
+              ┌─────────────────────────┼─────────────────────────┐
+              ▼                                                 ▼
+┌───────────────────────────┐                  ┌──────────────────────────────┐
+│  MVC path — travel-       │                  │  Reactive path — travel-      │
+│  planning (:8081)         │                  │  stream-webflux (:8083,       │
+│  ChatController →         │                  │  optional gray switch)        │
+│  SseStreamAdapter →       │                  │  ReactiveJwtAuthFilter →       │
+│  SseEmitter               │                  │  ChatStreamWebfluxController  │
+└─────────────┬─────────────┘                  └───────────────┬──────────────┘
+              │                                                │
+              └──────────────▶ SSE text/event-stream ◀─────────┘
+                               frontend: NEXT_PUBLIC_STREAM_BASE
+```
+
 ---
 
 ## 4. Module Breakdown
 
-The backend is a **Maven multi-module** project (`pom.xml`, Java 21). Six modules + one frontend app:
+The backend is a **Maven multi-module** project (`pom.xml`, Java 21). Ten backend modules + one frontend app:
 
 ```
 travel-planner/
@@ -176,9 +229,14 @@ travel-planner/
 ├── docker-compose.yml      # All middleware services
 ├── travel-core/            # Pure-Java shared kernel (circuit breaker/rate limiter/RRFusion/normalizers)
 ├── travel-common/          # Shared entities, DTOs, enums, utils, exceptions
+├── travel-ai-gateway/      # Model registry + factory + routing proxy (M7)
+├── travel-chat-stream/     # Transport-agnostic chat streaming pipeline (Flux<StreamEvent>, M6)
+├── travel-chat-domain/     # Chat domain: 9-step pipeline / agents / memory / guards / trace (M6-31)
+├── travel-web-mvc/         # MVC cross-cutting: global exception, rate-limit interceptor, SseStreamAdapter
+├── travel-stream-webflux/  # Reactive transport (:8083): JWT filter + ChatStream WebFlux controller (M6-30)
 ├── travel-crawl/           # Web crawler for attraction data
 ├── travel-knowledge/       # ETL + RAG knowledge engine
-├── travel-planning/        # Core agentic planning service (main app)
+├── travel-planning/        # Core agentic planning service (main app, :8081)
 └── travel-frontend/
     └── next-app/           # Next.js 14 frontend
 ```
@@ -192,7 +250,27 @@ Shared library, no business logic. Contains:
 - **Utils** — JSON, date, crypto (SM4/AES), string, geo-distance helpers.
 - **Common exceptions & response wrappers** — unified `Result<T>` envelope.
 
-### 4.2 travel-crawl (`:8087`)
+### 4.2 travel-ai-gateway
+
+Model routing gateway (M7), the single source of truth for LLM providers:
+
+- **`ModelRegistry`** — binds `travel.ai.model-registry.*`; startup validation
+  (unique keys, missing `api-key-env` → disabled + WARN, role defaults, selectable
+  filtering); exposes `GET /api/v1/models` through `ModelController` in planning.
+- **`ChatModelFactory`** — builds models per descriptor (DashScope native /
+  OpenAI-compatible) with `computeIfAbsent` single-flight caching and per-model
+  timeout injection.
+- **`RoleRoutingChatModel`** — `ChatModel` proxy: request-level model >
+  `ModelRoutingContext.current()` (main role only) > registry role default;
+  unknown/disabled/not-selectable fails fast with `40005 MODEL_NOT_FOUND`.
+- **`RoutingChatClient`** (M7-8) — wraps the main agent's `ChatClient` and
+  normalizes "prose + trailing JSON array" replies to the pure routing array at the
+  `chatResponse()` exit, so the Supervisor graph never loses its sub-agent pipeline
+  to formatting drift.
+- **Rollback** — `travel.ai.model-registry.enabled=false` restores the legacy
+  DashScope-only beans (`LegacyModelFallbackConfig`).
+
+### 4.3 travel-crawl (`:8087`)
 
 Attraction data ingestion pipeline:
 
@@ -201,7 +279,7 @@ Attraction data ingestion pipeline:
 - **PipelinePublisher** — publishes crawl results downstream (to knowledge module).
 - **Scheduled jobs** — periodic re-crawl / incremental updates.
 
-### 4.3 travel-knowledge (`:8082`)
+### 4.4 travel-knowledge (`:8082`)
 
 The **knowledge engine** — makes the LLM grounded and factual:
 
@@ -213,25 +291,76 @@ The **knowledge engine** — makes the LLM grounded and factual:
   - `SelfRagStrategy` — self-reflection loop: generate → critique → regenerate if needed.
   - `CorrectiveRagStrategy` — query rewriting / fallback retrieval when the first pass is poor.
 - **QueryUnderstanding** — classifies intent & entities, extracts constraints (budget, days, companions) before retrieval.
+- **Hallucination guards (M7-8)** — LLM-extracted `type` must be supported by the
+  raw query (config keywords + synonym table) and `keywords` are anchored to the
+  query text and de-duplicated; validated intents are cached, never raw LLM output.
+- **Zero-result fallback (M7-8)** — when a type-filtered retrieval returns empty,
+  `AbstractRagStrategy` retries once with `city` only (type dropped) and logs a WARN.
 - **Quantified RAG evaluation** (M4-2) — 45 golden queries, Recall@5/MRR@5 hard gates + LLM soft gates, `run_rag_eval.ps1`;
 - **Rerank SPI / online Judge / parent-context fetch** (M4-5/6) — Rerank defaults to noop, Judge off by default, deterministic by-prefix parent fetch;
 - **Controllers** — `AttractionController` (POI CRUD/search), `EtlController` (pipeline trigger), `RagController` (retrieval debug), `FileController` (MinIO upload/download), `MemoryController` (session-context search/by-prefix), `FileAccessController` (proxy/presign/resolve + rate limit 429).
 
-### 4.4 travel-planning (`:8081`)
+### 4.5 travel-chat-stream
+
+Transport-agnostic chat streaming domain (M6-6-R1 Step 0):
+
+- `ChatStreamService` / `ChatStreamProperties` — stream lifecycle and timeout configuration;
+- `StreamingPipeline` — turns the chat-domain reply into a `Flux<StreamEvent>` (thinking / token / done / error / id);
+- `StreamEvent` / `StreamErrorCode` — shared wire protocol consumed by both the MVC and WebFlux adapters;
+- `TurnCancellation` / `TurnInterruptedException` — cancellation-token primitives shared by all transports.
+
+### 4.6 travel-chat-domain
+
+Chat domain, independent of any web transport (M6-31, ChatService sink-down):
+
+- **9-step message pipeline** — Guard → Persistence → Preference → Knowledge → Intent → Memory → Budget → Routing → Reply persist;
+- **Agent layer** — `TravelSupervisorAgent` facade (M6-58 T9 split) delegating to `DirectAnswerExecutor` / `SupervisorGraphExecutor` / `SupervisorStreamExecutor`, plus `ChatIntentClassifier`, `PlanningHeuristics`, `TokenUsageInterceptor`;
+- **Memory** — short-term / long-term / chat / knowledge / session-store;
+- **Guards & trace** — PromptGuard, rate limiter, circuit breaker, per-request agent trace.
+- **Runtime reliability (M7-8)** — `TraceAspect` covers `ChatService.runStream` so
+  the per-request message snapshot ThreadLocal is cleared on the SSE/WebFlux path
+  (no cross-request history leakage); Redis commands interrupted by thread
+  cancellation are treated as turn cancellation (`INTERRUPTED`, resumable) instead of
+  generic `FAILED`; rolling-summary validation checks the full generation input
+  (old summary + new messages).
+
+### 4.7 travel-web-mvc
+
+MVC-only cross-cutting components (M6-9 P2):
+
+- `GlobalExceptionHandler` — transport-safe error handling (avoids writing JSON bodies into `text/event-stream`);
+- `RateLimitInterceptor` — MVC rate limiting;
+- `SseStreamAdapter` — `Flux<StreamEvent>` → Spring `SseEmitter` (keepalive,
+  cancellation, graceful SSE-disconnect handling; after a broken response it skips
+  `complete()` and just disposes, M7-8).
+
+### 4.8 travel-stream-webflux (`:8083`)
+
+Reactive transport pilot (M6-30~35):
+
+- `ReactiveJwtAuthFilter` — JWT-only user resolution (the `X-User-Id` header fallback was removed, M6-57 T8);
+- `ChatStreamWebfluxController` — reactive SSE endpoint backed by the same chat domain;
+- Global WebFlux exception handling + CORS; the frontend gray-switches to it with `NEXT_PUBLIC_STREAM_BASE=http://localhost:8083`.
+- `StreamBeansConfig` — explicit beans for the pilot (JWT auth, `StreamMetrics` Noop
+  fallback via `@ConditionalOnMissingBean`, Feign `HttpMessageConverters`, pilot
+  executor); imports `GatewayAutoConfig` so the same model registry serves 8083.
+
+### 4.9 travel-planning (`:8081`)
 
 The **core service** where agents collaborate:
 
-- **Controllers** — `AuthController` (register/login/JWT), `ChatController` (multi-turn dialogue + close + idempotency clientMessageId), `ItineraryController` (generate/resume/view/list/delete), `MeController` (`/users/me`), `AvatarController` (user avatar upload via MinIO).
+- **Controllers** — `AuthController` (register/login/JWT), `ChatController` (multi-turn dialogue + close + idempotency clientMessageId + SSE stream endpoint `POST /api/v1/chat/sessions/{sessionId}/messages/stream`), `ItineraryController` (generate/resume/view/list/delete + SSE stream), `MeController` (`/users/me`), `AvatarController` (user avatar upload via MinIO).
 - **Multi-Agent Framework** (`agent/`):
-  - `TravelSupervisorAgent` — orchestrator that routes user intent to the right sub-agent.
+  - `TravelSupervisorAgent` — facade that routes user intent to the right path (M6-58: implementation split into `DirectAnswerExecutor` / `SupervisorGraphExecutor` / `SupervisorStreamExecutor`).
   - `AttractionAgent` — attraction recommendation grounded in RAG.
   - `RouteAgent` — day-by-day route & sequencing.
   - `BudgetAgent` — cost estimation & breakdown.
   - `PreferenceAgent` — preference extraction & profile update.
 - **Workflow** (`workflow/`) — `TravelWorkflowBuilder` assembles a **StateGraph**: `[Query Understanding] → [Retrieval] → [Planning] → [Budget] → [Output]` with explicit state transitions.
-- **9-step message pipeline** (M3-8~18, `memory/pipeline/`) — Guard→Persistence→Preference→Knowledge→Intent→Memory→Budget→Routing→Reply persist, each step independently testable; ChatService reduced to pure orchestration.
+- **9-step message pipeline** (M3-8~18, implemented in `travel-chat-domain`) — Guard→Persistence→Preference→Knowledge→Intent→Memory→Budget→Routing→Reply persist, each step independently testable; ChatService reduced to pure orchestration.
+- **Streaming & turn cancellation** (M6) — SSE streaming (thinking/token/done events, `Last-Event-ID` replay), `TurnCancellation` chain (interceptor short-circuit + root-cause unwrapping), stop/retry endpoints, Redis pub/sub cancellation broadcast.
 - **Message idempotency & session finalization** (M4-3/4) — `t_chat_message_idem` (PENDING/COMPLETED/FAILED), close state machine (ARCHIVED rejects writes 40902, summary finalize + Lua CAS atomic write).
-- **Itinerary state machine & resume** (M4-7/8/9) — GENERATING/GENERATED/FAILED + node snapshots + prefix-subgraph cache + `resume` endpoint.
+- **Itinerary state machine & resume** (M4-7/8/9 + M6-51/53/54) — GENERATING/GENERATED/FAILED + node snapshots + prefix-subgraph cache + `resume` endpoint; generation runs on an independent virtual thread (SSE disconnect stops only the push), and the list auto-polls while any row is GENERATING.
 - **Memory System** (`memory/`) — three layers:
   - `shortterm` — session-scoped working memory (current trip context).
   - `longterm` — cross-session user preferences & facts.
@@ -241,15 +370,17 @@ The **core service** where agents collaborate:
 - **Guard Layer** (`guard/`) — `PromptGuard` (prompt injection detection), rate limiting, and circuit breaker protecting LLM calls.
 - **Trace** (`trace/`) — per-request agent trace: every node execution, tool call, and LLM exchange is recorded for explainability and debugging.
 
-### 4.5 travel-frontend (`next-app`, port 3100)
+### 4.10 travel-frontend (`next-app`, port 3100)
 
 Next.js 14 App Router application:
 
-- **Routes**: `/login`, `/register`, `/chat` (AI dialogue), `/plan` (plan creation), `/itinerary` (view & manage), `/profile` (user settings), `/attractions` (browse POI knowledge base).
+- **Routes**: `/login`, `/register`, `/chat` (AI dialogue + SSE streaming), `/plan` (plan creation), `/itinerary` (view & manage), `/profile` (user settings), `/attractions` (browse POI knowledge base).
 - **Key components**:
   - `markmap-view.tsx` — interactive itinerary mind map.
   - `theme-provider.tsx` / `theme-toggle.tsx` — dark/light theme.
   - `prefetch-provider.tsx` — route prefetch optimization.
+  - `components/chat/` — `SessionList` / `MessageBubble` (M6-58 T10 chat-page split).
+  - `hooks/useChatStream.ts` / `hooks/useSessionList.ts` — chat streaming and session-list domain hooks (M6-58).
   - `feature/` — feature-specific UI modules (chat, plan forms, itinerary cards).
   - `ui/` — reusable UI primitives.
 - **Data layer**: `lib/` axios client with JWT interceptor; typed API functions per domain.
@@ -364,6 +495,23 @@ Memory is **explicitly injected** into the supervisor's context window, and upda
 > triggers a **full finalize summary** (`summaryType=final`, without concatenating the old
 > summary), using the `summary_final` column as the implicit pending item with startup compensation.
 
+### 5.6 Security & Guardrails
+
+- **PromptGuard** — detects prompt-injection patterns and jailbreak attempts before they reach the LLM.
+- **Rate Limiter** — Redis/Redisson-based token-bucket rate limiting per user/IP on chat & RAG endpoints.
+- **Circuit Breaker** — protects the LLM provider (DashScope) from cascading failures; falls back to cached responses.
+- **JWT Auth** — stateless token auth; passwords stored hashed.
+- **JWT-only identity on the reactive transport** — `ReactiveJwtAuthFilter`; the `X-User-Id` header fallback was removed (M6-57 T8).
+- **Input validation** — zod (frontend) + Bean Validation (backend).
+
+### 5.7 Agent Trace (Explainability)
+
+Each planning request produces a **trace record**: node ID, agent invoked, tool calls, prompt/response snapshot, timestamps, and token usage. This powers:
+
+- Debugging complex agent behavior.
+- Showing the user *why* a recommendation was made.
+- Regression testing of the pipeline (see `scripts/regression/`).
+
 ### 5.8 Message Idempotency & Session Lifecycle（M4-3/4）
 
 - Message idempotency: `t_chat_message_idem` (PENDING/COMPLETED/FAILED); the check point is
@@ -383,6 +531,11 @@ Memory is **explicitly injected** into the supervisor's context window, and upda
 - Recovery: `POST /api/v1/itineraries/{id}/resume` (guards 40302/40401/40903/40905; zombie
   GENERATING older than 10 minutes is resumable); pre-fixes: idempotency scoped by userId,
   DuplicateKey converted to re-read, transaction self-invocation split out.
+- M6-51: conditional-edge completion fix (`budget_estimation → snapshot_budget`) and resume
+  context injection (`buildResumeMessage` restores user input + real snapshot sections);
+- M6-53/54: generation moved to an independent virtual thread so an SSE disconnect only stops
+  the push (no more refresh-induced FAILED); the itinerary list auto-polls every 3s while any
+  row is GENERATING.
 
 ### 5.10 Quantified RAG Evaluation (M4-2)
 
@@ -392,21 +545,197 @@ Memory is **explicitly injected** into the supervisor's context window, and upda
 - `run_rag_eval.ps1` standalone orchestration, `--no-llm` resilience, data-drift RELABEL_HINT;
 - Post-integration baseline (2026-08-23): Recall@5≈0.80 / MRR@5≈0.80.
 
-### 5.6 Security & Guardrails
+### 5.11 Streaming Transport & Turn Cancellation（M6）
 
-- **PromptGuard** — detects prompt-injection patterns and jailbreak attempts before they reach the LLM.
-- **Rate Limiter** — Redis/Redisson-based token-bucket rate limiting per user/IP on chat & RAG endpoints.
-- **Circuit Breaker** — protects the LLM provider (DashScope) from cascading failures; falls back to cached responses.
-- **JWT Auth** — stateless token auth; passwords stored hashed.
-- **Input validation** — zod (frontend) + Bean Validation (backend).
+- **Dual transport**: chat SSE is served by MVC (`SseEmitter`, :8081) and WebFlux (:8083);
+  both consume the same `travel-chat-stream` `Flux<StreamEvent>` (thinking / token / done /
+  error / id). The frontend gray-switches with `NEXT_PUBLIC_STREAM_BASE`.
+- **Frontend reveal**: per-session `streamStates` + a 24 ms × 3-char reveal queue; switching
+  sessions never aborts the backend stream; background sessions accumulate and notify via a
+  red dot on the session list (M6-5 / M6-48 / M6-49).
+- **Reconnect & replay**: SSE `Last-Event-ID` + the same idempotency key resume a disconnected
+  stream (M6-10).
+- **Cancellation chain** (M6-40~46): a `TurnCancellation` token is checked at every node
+  boundary; cancellation metadata travels inside the graph `RunnableConfig`; interceptors
+  short-circuit, `ReactiveBlockSupport` disposes the Reactor subscription, and root causes are
+  unwrapped so `TurnInterruptedException` is never swallowed into fallback text; Redis pub/sub
+  broadcasts stop events across instances.
+- **Stop / retry UX** (M6-36/47): the frontend stop button calls the interrupt endpoint
+  (PENDING → INTERRUPTED), shows "执行已中断" + retry; after a browser refresh, the backend
+  `getLatestInterruptedTurn` restores the resume entry.
 
-### 5.7 Agent Trace (Explainability)
+### 5.12 External-Review-Driven Architecture Refactor（M6-55~58）
 
-Each planning request produces a **trace record**: node ID, agent invoked, tool calls, prompt/response snapshot, timestamps, and token usage. This powers:
+An external code review produced two architecture reports; the project adopted them
+dialectically (24 items triaged, some corrected after verification):
 
-- Debugging complex agent behavior.
-- Showing the user *why* a recommendation was made.
-- Regression testing of the pipeline (see `scripts/regression/`).
+- **Batch 1 (M6-56)** — test re-homing across `travel-chat-domain` / `travel-chat-stream` /
+  `travel-planning` (39 test classes), turn-state transition table + INTERRUPTED idempotency
+  tests, rate-limiter scheduled cleanup;
+- **Batch 2 (M6-57)** — `ChatService.requireOwnedSession` consolidation, prompt/code-fence
+  utility reuse, SHA-256 intent-cache keys, WebFlux JWT-only user resolution;
+- **Batch 3 (M6-58)** — `TravelSupervisorAgent` split (facade <300 lines + `PlanningHeuristics`,
+  `ReactiveBlockSupport`, `DirectAnswerExecutor`, `SupervisorGraphExecutor`,
+  `SupervisorStreamExecutor`, `SupervisorResponseSupport`, `SupervisorTraceSupport`) and the
+  chat page split (`components/chat/*` + `hooks/useChatStream` / `hooks/useSessionList`), all
+  behavior-preserving with targeted regression.
+
+### 5.13 Model Routing & LLM Output Reliability（M7 / M7-8）
+
+- **Request-level model threading (M7)** — `model` flows from controller DTOs →
+  `StreamRequest.attributes` → `ChatStreamService.preflight` →
+  `prepareStream(..., model)` → `ChatService.runStream` wrapped by
+  `ModelRoutingContext.runWith(model, ...)`; itinerary `generate`/`resume` follow the
+  same pattern. Invalid models fail fast (`40005`), never silently fall back.
+- **Thread-local hygiene (M7)** — `ModelRoutingContext` is `runWith`-wrapped with
+  `finally clear` (including the routed-model slot); the reactive graph path carries
+  the model via `RunnableConfig.metadata` because Reactor threads do not inherit
+  ThreadLocals.
+- **Main-agent routing normalization (M7-8)** — `RoutingChatClient` (dynamic proxy
+  over `ChatClient` → request spec → call/stream response specs) extracts the last
+  valid JSON array from the assistant reply at the `chatResponse()` exit. Combined
+  with a strict “array-only” supervisor prompt, this keeps the 4-sub-agent pipeline
+  intact even when the main model prefixes its routing array with prose.
+- **Query-understanding hallucination guards (M7-8)** — `type` is kept only when the
+  raw query contains a matching type keyword (config + synonym table); `keywords`
+  are filtered to substrings of the raw query and de-duplicated; validation happens
+  before the LRU cache write. Zero-result type-filtered retrievals fall back to a
+  city-only retry once (e.g. “杭州美食” has no FOOD POIs → returns Hangzhou candidates).
+- **Runtime reliability (M7-8)** — `TraceAspect` now covers `ChatService.runStream`
+  (per-request message-snapshot ThreadLocal is cleared on the SSE path, preventing
+  stale-history leakage across requests); Redis commands interrupted by cancellation
+  are re-classified as turn cancellation (`INTERRUPTED` + WARN) instead of generic
+  failures; SSE disconnects no longer produce `No converter for R ... text/event-stream`
+  noise (adapter skips `complete()` on broken responses, `GlobalExceptionHandler`
+  stays silent for SSE content type); rolling-summary validation compares against the
+  full generation input (old summary + new messages).
+- **Forward-looking plan (M7-9, pending)** — structured outputs (JSON mode /
+  BeanOutputConverter) for query understanding, rule-based or dual-model summary
+  validation, chat-intent vs. supervisor routing consistency, cache TTL/metrics, and
+  framework-level routing-array tolerance; activated only when defined trigger
+  signals appear (see `docs/business-records/M7-9-*`).
+
+### 5.14 Retrieval Reliability & Conflict Validation（M8 / 检索功能增强）
+
+- **Structured fact pipeline (M8-1)** — `SearchResult` now carries
+  city/type/address/openHours/ticketPrice/freeEntry/rating/recommendedDuration/dataSource;
+  `AttractionEnricher` batch-backfills them from MySQL at the `AbstractRagStrategy`
+  exit (single exit, score-neutral), and the chat/itinerary injection format is a
+  structured fact card with a source note (null = knowledge base has no data).
+- **Source labeling & grounding checks (M8-2)** — every candidate carries
+  `dataSource`; `AttractionGroundingChecker` verifies generated attraction names
+  against the candidate set (bidirectional contains + suffix normalization) and
+  records `grounding_rate`/unmatched into `t_agent_trace` (observation mode);
+  retrieval degradations are observable via `rag.routing.degraded` metrics and a
+  `DEGRADED` trace status; the query-understanding synonym table is config-driven.
+- **Deterministic conflict validation (M8-3)** — `ItineraryConflictValidator`
+  (time overlap / open-hours / duration capacity / budget consistency rules) is
+  mounted as a `conflict_check` graph node with a `conflict_retry` loop
+  (budget_retry-style counter + feedback message); budget JSON parsing is now
+  `JsonUtils`-based (`BudgetJsonParser`).
+- **MCP web-search fallback (M8-4, default off)** — `WebSearchPort` +
+  `McpWebSearchAdapter` (spring-ai-starter-mcp-client, rate-limited/quota'd/
+  circuit-broken/time-boxed) fills only locally-missing openHours/ticketPrice,
+  labels them `web_enrich`, and the injection adds a low-confidence notice.
+- **Write-back loop (M8-5, default off)** — `WebEnrichWritebackService` fills only
+  NULL columns with a 7-day MySQL debounce (`enrich_source`/`enrich_updated_at`),
+  then triggers incremental ETL so the next request hits local data;
+  `SourceConfidence` gained the lowest `WEB` level.
+- **REFINE retention discipline (M8-6)** — supervisor/route prompts require
+  explicit keep/adjust/add/delete labels; `checkRetention` observes silent-loss
+  rates into the trace.
+
+### 5.15 Engineering / Reliability Hardening (M9 / M10)
+
+- **Exact-name ranking boost (M9-1)** — `ExactMatchBoostRule` promotes a candidate
+  whose normalized name exactly or closely matches the raw query before enrichment
+  (deterministic, zero-LLM, `travel.rag.quality.exact-match-boost`).
+- **Full index rebuild (M9-1b)** — MySQL 799 rows were re-embedded into Milvus/ES
+  with the 2026-09-01 manually enriched fields; RAG hard gate was re-baselined to
+  **Recall@5=0.8685 / MRR@5=0.8741** (45 queries, `--no-llm`).
+- **Web-search provider registry & async fill (M9-2)** — `WebSearchProviderRegistry`
+  provides priority/failover across Tavily/MCP/Noop; `fill-mode=async` keeps the
+  main retrieval path synchronous-free and writes results through
+  `WebEnrichWritebackService` for the next request; `OpenHoursParser` was moved to
+  `travel-common` for cross-module reuse.
+- **Graph-flow oscillation observability (M9-3)** — stream executor counts repeated
+  node executions and emits `graphFlowWarnings` into the trace callPath (dispatch
+  dedup/cache remain framework-level open items, see M9-3 record).
+- **Chat-path conflict observation (M9-4)** — `ItineraryConflictPort` exposes the
+  deterministic validator to chat supervision without a module dependency inversion;
+  violations are written into `t_agent_trace` callPath (`chatConflictViolations`).
+- **Engineering cleanup (M10-1/M10-2)** — mcp-command config alignment and ETL
+  batch-size property; chat 40303 UX moved into `useChatStream`; ItineraryService
+  was split from 840 lines into a 218-line facade plus orchestrator/coordinator/
+  graph-executor/slice-writer/dto-assembler; split-package cleaned;
+  `SessionStatus` enum; per-model circuit breaker (`ModelCircuitGuard`, 40304);
+  Hikari `max-lifetime`; Redis-interrupt WARN downgraded to DEBUG.
+
+### 5.16 Business Extensions (M11)
+
+- **M11-4 Profile consumption level** — `t_travel_profile.consume_level`
+  (ECONOMICAL/STANDARD/COMFORT) is extracted by preference saving, exposed to
+  agents/profile context, and used by the budget prompt to scale meal prices
+  (×0.6 / ×1.0 / ×1.8).
+- **M11-2 Itinerary map** — `AttractionVisit` now carries latitude/longitude filled
+  by `ItineraryCoordinateDecorator`; the itinerary detail page lazy-loads a Leaflet
+  map grouped by day with polylines and a missing-coordinate fallback.
+- **M11-3 Reliability dashboard** — `GET /api/v1/admin/reliability/stats`
+  aggregates `t_agent_trace` (grounding/retention/degraded/model distribution/top
+  nodes) behind `travel.admin.user-ids`; `/admin/reliability` renders metrics,
+  bar chart and tables.
+- **M11-1 Itinerary versioning** — `t_itinerary.version`/`version_diff` plus
+  `t_itinerary_version` snapshots; every finalized content change creates a new
+  version with a deterministic kept/adjusted/added/removed diff; version list and
+  detail endpoints + frontend history drawer.
+
+### 5.17 Map real road network & AMap quota control (M12)
+
+- **M12-1 AMap route/geocode adapters** — reuses the crawler Web-service Key
+  (`AMAP_WEB_API_KEY`) on the backend only: v3 walking/driving direction parsing,
+  geocoding, Port-Adapter + Noop rollback; no key leaves the 8081 service.
+- **M12-2 Route orchestration, Redis cache & quota guard** — new
+  `GET /api/v1/itineraries/{id}/map-routes`; segment-level cache
+  (`travel:map:route:v1:*`, 30d; geocode 90d; empty 1d), daily/monthly Redis budgets
+  (route 4500/120000, geocode 3000/30000), ≤2 QPS pacing, circuit breaker and
+  LOCAL_FALLBACK degradation; `RequestThrottle`/`QuotaGuard` moved to travel-core.
+- **M12-3 Frontend map upgrade** — AMap tiles (no key) with OSM fallback, real
+  road-network polylines vs dashed schematic curves, hotel anchor markers, route
+  loading/error states; `lib/itinerary-map-utils.ts` pure functions + Vitest.
+
+### 5.18 20260904 review implementation (M13–M15)
+
+- **M13 External activation & REFINE version loop** — AMAP/TAVILY activated via
+  environment keys; chat planning writes back into `t_itinerary`
+  (create-on-chat / REFINE v2+ with deterministic diff), version history drawer and
+  rollback-to-new-version are exposed in the itinerary detail modal; a
+  React-agent BEFORE_AGENT spike (`DedupSubAgentHook`) is production-ready but
+  **disabled by default** (`travel.chat.supervisor.dispatch-dedup.enabled=false`).
+- **M14-1a Five-piece bean-ification** — ItineraryService no longer lazily new()s
+  DtoAssembler/SliceWriter/ResumeCoordinator/GraphExecutor/GenerationOrchestrator;
+  all six collaborators are `final` constructor-injected beans (19-arg Lombok
+  constructor, test factories synchronized).
+- **M14-1b Meal consume_level hard rule** — `ItineraryConflictValidator` adds a
+  deterministic fifth rule: meal estimate must lie within
+  `days×people×200×consumeFactor×(1±30%)`; mismatch is a WARNING appended to
+  `budgetEstimate.notes`, never a retry.
+- **M14-1c Dashboard & itinerary token alignment** — reliability stats now expose
+  token totals/daily trend, model×duration (avg/P50/P95/max) and AMap route/geocode
+  quota water levels; `ItineraryGraphExecutor` begins/ends the shared
+  `TokenUsageInterceptor` with the trace requestId so itinerary graph tokens land
+  in `t_agent_trace`.
+- **M15-1 Open-Meteo weather (default off)** — zero-key weather Port + adapter
+  with Redis geo/forecast caches, daily 3000-budget/≤1 QPS/circuit-breaker guard,
+  weather context injected into itinerary generation/resume and daily weather
+  badges on the map page; `travel.weather.enabled=false`.
+- **M15-2 Map enhancement** — markers are colored by POI type
+  (CULTURE/NATURE/FOOD/SHOPPING/FAMILY/LEISURE), route segments show 🚶/🚗 mode
+  badges, and a play button sequentially highlights each day's routes
+  (respects `prefers-reduced-motion`).
+
+Implementation details and per-step verification live under
+`docs/business-records/` (`M13-*`/`M14-*`/`M15-*` records plus the aggregate task
+list `M13-20260904评审实施任务清单.md`).
 
 ---
 
@@ -419,6 +748,7 @@ Each planning request produces a **trace record**: node ID, agent invoked, tool 
 5. **Safety by default** — guards sit *in front of* the LLM and storage layers.
 6. **Everything is traceable** — every AI decision has an audit trail.
 7. **Separate concerns by module** — crawl (data acquisition), knowledge (retrieval), planning (reasoning), common (shared) are independently deployable services.
+8. **Streaming is the default UX** — chat responses stream as thinking/token events, and cancellation is a first-class, transport-agnostic concern (M6).
 
 ---
 
@@ -436,7 +766,10 @@ Each planning request produces a **trace record**: node ID, agent invoked, tool 
         └─▶ Budget node estimates costs; replan loop if over budget
         └─▶ Output node produces structured JSON + markdown
         └─▶ Trace recorder writes the full audit trail
-   (recovery: FAILED/zombie-GENERATING itineraries can resume from breakpoints; sessions can be closed with summary finalize)
+        └─▶ SSE transport streams thinking → token → done (MVC SseEmitter :8081 or WebFlux :8083)
+        └─▶ stop → interrupt endpoint → INTERRUPTED; retry reuses the same idempotency key
+   (recovery: FAILED/zombie-GENERATING itineraries can resume from breakpoints; chat streams can
+    resume with Last-Event-ID + same idempotency key; sessions can be closed with summary finalize)
 3. Frontend renders: markdown itinerary card + mind map + budget chart
 4. User edits / follows up → chat memory + long-term memory updated
 ```
@@ -451,13 +784,17 @@ Core tables (initialized by `scripts/init_mysql.sql` + M4 migrations in `scripts
 | -------------------------------------- | --------------------------------------------------- |
 | `t_user`                               | Accounts (BCrypt password, email)                    |
 | `t_travel_profile`                     | Long-term profile (preferences/budget/style/history, version optimistic lock) |
-| `t_itinerary`                          | Itinerary entity (GENERATING/GENERATED/CONFIRMED/FAILED) |
+| `t_itinerary`                          | Itinerary entity (GENERATING/GENERATED/CONFIRMED/FAILED; M11-1 version/version_diff) |
 | `t_itinerary_task_snapshot`            | Itinerary node snapshots (M4-8, for resume)          |
+| `t_itinerary_version`                  | Itinerary historical snapshots (M11-1, version + diff + content) |
 | `t_attraction`                         | POI knowledge base (source of truth for the 40/40/40 baseline) |
 | `t_chat_session` / `t_chat_message`    | Sessions (ACTIVE/ARCHIVED + summary_final) and message history |
 | `t_chat_message_idem`                  | Message idempotency table (PENDING/COMPLETED/FAILED, M4-3) |
 | `t_agent_trace`                        | Agent trace (RUNNING/SUCCESS/FAILED/TIMEOUT)         |
 | `t_system_config`                      | System config (default RAG strategy, rate limits, etc.) |
+
+`t_travel_profile` also carries `consume_level` (M11-4); `t_agent_trace` carries
+grounding/retention observation columns (M8-2/M8-6).
 
 The MySQL data is the **source of truth**; Elasticsearch and Milvus are derived indexes rebuilt by the ETL pipeline.
 
@@ -470,7 +807,12 @@ The MySQL data is the **source of truth**; Elasticsearch and Milvus are derived 
 - **JDK 21** (backend)
 - **Node.js 18+** (frontend)
 - **Docker + Docker Compose** (middleware)
-- **Alibaba Cloud DashScope API Key** (LLM)
+- **LLM API keys**: `DASHSCOPE_API_KEY` (required), `DEEPSEEK_API_KEY` / `GLM_API_KEY`
+  (optional; registry marks them disabled when absent)
+- **Required security env vars (M21-1/2/3)**: `JWT_SECRET` (no default since M21-1 —
+  startup fails when missing) and `TRAVEL_INTERNAL_TOKEN` (shared secret across
+  planning/webflux/knowledge/crawl; internal endpoints fail-closed when unset).
+  Local development may set them in `application-local.yml` (gitignored).
 
 ### 9.2 Step 1 — Start Middleware
 
@@ -505,6 +847,14 @@ python crawl_attractions.py   # fetch attraction data
 #                python scripts/regression/reset_baseline.py --force (test env only, rebuilds from scratch)
 ```
 
+### 9.4b 配置三层结构与 IDEA 启动（M16-3 起）
+
+配置优先级（高 → 低）：`application-local.yml`（本地 profile，已 gitignore，只放环境差异：VM 数据源/Redis/ES/MinIO/API Key/有意覆盖项）→ 进程 `application.yml`（端口/进程专属段）→ `application-chat.yml`（chat-domain 域单源：模型注册表/记忆/RAG/LLM/聊天/守卫词表/追溯/CORS/JWT，双进程共享，经 chat-domain 内注册的 `ChatDomainConfigEnvironmentPostProcessor`（`META-INF/spring.factories`）以最低优先级自动装载；不使用 `spring.config.import`，因 IDEA 无法解析依赖模块 classpath 资源会报错）。
+
+**IDEA Run 按钮启动必须激活 local profile**（否则数据源回落 localhost 启动失败）：Run Configuration → `Active profiles: local`（或 VM options `-Dspring.profiles.active=local`）。命令行等价：`java -jar app.jar --spring.profiles.active=local`。
+
+**禁止**在 `application-local.yml` 重复 chat-domain 域段（会静默覆盖单源造成双源漂移；历史残留已于 M18 批次清理，回归脚本有条件红线守护）。
+
 ### 9.5 Step 4 — Run Backend Services
 
 ```bash
@@ -514,7 +864,10 @@ mvn -pl travel-knowledge spring-boot:run
 # terminal 2 — planning service (:8081)
 mvn -pl travel-planning spring-boot:run
 
-# terminal 3 — crawl service (:8087, optional)
+# terminal 3 — reactive chat stream transport (:8083, optional; requires travel-chat-domain)
+mvn -pl travel-stream-webflux spring-boot:run
+
+# terminal 4 — crawl service (:8087, optional)
 mvn -pl travel-crawl spring-boot:run
 ```
 
@@ -527,6 +880,9 @@ cd travel-frontend/next-app
 npm install
 npm run dev                  # http://localhost:3100
 # production: npm run build && npm start
+
+# optional: gray-switch chat SSE to the reactive transport (:8083)
+# NEXT_PUBLIC_STREAM_BASE=http://localhost:8083 npm run dev
 ```
 
 ### 9.7 Hybrid Deployment (as used in development)
@@ -582,6 +938,14 @@ Development followed milestone-driven records in `docs/business-records/`:
 | **M2-5**  | Itinerary budget breakdown output optimization                                                                                                                             |
 | **M3**    | Ten-phase optimization (M3-1~22): MessagePipeline 9-step chain, common dependency sinking, prompt externalization, frontend hardening, profile optimistic-lock retry |
 | **M4**    | Three-direction optimization (M4-1~11): session compression (Lua CAS/close finalize), RAG reliability (evaluation/Judge/Rerank/parent-context), state recovery (message idempotency/itinerary state machine+resume); integration round fully green (199 unit tests, F104 28/28, RAG evaluation baseline) |
+| **M5**    | Frontend experience optimization (M5-1~2): chat page interaction polish, form/dropdown/theme/URL-encryption hardening |
+| **M6**    | Streaming & lifecycle hardening (M6-1~58): SSE streaming pipeline, dual MVC/WebFlux transport, real token usage, turn cancellation (stop/retry/refresh recovery), itinerary resume fixes (edge completion/resume context/SSE decoupling/auto-poll), external-review-driven refactor (Supervisor + chat page split) |
+| **M7**    | Multi-model gateway (M7-0~5): `travel-ai-gateway` model registry + factory + routing proxy, request-level model selection (chat/plan), light-role cost governance, rollback switch, `GET /api/v1/models`; runtime reliability & LLM output reliability (M7-6~8): explicit light-role wiring, actual-model trace, SSE-disconnect / Redis-interrupt / ThreadLocal-snapshot fixes, query-understanding hallucination validation, zero-result RAG fallback, main-agent routing normalization, rolling-summary validation fix; forward-looking plan M7-9 (pending) |
+| **M8**    | Retrieval reliability & conflict validation (M8-0~6): structured fact pipeline (MySQL backfill + fact-card injection), source labeling + grounding/retention checks + degraded observability, deterministic itinerary conflict rules + in-graph retry loop, MCP web-search fallback (default off) + write-back loop (default off), REFINE keep/adjust/add/delete discipline; RAG 45-golden gate PASS at Recall@5=0.8444 / MRR@5=0.8537 (baseline 0.8000/0.8093) |
+| **M9**    | Retrieval supply close-out & runtime hardening (M9-0~4): exact-name boost, full ES/Milvus rebuild (799/799), RAG baseline refreshed to 0.8685/0.8741, web-search provider registry + async fill, graph-flow node oscillation warning, chat conflict observation |
+| **M10**   | Engineering close-out (M10-1/2): ItineraryService split (840→218), chat 40303 UX into hooks, split-package cleanup, SessionStatus enum, per-model circuit breaker (40304), config/Hikari/Redis-log cleanup |
+| **M11**   | Business extensions (M11-1~4): itinerary versioning & diff drawer, Leaflet day-map with coordinate backfill, reliability dashboard (admin whitelist), profile consume-level budget personalization |
+| **M12**   | Map real road network & quota control (M12-0~3): guard components moved to travel-core; AMap v3 route/geocode adapters; map-routes endpoint with Redis cache + daily/monthly budgets; AMap-tile frontend with hotel anchors and schematic fallback |
 
 Each module also has a **business development record** markdown documenting design decisions, implementation details, and self-review results — a key academic artifact of the thesis.
 
@@ -602,9 +966,27 @@ Each module also has a **business development record** markdown documenting desi
 | `regression/`           | Regression test harness for the agent pipeline                               |
 | `data/`                 | Local data artifacts used by scripts                                         |
 | `sql/m4_*.sql`          | M4 migration scripts (idempotency/snapshot/summary_final, with rollback) |
+| `sql/m11_*.sql`         | M11 migration scripts (consume_level; itinerary version/version_diff + t_itinerary_version) |
 | `regression/run_full_regression.ps1` | Full-regression orchestrator (P1/P2/P3/F85/M4/F104/RAG eval; supports `-RepairBaseline`) |
 | `regression/run_rag_eval.ps1` | RAG offline evaluation (45 golden queries, hard/soft gates, `--write-baseline`) |
 | `regression/check_baseline.py` / `reset_baseline.py` | Three-end baseline check and canonical baseline rebuild |
+
+### 13.1 FAQ additions (M9/M10/M11)
+
+**Q: How do I inspect itinerary historical versions / diffs?**  
+Open an itinerary detail page → “历史版本”. Backend endpoints are
+`GET /api/v1/itineraries/{id}/versions` and
+`GET /api/v1/itineraries/{id}/versions/{version}`. Data comes from
+`t_itinerary_version`; current-row version metadata is on `t_itinerary`.
+
+**Q: Why does the itinerary map sometimes not render markers?**  
+Markers require `t_attraction.lat/lng` and a route-plan name that can be matched
+by `AttractionGroundingChecker`; otherwise the component shows the “no available
+coordinates” fallback.
+
+**Q: Reliability dashboard returns 403?**  
+Set `travel.admin.user-ids` (or env `ADMIN_USER_IDS`) to the comma-separated
+whitelist of your own user ids before calling `/api/v1/admin/reliability/stats`.
 
 ---
 

@@ -1,0 +1,101 @@
+target/
+!.mvn/wrapper/maven-wrapper.jar
+!**/src/main/**/target/
+!**/src/test/**/target/
+.kotlin
+
+### 本地配置与密钥（M3-1 卫生项）###
+**/application-local.yml
+.env.local
+
+### IntelliJ IDEA ###
+.idea/modules.xml
+.idea/jarRepositories.xml
+.idea/compiler.xml
+.idea/libraries/
+*.iws
+*.iml
+*.ipr
+
+### Eclipse ###
+.apt_generated
+.classpath
+.factorypath
+.project
+.settings
+.springBeans
+.sts4-cache
+
+### NetBeans ###
+/nbproject/private/
+/nbbuild/
+/dist/
+/nbdist/
+/.nb-gradle/
+build/
+!**/src/main/**/build/
+!**/src/test/**/build/
+
+### VS Code ###
+.vscode/
+
+### Mac OS ###
+.DS_Store
+
+### 敏感文件（不入 Git） ###
+.env
+.env.local
+.env.*.local
+
+### 日志 ###
+logs/
+*.log
+
+### 临时文件 ###
+*.tmp
+*.bak
+*.swp
+*~
+
+### 前端 ###
+travel-frontend/next-app/node_modules/
+travel-frontend/next-app/.next/
+travel-frontend/next-app/out/
+travel-frontend/next-app/build/
+travel-frontend/next-app/.env*.local
+
+### 数据文件 ###
+data/raw/
+data/processed/
+*.db
+*.sqlite
+
+### 本地/参考目录 ###
+.tmp-test/
+.workbuddy/
+.idea/
+
+### 根目录误解压产物（仅忽略仓库根，不匹配源码中的 com/org 目录） ###
+/com/
+/org/
+/META-INF/
+
+### S0 提交范围裁定（D-V8-6 + D-V8-6d：仓库范围=主源码；tests/scripts/deploy 资产全部本地化）###
+docs/
+/scripts/
+
+### 根目录误解压残留与崩溃转储（未跟踪垃圾，锚定根目录防误伤）###
+/com/
+/org/
+/META-INF/
+hs_err_pid*.log
+replay_pid*.log
+
+### D-V8-6d（2026-09-06 用户裁定：以下一律不入库，后续所有批次遵守）###
+**/src/test/
+travel-frontend/next-app/__tests__/
+travel-frontend/next-app/vitest.config.ts
+.env.example
+/docker-compose.yml
+/license.txt
+/notice.txt

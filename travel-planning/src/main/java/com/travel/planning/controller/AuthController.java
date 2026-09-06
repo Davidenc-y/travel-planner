@@ -22,6 +22,8 @@ import java.util.Map;
 public class AuthController {
 
     private final UserService userService;
+    private final com.travel.planning.util.AccessTokenBlacklistService accessTokenBlacklistService;
+    private final com.travel.common.auth.TokenAuthService tokenAuthService;
 
     /**
      * 注册
@@ -61,9 +63,18 @@ public class AuthController {
      * <p>注销 Redis 中的 refreshToken</p>
      */
     @PostMapping("/logout")
-    public R<Void> logout() {
+    public R<Void> logout(@RequestHeader(value = "Authorization", required = false) String auth) {
         // M16-1：身份仅认 accessToken（UserContextHolder）
         userService.logout(AuthUtils.resolveUserId());
+        // M21-4（SEC-01-03）：吊销当前 access token（jti 黑名单，TTL=剩余有效期）；
+        // 头缺失/非 Bearer/无效 token 时静默跳过（登出主语义=删 refresh 不变）
+        if (auth != null && auth.startsWith("Bearer ")) {
+            String token = auth.substring("Bearer ".length()).trim();
+            long remaining = tokenAuthService.getRemainingMillis(token);
+            if (remaining > 0) {
+                accessTokenBlacklistService.revoke(tokenAuthService.getJti(token), remaining);
+            }
+        }
         return R.ok(null);
     }
 }

@@ -37,9 +37,14 @@ public class LocalPipelinePublisher implements PipelinePublisher {
             String filePath = URLEncoder.encode(file.toAbsolutePath().toString(), StandardCharsets.UTF_8);
             String url = props.getKnowledgeBaseUrl() + "/api/v1/etl/import?filePath=" + filePath
                     + "&mode=" + (props.getImportCfg().isUpdateExisting() ? "upsert" : "insert");
-            HttpRequest req = HttpRequest.newBuilder(URI.create(url))
+            HttpRequest.Builder builder = HttpRequest.newBuilder(URI.create(url))
                     .timeout(Duration.ofSeconds(300))
-                    .POST(HttpRequest.BodyPublishers.noBody()).build();
+                    .POST(HttpRequest.BodyPublishers.noBody());
+            // M21-3（SEC-02-04）：管理面端点共享密钥（knowledge 侧 fail-closed 校验）
+            if (props.getInternalToken() != null && !props.getInternalToken().isBlank()) {
+                builder.header("X-Internal-Token", props.getInternalToken());
+            }
+            HttpRequest req = builder.build();
             HttpResponse<String> resp = httpClient.send(req, HttpResponse.BodyHandlers.ofString());
             JsonNode json = mapper.readTree(resp.body());
             boolean ok = resp.statusCode() == 200 && json.path("code").asInt() == 200;

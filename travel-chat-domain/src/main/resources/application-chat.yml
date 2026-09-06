@@ -8,6 +8,10 @@
 # 且进程 yml 中的同名键优先级高于本文件（可按进程覆盖）。
 # 键值与 2026-09-05 单源化前两进程重复段完全一致（行为等价红线）。
 travel:
+  # M21-2（SEC-02-02）：服务间内部调用共享密钥（8083→8081 chat-writeback 桥）；
+  # 空缺省 = fail-closed（未配置时桥端点拒绝一切内部调用）。本地开发在 application-local.yml 覆盖。
+  internal:
+    token: ${TRAVEL_INTERNAL_TOKEN:}
   # M7：模型注册表（单一事实源；enabled=false 回退旧行为——Batch 2 后旧 AiModelConfig 已删除）
   ai:
     model-registry:
@@ -83,7 +87,7 @@ travel:
     # M17-2/M17-3：行为画像（D-Q2 两档开关——compute 先行观测，inject 验证后开启）
     behavior-profile:
       compute-enabled: true      # 重算+落表（观测期 true；false=零重算零落表）
-      inject-enabled: false      # 注入【行为特征】段（红线：false 时组装输出逐字节等价）
+      inject-enabled: true       # M21-5（D-V8-5）：观测期数据验证合理后开启画像注入（红线：false 时组装输出逐字节等价）
       stats-window-days: 90      # 滚动统计窗口
       stale-after-minutes: 60    # 重算结果新鲜期（懒重算复用阈值）
       min-trips: 2               # 可靠性门槛：窗口内行程数
@@ -190,7 +194,11 @@ travel:
     allowed-origins: http://localhost:3000,http://127.0.0.1:3000,http://localhost:3100,http://127.0.0.1:3100
 
 # ============ JWT（两进程同源同键） ============
+# M21-1（SEC-01-01）：受控配置不携带默认密钥——未设置 JWT_SECRET 时 TokenAuthService
+# 构造期快速失败（空密钥拒绝启动）；本地开发在 application-local.yml 显式配置 jwt.secret。
 jwt:
-  secret: ${JWT_SECRET:travel-planner-secret-key-2026-must-be-long-enough-32chars}
+  secret: ${JWT_SECRET:}
   expiration: 86400000       # 24h
   refresh-expiration: 604800000  # 7d
+  # M21-4（SEC-01-02）：token type 强校验（refresh 冒充 access 被拒）；false=回退纯验签
+  enforce-type: true

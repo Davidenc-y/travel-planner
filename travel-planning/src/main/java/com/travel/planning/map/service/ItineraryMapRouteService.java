@@ -58,8 +58,8 @@ public class ItineraryMapRouteService {
     private final WeatherPort weatherPort;
     private final WeatherProperties weatherProps;
 
-    public ItineraryMapRouteResponse mapRoutes(Long itineraryId) {
-        ItineraryResponseDTO dto = itineraryService.getById(itineraryId);
+    public ItineraryMapRouteResponse mapRoutes(Long itineraryId, Long userId) {
+        ItineraryResponseDTO dto = itineraryService.getById(itineraryId, userId);
         int routeBefore = guard.attemptsOf("route");
         int geocodeBefore = guard.attemptsOf("geocode");
 

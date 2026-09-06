@@ -5,6 +5,7 @@ import com.travel.common.dto.ChatMessageRequest;
 import com.travel.common.entity.ChatMessage;
 import com.travel.common.entity.ChatSession;
 import com.travel.common.result.R;
+import jakarta.validation.Valid;
 import com.travel.core.stream.StreamPreflight;
 import com.travel.core.stream.StreamRequest;
 import com.travel.planning.service.ChatStreamService;
@@ -68,7 +69,7 @@ public class ChatController {
      */
     @GetMapping("/sessions/{sessionId}/history")
     public R<List<ChatMessage>> getHistory(@PathVariable String sessionId) {
-        return R.ok(chatService.getHistory(sessionId));
+        return R.ok(chatService.getHistory(AuthUtils.resolveUserId(), sessionId));
     }
 
     /**
@@ -96,7 +97,7 @@ public class ChatController {
      */
     @PostMapping("/sessions/{sessionId}/messages")
     public R<ChatResponseDTO> sendMessage(@PathVariable String sessionId,
-                                           @RequestBody ChatMessageRequest body) {
+                                           @Valid @RequestBody ChatMessageRequest body) {
         return R.ok(chatService.sendMessage(sessionId, body.getMessage(),
                 AuthUtils.resolveUserId(), body.getClientMessageId(), body.getModel()));
     }
@@ -116,7 +117,7 @@ public class ChatController {
      */
     @PostMapping("/sessions/{sessionId}/messages/stream")
     public Object streamMessage(@PathVariable String sessionId,
-                                @RequestBody ChatMessageRequest body,
+                                @Valid @RequestBody ChatMessageRequest body,
                                 @RequestHeader(value = "Last-Event-ID", required = false) String lastEventId) {
         if (!chatStreamProps.isEnabled()) {
             return ResponseEntity.notFound().build();

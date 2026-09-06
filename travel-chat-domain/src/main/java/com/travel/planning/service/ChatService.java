@@ -94,7 +94,9 @@ public class ChatService implements ChatStreamExecutor {
     /**
      * 获取会话历史
      */
-    public List<ChatMessage> getHistory(String sessionId) {
+    /** M21-2 SEC-02-03 止血：历史读取前先校验会话归属（40404 不存在 / 40302 非本人）。 */
+    public List<ChatMessage> getHistory(Long userId, String sessionId) {
+        requireOwnedSession(userId, sessionId);
         return sessionStorePort.listMessages(sessionId);
     }
 

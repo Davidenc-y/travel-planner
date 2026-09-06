@@ -124,7 +124,8 @@ public class UserService {
      * 刷新 Token
      */
     public Map<String, Object> refreshToken(String refreshToken) {
-        if (!tokenAuthService.validateToken(refreshToken)) {
+        // M21-4（SEC-01-02）：refresh 端点只收 refresh 类型（access 冒充 refresh 被拒）
+        if (!tokenAuthService.validateRefreshToken(refreshToken)) {
             throw new BusinessException(40102, "refreshToken 无效或已过期");
         }
 

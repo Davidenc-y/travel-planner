@@ -1,0 +1,34 @@
+# 依赖
+node_modules/
+.pnp
+.pnp.js
+
+# 构建
+.next/
+out/
+build/
+dist/
+
+# 环境变量
+.env*.local
+.env
+
+# 调试
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# 系统
+.DS_Store
+*.pem
+
+# IDE
+.vscode/
+.idea/
+
+# TypeScript
+*.tsbuildinfo
+next-env.d.ts
+
+# 临时诊断产物（R2 起约定）
+.tmp-*/

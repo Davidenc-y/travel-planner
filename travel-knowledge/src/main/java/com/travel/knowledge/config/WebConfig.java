@@ -17,9 +17,12 @@ import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 public class WebConfig implements WebMvcConfigurer {
 
     private final RateLimitInterceptor rateLimitInterceptor;
+    private final com.travel.knowledge.security.InternalTokenInterceptor internalTokenInterceptor;
 
-    public WebConfig(RateLimitInterceptor rateLimitInterceptor) {
+    public WebConfig(RateLimitInterceptor rateLimitInterceptor,
+                     com.travel.knowledge.security.InternalTokenInterceptor internalTokenInterceptor) {
         this.rateLimitInterceptor = rateLimitInterceptor;
+        this.internalTokenInterceptor = internalTokenInterceptor;
     }
 
     // F87/F92：精确来源可配置；叠加 localhost:* 通配覆盖任意前端端口
@@ -57,5 +60,8 @@ public class WebConfig implements WebMvcConfigurer {
         // F90：仅用户面 attractions 端点限流；ETL/RAG/memory 为后端集成，不在此限流
         registry.addInterceptor(rateLimitInterceptor)
                 .addPathPatterns("/api/v1/attractions/**");
+        // M21-3（SEC-02-04/05/07/08）：管理面端点服务间共享密钥（fail-closed）
+        registry.addInterceptor(internalTokenInterceptor)
+                .addPathPatterns("/api/v1/etl/**", "/api/v1/memory/**", "/api/v1/files/images");
     }
 }

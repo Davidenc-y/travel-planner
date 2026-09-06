@@ -61,6 +61,9 @@ public class CrawlProperties {
     /** knowledge 导入地址（读取后调用导入+向量化） */
     private String knowledgeBaseUrl = "http://localhost:8082";
 
+    /** M21-3（SEC-02-04）：knowledge 管理面调用共享密钥（与 knowledge 侧 travel.internal.token 同值）。 */
+    private String internalToken = "";
+
     /** 内部测试接口开关（默认关闭，不对外开放） */
     private boolean testEndpointEnabled = false;
 

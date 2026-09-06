@@ -23,11 +23,14 @@ import java.util.Optional;
 public class WebfluxItineraryVersionPort implements ItineraryVersionPort {
 
     private final WebClient webClient;
+    private final String internalToken;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     public WebfluxItineraryVersionPort(
-            @Value("${travel.planning-base-url:http://localhost:8081}") String planningBaseUrl) {
+            @Value("${travel.planning-base-url:http://localhost:8081}") String planningBaseUrl,
+            @Value("${travel.internal.token:}") String internalToken) {
         this.webClient = WebClient.builder().baseUrl(planningBaseUrl).build();
+        this.internalToken = internalToken;
     }
 
     @Override
@@ -48,6 +51,12 @@ public class WebfluxItineraryVersionPort implements ItineraryVersionPort {
             String raw = webClient.post()
                     .uri("/api/v1/itineraries/chat-writeback")
                     .contentType(MediaType.APPLICATION_JSON)
+                    .headers(h -> {
+                        // M21-2（SEC-02-02）：进程间共享内部令牌（与 planning 侧 travel.internal.token 同源）
+                        if (internalToken != null && !internalToken.isBlank()) {
+                            h.set("X-Internal-Token", internalToken);
+                        }
+                    })
                     .bodyValue(payload)
                     .retrieve()
                     .bodyToMono(String.class)

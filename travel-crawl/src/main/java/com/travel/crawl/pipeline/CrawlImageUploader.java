@@ -174,10 +174,15 @@ public class CrawlImageUploader {
         String fileName = UUID.randomUUID().toString().replace("-", "") + "." + ext;
         byte[] body = buildMultipart(fileName, contentType, dlResp.body(), boundary);
         String uploadUrl = props.getKnowledgeBaseUrl() + "/api/v1/files/images?bucket=attractions";
-        HttpRequest up = HttpRequest.newBuilder(URI.create(uploadUrl))
+        HttpRequest.Builder upBuilder = HttpRequest.newBuilder(URI.create(uploadUrl))
                 .timeout(Duration.ofMillis(props.getImage().getTimeoutMs()))
                 .header("Content-Type", "multipart/form-data; boundary=" + boundary)
-                .POST(HttpRequest.BodyPublishers.ofByteArray(body)).build();
+                .POST(HttpRequest.BodyPublishers.ofByteArray(body));
+        // M21-3（SEC-02-07）：上传端点共享密钥（knowledge 侧 fail-closed 校验）
+        if (props.getInternalToken() != null && !props.getInternalToken().isBlank()) {
+            upBuilder.header("X-Internal-Token", props.getInternalToken());
+        }
+        HttpRequest up = upBuilder.build();
         HttpResponse<String> upResp = httpClient.send(up, HttpResponse.BodyHandlers.ofString());
         JsonNode json = mapper.readTree(upResp.body());
         if (upResp.statusCode() == 200 && json.path("code").asInt() == 200) {

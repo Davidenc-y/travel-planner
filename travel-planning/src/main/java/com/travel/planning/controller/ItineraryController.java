@@ -93,7 +93,7 @@ public class ItineraryController {
      */
     @GetMapping("/{id}")
     public R<ItineraryResponseDTO> getById(@PathVariable Long id) {
-        return R.ok(itineraryService.getById(id));
+        return R.ok(itineraryService.getById(id, AuthUtils.resolveUserId()));
     }
 
     /**
@@ -101,7 +101,7 @@ public class ItineraryController {
      */
     @GetMapping("/{id}/map-routes")
     public R<ItineraryMapRouteResponse> mapRoutes(@PathVariable Long id) {
-        return R.ok(itineraryMapRouteService.mapRoutes(id));
+        return R.ok(itineraryMapRouteService.mapRoutes(id, AuthUtils.resolveUserId()));
     }
 
     /**
@@ -119,7 +119,7 @@ public class ItineraryController {
      */
     @DeleteMapping("/{id}")
     public R<Void> delete(@PathVariable Long id) {
-        itineraryService.delete(id);
+        itineraryService.delete(id, AuthUtils.resolveUserId());
         return R.ok();
     }
 

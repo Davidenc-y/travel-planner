@@ -13,6 +13,9 @@ server:
 
 travel:
   crawl:
+    # M21-3（SEC-02-04）：knowledge 管理面共享密钥（空缺省=请求不带令牌，将被 knowledge 拒绝；
+    # 生产用环境变量 TRAVEL_INTERNAL_TOKEN，本地在 application-local.yml 配置）
+    internal-token: ${TRAVEL_INTERNAL_TOKEN:}
     enabled: true
     # ============ 安全限频（防封禁 + 免费配额，F104 2.2/2.5） ============
     min-interval-ms: 660000        # 单源请求最小间隔：11 分钟（免费配额 5000/月 测算）

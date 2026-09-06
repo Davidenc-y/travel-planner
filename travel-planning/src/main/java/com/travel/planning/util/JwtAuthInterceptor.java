@@ -29,6 +29,8 @@ public class JwtAuthInterceptor implements HandlerInterceptor {
 
     // M6-25：JWT 逻辑下沉 travel-common，MVC 与未来 WebFlux 共用 TokenAuthService
     private final TokenAuthService tokenAuthService;
+    // M21-4：登出吊销黑名单（jti 级，Redis TTL=剩余有效期）
+    private final AccessTokenBlacklistService blacklistService;
 
     @Override
     public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler) {
@@ -36,7 +38,9 @@ public class JwtAuthInterceptor implements HandlerInterceptor {
         if (auth != null && auth.startsWith(BEARER_PREFIX)) {
             String token = auth.substring(BEARER_PREFIX.length()).trim();
             try {
-                if (tokenAuthService.validateToken(token)) {
+                // M21-4：只接受 access 类型（refresh 冒充 access 被拒）；已登出吊销的 jti 拒绝
+                if (tokenAuthService.validateAccessToken(token)
+                        && !blacklistService.isRevoked(tokenAuthService.getJti(token))) {
                     Long userId = tokenAuthService.getUserIdFromToken(token);
                     String username = tokenAuthService.getUsernameFromToken(token);
                     if (userId != null && userId > 0) {

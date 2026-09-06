@@ -34,7 +34,8 @@ public class ReactiveJwtAuthFilter implements WebFilter {
         if (auth != null && auth.startsWith(BEARER_PREFIX)) {
             String token = auth.substring(BEARER_PREFIX.length()).trim();
             try {
-                if (tokenAuthService.validateToken(token)) {
+                // M21-4：只接受 access 类型（黑名单吊销当前仅在 MVC 侧接入，见 M21-4 记录遗留项）
+                if (tokenAuthService.validateAccessToken(token)) {
                     Long userId = tokenAuthService.getUserIdFromToken(token);
                     if (userId != null && userId > 0) {
                         exchange.getAttributes().put(ATTR_USER_ID, userId);

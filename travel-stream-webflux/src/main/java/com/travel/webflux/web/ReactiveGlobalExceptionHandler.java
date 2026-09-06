@@ -26,6 +26,16 @@ public class ReactiveGlobalExceptionHandler {
         return ResponseEntity.status(status).body(R.fail(e.getCode(), e.getMessage()));
     }
 
+    /** M21-2：@Valid 失败（WebExchangeBindException）与 MVC GlobalExceptionHandler 同码表 → 40001/400。 */
+    @ExceptionHandler(org.springframework.web.bind.support.WebExchangeBindException.class)
+    public ResponseEntity<R<Void>> handleBind(org.springframework.web.bind.support.WebExchangeBindException e) {
+        String msg = e.getFieldErrors().stream()
+                .map(f -> f.getField() + ": " + f.getDefaultMessage())
+                .reduce((a, b) -> a + "; " + b)
+                .orElse("参数校验失败");
+        return ResponseEntity.status(400).body(R.fail(40001, msg));
+    }
+
     @ExceptionHandler(ResponseStatusException.class)
     public ResponseEntity<R<Void>> handleStatus(ResponseStatusException e) {
         int status = e.getStatusCode().value();

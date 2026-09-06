@@ -65,11 +65,16 @@ public class EtlController {
      * @param filePath JSON 文件绝对路径
      * @return 成功导入数量
      */
+    /** M21-3（SEC-02-05）：导入目录白名单（fail-closed：未配置 base-dir 时拒绝一切导入）。 */
+    @org.springframework.beans.factory.annotation.Value("${travel.etl.import-base-dir:}")
+    private String importBaseDir;
+
     @PostMapping("/import")
     public R<Integer> importFromJson(@RequestParam String filePath,
                                      @RequestParam(defaultValue = "insert") String mode,
                                      HttpServletResponse response) {
-        log.info("触发数据导入: {}", filePath);
+        requireImportPathAllowed(filePath);
+        log.info("触发数据导入: baseDir 内文件");
         try {
             AttractionImportService.ImportResult result = importService.importWithStats(filePath, mode);
             // F119：入库事务提交后，并行 ETL（await 完成，契约不变）
@@ -82,8 +87,30 @@ public class EtlController {
                             + ",\"skipped\":" + result.stats().skipped() + "}");
             return R.ok(result.stats().inserted());
         } catch (Exception e) {
-            log.error("数据导入失败", e);
-            return R.fail(50003, "数据导入失败: " + e.getMessage());
+            // M21-3（SEC-05-06）：错误响应不再回显原始路径（防路径探测 oracle），详情仅入服务端日志
+            log.error("数据导入失败: file={}", filePath, e);
+            return R.fail(50003, "数据导入失败，详情见服务端日志");
+        }
+    }
+
+    /**
+     * M21-3（SEC-02-05 止血）：filePath 必须位于配置的导入根目录内
+     * （toRealPath 前缀断言，阻断 ../穿越与任意路径读/知识库投毒入口）。
+     */
+    private void requireImportPathAllowed(String filePath) {
+        if (importBaseDir == null || importBaseDir.isBlank()) {
+            throw new com.travel.common.exception.BusinessException(
+                    40302, "数据导入目录未配置，导入功能已关闭");
+        }
+        try {
+            java.nio.file.Path base = java.nio.file.Paths.get(importBaseDir).toRealPath();
+            java.nio.file.Path requested = java.nio.file.Paths.get(filePath).toAbsolutePath().normalize();
+            if (!requested.startsWith(base)) {
+                throw new com.travel.common.exception.BusinessException(
+                        40302, "数据文件必须位于配置的导入目录内");
+            }
+        } catch (java.io.IOException e) {
+            throw new com.travel.common.exception.BusinessException(40302, "导入目录不可用");
         }
     }
 }
