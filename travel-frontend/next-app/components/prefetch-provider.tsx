@@ -29,13 +29,13 @@ export function PrefetchProvider() {
 
     let cancelled = false;
 
-    itineraryApi.list(userId, 1, 8)
+    itineraryApi.list(1, 8)
       .then((r) => {
         if (!cancelled) setPrefetch('itinerary:1:8', r.data.data);
       })
       .catch(() => {});
 
-    chatApi.listSessions(userId)
+    chatApi.listSessions()
       .then((r) => {
         if (!cancelled) setPrefetch('chat:sessions', r.data.data);
       })

@@ -4,6 +4,10 @@ server:
 spring:
   application:
     name: travel-stream-webflux
+  # M16-3：chat-domain 域共享配置（application-chat.yml，单源在 chat-domain 模块内）
+  # 由 ChatDomainConfigEnvironmentPostProcessor（META-INF/spring.factories 注册）以
+  # 最低优先级自动装载，本文件与 application-local.yml 的同名键均可覆盖（2026-09-06 修订，
+  # 不再使用 spring.config.import——IDEA 无法解析依赖模块 classpath 资源而报错）。
   cloud:
     compatibility-verifier:
       enabled: false
@@ -31,133 +35,8 @@ mybatis-plus:
       logic-not-delete-value: 0
 
 travel:
-  # M7：模型注册表（单一事实源；enabled=false 回退旧行为——Batch 2 后旧 AiModelConfig 已删除）
-  ai:
-    model-registry:
-      enabled: true
-      default-timeout-seconds: 120
-      models:
-        - key: qwen3.7-max
-          provider: dashscope-native
-          display-name: "Qwen3.7 Max · 深度推理"
-          api-key-env: DASHSCOPE_API_KEY
-          temperature: 0.7
-          max-tokens: 8000
-          top-p: 0.9
-          roles: [main]
-          selectable: true
-          enabled: true
-        - key: qwen-turbo
-          provider: dashscope-native
-          display-name: "Qwen Turbo · 轻量高速"
-          api-key-env: DASHSCOPE_API_KEY
-          temperature: 0.5
-          max-tokens: 2000
-          roles: [light]
-          selectable: true
-          enabled: true
-        - key: qwen3.7-plus
-          provider: openai-compatible
-          # M8-9g 修复：不能带结尾 /v1（Spring AI OpenAiApi 会自动追加 /v1/chat/completions）
-          base-url: https://dashscope.aliyuncs.com/compatible-mode
-          display-name: "Qwen3.7 Plus · 均衡"
-          api-key-env: DASHSCOPE_API_KEY
-          roles: []
-          selectable: true
-          enabled: true
-        - key: deepseek-chat
-          provider: openai-compatible
-          base-url: https://api.deepseek.com
-          display-name: "DeepSeek Chat · 通用"
-          api-key-env: DEEPSEEK_API_KEY
-          roles: []
-          selectable: true
-          enabled: true
-    # M10-2c：模型维度熔断（按 model key；false=直通现状）
-    model-circuit:
-      enabled: true
-      failure-threshold: 5
-      open-ms: 60000
-  knowledge:
-    base-url: ${KNOWLEDGE_BASE_URL:http://localhost:8082}
-  # M13-2f：聊天行程回写桥目标（travel-planning MVC 实例）
+  # M13-2f：聊天行程回写桥目标（travel-planning MVC 实例）——本进程独有
   planning-base-url: ${PLANNING_BASE_URL:http://localhost:8081}
-  memory:
-    shortterm:
-      enabled: true
-      max-turns: 10
-      history-max-tokens: 2000
-      summary-threshold-ratio: 0.7
-      summary-min-turns: 6
-      summary-max-tokens: 800
-      summary-hard-max-tokens: 800
-      summary-max-chars: 20000
-      summary-refresh-turns: 5
-      summary-validate: true
-      summary-retry-times: 1
-      input-max-tokens: 4000
-      profile-max-tokens: 800
-      summary-ttl-days: 7
-      recent-window-turns: 2
-      cas-enabled: true
-      finalize-sync-wait-seconds: 15
-  rag:
-    session-context:
-      top-k: 8
-    attraction-candidates:
-      top-k: 5
-    judge:
-      enabled: false
-      timeout-ms: 3000
-    parent-context:
-      enabled: true
-  llm:
-    background-max-concurrent: 2
-    acquire-timeout-ms: 5000
-  chat:
-    stream:
-      enabled: true
-      timeout-ms: 330000
-      keepalive-ms: 15000
-      chunk-max-chars: 16
-      planning-graph-stream-enabled: true
-    idempotency:
-      enabled: true
-    session:
-      reject-archived: true
-    # M9-4：聊天规划路径冲突观测（只写 trace，不阻断；false=行为等价现状）
-    supervisor:
-      conflict-observe:
-        enabled: true
-    title:
-      max-length: 20
-    intent:
-      enabled: true
-      cache-size: 256
-      llm-fallback: true
-  guard:
-    enabled: true
-    prompt-injection:
-      enabled: true
-      block-keywords: 忽略以上,忽略之前,忽略系统,忽略所有指令,system prompt,系统提示词,扮演管理员,越权,泄露提示词,绕过限制,bypass,你的指令是什么
-      warn-keywords: 不要遵守,忘记之前的,假装你是
-    circuit-breaker:
-      failure-threshold: 3
-      window-ms: 60000
-      open-timeout-ms: 15000
-  trace:
-    enabled: true
-    store: mysql
-    buffer-size: 1024
-    flush-interval-ms: 1000
-    batch-size: 50
-  cors:
-    allowed-origins: http://localhost:3000,http://127.0.0.1:3000,http://localhost:3100,http://127.0.0.1:3100
-
-jwt:
-  secret: ${JWT_SECRET:travel-planner-secret-key-2026-must-be-long-enough-32chars}
-  expiration: 86400000
-  refresh-expiration: 604800000
 
 logging:
   level:

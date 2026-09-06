@@ -1,5 +1,6 @@
 package com.travel.planning.workflow;
 
+import com.travel.planning.prompt.Markers;
 import com.alibaba.cloud.ai.graph.CompileConfig;
 import com.alibaba.cloud.ai.graph.CompiledGraph;
 import com.alibaba.cloud.ai.graph.KeyStrategy;
@@ -466,7 +467,7 @@ public class TravelWorkflowBuilder {
             log.info("[Node:rag_retrieval] 预检索完成, 候选长度={}", candidates.length());
             Map<String, Object> result = new HashMap<>();
             if (candidates != null && !candidates.isBlank() && !"[]".equals(candidates)) {
-                result.put("messages", new UserMessage("【知识库检索候选景点】\n" + candidates));
+                result.put("messages", new UserMessage(Markers.ATTRACTION_CANDIDATES + "\n" + candidates));
                 // M8-3：结构化候选同步写 state（供 conflict_check 按名匹配开放时间/时长）；
                 // 剥离 M8-2 数据来源说明段，只存 JSON 数组（state 内保持纯结构化）
                 String candidatesJson = AttractionGroundingChecker.extractJsonArray(candidates);

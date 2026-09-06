@@ -1,5 +1,7 @@
 # ============================================================
 # travel-planning 服务配置（端口 8081）
+# M16-3：chat-domain 域共享配置（模型注册表/记忆/RAG/LLM/聊天/守卫词表/追溯/CORS/JWT）
+# 已收敛至 chat-domain 内的 application-chat.yml 单源文件（经 EnvironmentPostProcessor 自动装载），本文件只保留进程专属配置。
 # ============================================================
 server:
   port: 8081
@@ -9,6 +11,11 @@ server:
 spring:
   application:
     name: travel-planning
+  # M16-3：chat-domain 域共享配置（application-chat.yml，单源在 chat-domain 模块内）
+  # 由 ChatDomainConfigEnvironmentPostProcessor（META-INF/spring.factories 注册）以
+  # 最低优先级自动装载——本文件与 application-local.yml 的同名键均可覆盖。
+  # 不再使用 spring.config.import：IDEA 无法解析依赖模块 classpath 资源而报错
+  # （运行时两种机制等价，2026-09-06 修订）。
   # F104 P1：头像上传 ≤5MB（默认 1MB 会拒收）
   servlet:
     multipart:
@@ -57,7 +64,7 @@ mybatis-plus:
       logic-delete-value: 1
       logic-not-delete-value: 0
 
-# ============ 应用专属配置 ============
+# ============ 应用专属配置（进程独有） ============
 travel:
   # M11-3：可靠性看板管理员白名单（空=无管理员，生产用环境变量 ADMIN_USER_IDS 注入）
   admin:
@@ -69,53 +76,6 @@ travel:
     secret-key: minioadmin
     attractions-bucket: attractions
     avatars-bucket: avatars
-  # M7：模型注册表（单一事实源；enabled=false 回退旧行为——Batch 2 后旧 AiModelConfig 已删除）
-  ai:
-    model-registry:
-      enabled: true
-      default-timeout-seconds: 120
-      models:
-        - key: qwen3.7-max
-          provider: dashscope-native
-          display-name: "Qwen3.7 Max · 深度推理"
-          api-key-env: DASHSCOPE_API_KEY
-          temperature: 0.7
-          max-tokens: 8000
-          top-p: 0.9
-          roles: [main]
-          selectable: true
-          enabled: true
-        - key: qwen-turbo
-          provider: dashscope-native
-          display-name: "Qwen Turbo · 轻量高速"
-          api-key-env: DASHSCOPE_API_KEY
-          temperature: 0.5
-          max-tokens: 2000
-          roles: [light]
-          selectable: true
-          enabled: true
-        - key: qwen3.7-plus
-          provider: openai-compatible
-          # M8-9g 修复：不能带结尾 /v1（Spring AI OpenAiApi 会自动追加 /v1/chat/completions）
-          base-url: https://dashscope.aliyuncs.com/compatible-mode
-          display-name: "Qwen3.7 Plus · 均衡"
-          api-key-env: DASHSCOPE_API_KEY
-          roles: []
-          selectable: true
-          enabled: true
-        - key: deepseek-chat
-          provider: openai-compatible
-          base-url: https://api.deepseek.com
-          display-name: "DeepSeek Chat · 通用"
-          api-key-env: DEEPSEEK_API_KEY
-          roles: []
-          selectable: true
-          enabled: true
-    # M10-2c：模型维度熔断（按 model key；false=直通现状）
-    model-circuit:
-      enabled: true
-      failure-threshold: 5
-      open-ms: 60000
   # M12：高德地图路线/地理编码（Key 只允许环境变量或本地未提交配置）
   map:
     amap:
@@ -160,38 +120,6 @@ travel:
   # M3-6：业务异常 HTTP 状态与业务码语义对齐
   api:
     http-status-aligned: true
-  # knowledge 服务地址（Feign 调用）
-  knowledge:
-    base-url: ${KNOWLEDGE_BASE_URL:http://localhost:8082}
-  # F55/B1：短期会话记忆（摘要压缩）
-  memory:
-    shortterm:
-      enabled: true
-      max-turns: 10
-      history-max-tokens: 2000
-      summary-threshold-ratio: 0.7
-      summary-min-turns: 6
-      summary-max-tokens: 800
-      summary-hard-max-tokens: 800
-      summary-max-chars: 20000
-      summary-refresh-turns: 5
-      summary-validate: true
-      summary-retry-times: 1
-      input-max-tokens: 4000
-      profile-max-tokens: 800
-      summary-ttl-days: 7
-      recent-window-turns: 2
-      # M4-1a/P0-1：摘要写入走 Lua CAS 原子路径（回滚开关）
-      cas-enabled: true
-      # M4-4：close 收口同步等待上限（秒），超时转后台+补偿兜底
-      finalize-sync-wait-seconds: 15
-    # M4-4：ARCHIVED 会话拒绝新消息（COMPLETED 幂等重放豁免）
-    session:
-      reject-archived: true
-    # M9-4：聊天规划路径冲突观测（只写 trace，不阻断；false=行为等价现状）
-    supervisor:
-      conflict-observe:
-        enabled: true
   # M4-8/P1-5：行程状态机（GENERATING/FAILED/快照/resume；false=回退一次性写入旧行为）
   itinerary:
     state-machine:
@@ -209,82 +137,6 @@ travel:
       timeout-ms: 330000
       keepalive-ms: 15000
       chunk-max-chars: 16
-  # M4-2/P0-2：planning 侧检索注入 topK（默认值等于 F63/F83 硬编码，行为不变）
-  rag:
-    session-context:
-      top-k: 8
-    attraction-candidates:
-      top-k: 5
-    # M4-5a：在线相关性 Judge（默认关；fail-open：异常/超时/解析失败一律放行）
-    judge:
-      enabled: false
-      timeout-ms: 3000
-    # M4-5b：会话知识二次取父（默认开；取父失败降级保留原命中）
-    parent-context:
-      enabled: true
-  # F75/B3-5：LLM 调用统一治理（后台摘要/压缩/偏好抽取并发上限）
-  llm:
-    background-max-concurrent: 2
-    acquire-timeout-ms: 5000
-  # F85 第二步：对话入口意图分类（PLANNING/REFINE/RECALL/PROFILE/CHAT/FUNCTIONAL）
-  chat:
-    # M4-3/P0-3：消息级幂等（带 clientMessageId 的请求走幂等门禁；不带键走原路径）
-    idempotency:
-      enabled: true
-    # M4-4：ARCHIVED 会话拒绝新消息（COMPLETED 幂等重放豁免）
-    session:
-      reject-archived: true
-    # M5-1：首条消息标题生成（短全量/长截断；不引 LLM）
-    title:
-      max-length: 20
-    # M6：流式发送（SSE；timeout 覆盖 Supervisor 300s 硬超时）
-    stream:
-      enabled: true
-      timeout-ms: 330000
-      keepalive-ms: 15000
-      chunk-max-chars: 16
-      planning-graph-stream-enabled: true
-    intent:
-      enabled: true          # false → 全部走原 supervisor 流程（回滚开关）
-      cache-size: 256
-      llm-fallback: true     # 规则无法判定时用轻模型；false → 直接回退 PLANNING
-    # M13-2：聊天规划/REFINE 行程资产同步（create-on-chat/REFINE 回写建版）
-    supervisor:
-      conflict-observe:
-        enabled: true
-      itinerary-writeback:
-        enabled: true
-        create-on-chat: true
-      # M13-3：派发去重（输出已有值短路子Agent，false=现状灰度）
-      dispatch-dedup:
-        enabled: false
-  # F90：Agent 调用前安全防护（Prompt 注入 / 熔断 / 限流）
-  guard:
-    enabled: true
-    prompt-injection:
-      enabled: true
-      block-keywords: 忽略以上,忽略之前,忽略系统,忽略所有指令,system prompt,系统提示词,扮演管理员,越权,泄露提示词,绕过限制,bypass,你的指令是什么
-      warn-keywords: 不要遵守,忘记之前的,假装你是
-    circuit-breaker:
-      failure-threshold: 3
-      window-ms: 60000
-      open-timeout-ms: 15000
-  # F89：Agent 调用追溯（t_agent_trace）
-  trace:
-    enabled: true
-    store: mysql
-    buffer-size: 1024
-    flush-interval-ms: 1000
-    batch-size: 50
-  # F87/F92：前端跨域白名单（精确 origin；代码层叠加 localhost:* 通配）
-  cors:
-    allowed-origins: http://localhost:3000,http://127.0.0.1:3000,http://localhost:3100,http://127.0.0.1:3100
-
-# ============ JWT ============
-jwt:
-  secret: ${JWT_SECRET:travel-planner-secret-key-2026-must-be-long-enough-32chars}
-  expiration: 86400000       # 24h
-  refresh-expiration: 604800000  # 7d
 
 # ============ Actuator ============
 management:

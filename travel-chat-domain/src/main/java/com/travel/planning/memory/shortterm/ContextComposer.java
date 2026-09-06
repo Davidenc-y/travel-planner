@@ -1,5 +1,6 @@
 package com.travel.planning.memory.shortterm;
 
+import com.travel.planning.prompt.Markers;
 import com.travel.planning.memory.longterm.ProfileContextAssembler;
 import com.travel.planning.memory.longterm.ProfilePort;
 import lombok.RequiredArgsConstructor;
@@ -38,7 +39,7 @@ public class ContextComposer {
             String summaryOnly = sessionMemoryPort.getSummaryOrEmpty(sessionId);
             boolean hasSummary = !summaryOnly.isBlank();
             if (hasSummary) {
-                historySection = "【会话摘要】\n" + summaryOnly;
+                historySection = Markers.SESSION_SUMMARY + "\n" + summaryOnly;
                 ComposedInput c1 = composeWithTokens(profileContext, historySection, consensus,
                         sessionContext, candidates, message);
                 composed = c1.text();
@@ -46,10 +47,10 @@ public class ContextComposer {
             }
             if (inputTokens > memoryProps.getInputMaxTokens() && hasSummary) {
                 int reserve = sessionMemoryPort.estimateTokens(profileContext)
-                        + sessionMemoryPort.estimateTokens("【当前问题】\n" + message) + 8;
+                        + sessionMemoryPort.estimateTokens(Markers.CURRENT_QUESTION + "\n" + message) + 8;
                 String cut = sessionMemoryPort.truncateByTokens(
                         summaryOnly, Math.max(100, memoryProps.getInputMaxTokens() - reserve));
-                historySection = "【会话摘要】\n" + cut;
+                historySection = Markers.SESSION_SUMMARY + "\n" + cut;
                 ComposedInput c2 = composeWithTokens(profileContext, historySection, consensus,
                         sessionContext, candidates, message);
                 composed = c2.text();
@@ -92,12 +93,12 @@ public class ContextComposer {
             input.append(consensus).append("\n\n");
         }
         if (sessionContext != null && !sessionContext.isBlank()) {
-            input.append("【会话知识参考】\n").append(sessionContext).append("\n\n");
+            input.append(Markers.SESSION_KNOWLEDGE + "\n").append(sessionContext).append("\n\n");
         }
         if (candidates != null && !candidates.isBlank() && !"[]".equals(candidates)) {
-            input.append("【知识库检索候选景点】\n").append(candidates).append("\n\n");
+            input.append(Markers.ATTRACTION_CANDIDATES + "\n").append(candidates).append("\n\n");
         }
-        input.append("【当前问题】\n").append(message);
+        input.append(Markers.CURRENT_QUESTION + "\n").append(message);
         return input.toString();
     }
 

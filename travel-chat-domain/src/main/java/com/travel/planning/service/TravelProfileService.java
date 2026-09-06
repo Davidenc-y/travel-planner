@@ -6,6 +6,7 @@ import com.travel.common.exception.ErrorCode;
 import com.travel.common.util.JsonUtils;
 import com.travel.planning.config.LlmGovernor;
 import com.travel.planning.memory.longterm.ProfilePort;
+import com.travel.planning.memory.longterm.behavior.BehaviorProfileService;
 import com.travel.planning.prompt.PromptTemplates;
 import com.travel.planning.repository.TravelProfileMapper;
 import lombok.extern.slf4j.Slf4j;
@@ -58,16 +59,20 @@ public class TravelProfileService implements ProfilePort {
     private final LlmGovernor llmGovernor;
     // M3-20：Prompt 模板外置（P1-17）
     private final PromptTemplates promptTemplates;
+    // M17-2：行程完成后异步重算行为画像（compute-enabled 由服务内部自检）
+    private final BehaviorProfileService behaviorProfileService;
 
     // M7-6：画像压缩为低频后台任务 → light 角色（压缩质量由校验与回退守护）
     public TravelProfileService(TravelProfileMapper profileMapper,
                                 @Qualifier("lightModel") ChatModel chatModel,
                                 LlmGovernor llmGovernor,
-                                PromptTemplates promptTemplates) {
+                                PromptTemplates promptTemplates,
+                                BehaviorProfileService behaviorProfileService) {
         this.profileMapper = profileMapper;
         this.chatModel = chatModel;
         this.llmGovernor = llmGovernor;
         this.promptTemplates = promptTemplates;
+        this.behaviorProfileService = behaviorProfileService;
     }
 
     /**
@@ -128,6 +133,8 @@ public class TravelProfileService implements ProfilePort {
             TravelProfile profile = getByUserId(userId);
             applyProfileUpdate(profile, preferredDestinations, preferredInterests,
                     budgetRange, travelStyle, consumeLevel);
+            // M17-1：写入来源观测
+            profile.setUpdatedSource("update");
             // F53：显式刷新 updated_at（updateById 会把实体旧值写回，覆盖 DB ON UPDATE）
             profile.setUpdatedAt(LocalDateTime.now());
             if (profileMapper.updateById(profile) > 0) {
@@ -201,6 +208,11 @@ public class TravelProfileService implements ProfilePort {
                 // F75/B3-5：压缩纳入统一后台 LLM 治理，超限降级跳过（不影响画像更新）
                 llmGovernor.runBackground("profile-compact", () -> compactHistory(userId));
             }
+
+            // M17-2：行程完成后异步重算行为画像（recordTrip 仅 planning 进程调用，
+            // 即行为重算天然只在有 TripFactsPort 的进程发生；失败由服务内部吞掉）
+            llmGovernor.runBackground("behavior-recompute",
+                    () -> behaviorProfileService.recomputeIfEnabled(userId));
         } catch (Exception e) {
             log.warn("画像自动更新失败（不影响主流程）: userId={}, error={}", userId, e.getMessage());
         }
@@ -255,6 +267,8 @@ public class TravelProfileService implements ProfilePort {
 
             // 更新行程计数
             profile.setTotalTrips(profile.getTotalTrips() + 1);
+            // M17-1：写入来源观测
+            profile.setUpdatedSource("record-trip");
 
             // F53：显式刷新 updated_at。
             profile.setUpdatedAt(LocalDateTime.now());
@@ -364,6 +378,9 @@ public class TravelProfileService implements ProfilePort {
                 return;
             }
             p.setHistoryTrips(summary.trim());
+            // M17-1：摘要双写独立通道（读路径 Phase A 不变，M17-3 起优先消费本列）
+            p.setHistorySummary(summary.trim());
+            p.setUpdatedSource("compact");
             p.setUpdatedAt(LocalDateTime.now());
             if (profileMapper.updateById(p) > 0) {
                 log.info("画像历史行程已压缩: userId={}, 长度 {} -> {}",

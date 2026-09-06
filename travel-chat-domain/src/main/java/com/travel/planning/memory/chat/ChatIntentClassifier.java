@@ -1,6 +1,7 @@
 package com.travel.planning.memory.chat;
 
 import com.travel.common.util.JsonUtils;
+import com.travel.planning.config.ChatWordLists;
 import com.travel.planning.prompt.PromptTemplates;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.model.ChatModel;
@@ -31,16 +32,20 @@ public class ChatIntentClassifier {
     private final ChatIntentProperties properties;
     // M3-20：Prompt 模板外置（P1-17）
     private final PromptTemplates promptTemplates;
+    // M18-1：意图词表单源（travel.chat.word-lists.intents，Map 注入）
+    private final ChatWordLists wordLists;
     /** 意图 LRU 缓存（access-order，容量由配置 cacheSize 控制） */
     private final Map<String, ChatIntent> cache;
 
     // M7-6：意图分类为高频短输出 → light 角色（注册表默认 qwen-turbo），避免旗舰模型成本浪费
     public ChatIntentClassifier(@Qualifier("lightModel") ChatModel chatModel,
                                 ChatIntentProperties properties,
-                                PromptTemplates promptTemplates) {
+                                PromptTemplates promptTemplates,
+                                ChatWordLists wordLists) {
         this.chatModel = chatModel;
         this.properties = properties;
         this.promptTemplates = promptTemplates;
+        this.wordLists = wordLists;
         this.cache = Collections.synchronizedMap(new LinkedHashMap<>(16, 0.75f, true) {
             @Override
             protected boolean removeEldestEntry(Map.Entry<String, ChatIntent> eldest) {
@@ -92,29 +97,22 @@ public class ChatIntentClassifier {
         }
     }
 
+    /** 规则优先级（M18-1 词表自配置，优先级保持既有语义不变） */
+    private static final ChatIntent[] RULE_PRIORITY = {
+            ChatIntent.FUNCTIONAL, ChatIntent.PROFILE, ChatIntent.CHAT,
+            ChatIntent.REFINE, ChatIntent.RECALL};
+
     /**
-     * 规则表（优先级从高到低）：FUNCTIONAL → PROFILE → CHAT → REFINE → RECALL。
+     * 规则表（M18-1 起词表单源 travel.chat.word-lists.intents）；
+     * 优先级从高到低 FUNCTIONAL → PROFILE → CHAT → REFINE → RECALL——
      * 变更词（REFINE）优先于回顾词（RECALL），防止"上次行程帮我优化"误判为回顾。
      */
-    static ChatIntent ruleBased(String q) {
-        if (containsAny(q, "你能做什么", "有什么功能", "你是谁", "怎么用", "能干嘛", "帮助", "说明书")) {
-            return ChatIntent.FUNCTIONAL;
-        }
-        if (containsAny(q, "画像", "我的偏好", "我的记忆", "历史行程", "我的行程",
-                // 预算查询式表达（"我的预算是什么/多少"）；"按我的预算帮我规划"是 PLANNING，不能误伤
-                "我的预算是什么", "我的预算是多少", "我的预算多少",
-                // F66 语义迁移：偏好陈述类消息（"记住我喜欢爬山，预算8000元"）→ 直答
-                "记住", "设为", "设置为")) {
-            return ChatIntent.PROFILE;
-        }
-        if (containsAny(q, "你好", "您好", "谢谢", "再见", "在吗", "嗨")) {
-            return ChatIntent.CHAT;
-        }
-        if (containsAny(q, "优化", "调整", "重新规划", "换成", "改成", "修改", "重新安排", "换一个")) {
-            return ChatIntent.REFINE;
-        }
-        if (containsAny(q, "上次", "之前", "回顾", "安排了哪些", "都去了", "去过", "行程记录")) {
-            return ChatIntent.RECALL;
+    ChatIntent ruleBased(String q) {
+        for (ChatIntent intent : RULE_PRIORITY) {
+            java.util.List<String> words = wordLists.getIntents().get(intent);
+            if (words != null && !words.isEmpty() && containsAny(q, words.toArray(new String[0]))) {
+                return intent;
+            }
         }
         return null;
     }

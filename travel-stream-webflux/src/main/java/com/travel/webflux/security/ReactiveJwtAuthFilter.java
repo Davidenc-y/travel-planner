@@ -14,7 +14,8 @@ import reactor.core.publisher.Mono;
  *
  * <p>解析 {@code Authorization: Bearer <accessToken>}，校验通过后把 userId 写入
  * exchange attribute（非 ThreadLocal，符合响应式模型）；token 缺失/无效不阻断
- * 请求，由控制器回退 X-User-Id 或抛 40101（与 MVC 双通道语义一致）。</p>
+ * 请求，由控制器抛 40101（M6-57/T8 已移除 X-User-Id 回退；M16-1 起 MVC 侧
+ * 同为 JWT 单源，双栈语义一致）。</p>
  */
 @Slf4j
 @Component

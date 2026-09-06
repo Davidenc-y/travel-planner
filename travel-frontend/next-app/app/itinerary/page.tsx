@@ -104,7 +104,7 @@ function ItineraryListContent() {
     }
     setError(null);
     try {
-      const res = await itineraryApi.list(userId!, targetPage, size);
+      const res = await itineraryApi.list(targetPage, size);
       const d = res.data.data;
       setData(d);
       setPage(targetPage);

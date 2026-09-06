@@ -15,14 +15,16 @@ import org.springframework.stereotype.Component;
 public class ChatWeatherContextPortImpl implements ChatWeatherContextPort {
 
     private final WeatherContextBuilder weatherContextBuilder;
+    // M18-2：目的地/天数解析经 ItineraryWritebackProperties（与行程回写共用词表）
+    private final ItineraryWritebackProperties parseProps;
 
     @Override
     public String build(String composed) {
         if (composed == null || composed.isBlank()) {
             return "";
         }
-        String destination = ItineraryVersionPortImpl.parseDestination(composed);
-        Integer days = ItineraryVersionPortImpl.parseDays(composed);
+        String destination = parseProps.parseDestination(composed);
+        Integer days = parseProps.parseDays(composed);
         if (destination == null || days == null || days <= 0) {
             return "";
         }

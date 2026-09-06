@@ -111,7 +111,8 @@ public class TravelSupervisorAgent {
                                   QuotaShortCircuitInterceptor quotaShortCircuitInterceptor,
                                   QuotaTripwire quotaTripwire,
                                   CircuitBreaker.Registry circuitBreakerRegistry,
-                                  PromptTemplates promptTemplates) {
+                                  PromptTemplates promptTemplates,
+                                  PlanningHeuristics planningHeuristics) {
         this.chatModel = chatModel;
         this.prefAgent = prefAgent;
         this.attrAgent = attrAgent;
@@ -125,10 +126,10 @@ public class TravelSupervisorAgent {
                 new DirectAnswerExecutor(chatModel, promptTemplates, circuitBreakerRegistry);
         this.graphExecutor = new SupervisorGraphExecutor(
                 tokenUsageInterceptor, circuitBreakerRegistry, promptTemplates,
-                directAnswerExecutor, quotaTripwire);
+                directAnswerExecutor, quotaTripwire, planningHeuristics);
         this.streamExecutor = new SupervisorStreamExecutor(
                 tokenUsageInterceptor, circuitBreakerRegistry, promptTemplates,
-                directAnswerExecutor, quotaTripwire);
+                directAnswerExecutor, quotaTripwire, planningHeuristics);
         this.quotaShortCircuitInterceptor = quotaShortCircuitInterceptor;
     }
 

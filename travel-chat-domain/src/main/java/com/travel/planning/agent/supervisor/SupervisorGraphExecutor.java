@@ -37,17 +37,21 @@ final class SupervisorGraphExecutor {
     private final PromptTemplates promptTemplates;
     private final DirectAnswerExecutor directAnswerExecutor;
     private final QuotaTripwire quotaTripwire;
+    // M18-1：启发式判定（实例化注入）
+    private final PlanningHeuristics planningHeuristics;
 
     SupervisorGraphExecutor(TokenUsageInterceptor tokenUsageInterceptor,
                             CircuitBreaker.Registry circuitBreakerRegistry,
                             PromptTemplates promptTemplates,
                             DirectAnswerExecutor directAnswerExecutor,
-                            QuotaTripwire quotaTripwire) {
+                            QuotaTripwire quotaTripwire,
+                            PlanningHeuristics planningHeuristics) {
         this.tokenUsageInterceptor = tokenUsageInterceptor;
         this.circuitBreakerRegistry = circuitBreakerRegistry;
         this.promptTemplates = promptTemplates;
         this.directAnswerExecutor = directAnswerExecutor;
         this.quotaTripwire = quotaTripwire;
+        this.planningHeuristics = planningHeuristics;
     }
 
     /**
@@ -124,8 +128,8 @@ final class SupervisorGraphExecutor {
             // F85：回顾类请求（"上次/之前安排了哪些景点"）是合法 FINISH，跳过整图重试直接直答，
             // 避免白耗一次完整图执行（F82 两档之外的第三类，见 F85 3.5 边界说明）。
             if (!SupervisorResponseSupport.hasSectionOutput(finalState)
-                    && PlanningHeuristics.looksLikePlanningRequest(userInput)
-                    && !PlanningHeuristics.isRecallQuery(userInput)) {
+                    && planningHeuristics.looksLikePlanningRequest(userInput)
+                    && !planningHeuristics.isRecallQuery(userInput)) {
                 // M6-42：整图重试前检查取消
                 cancel.throwIfCancelled();
                 String retryRequestId = UUID.randomUUID().toString();
@@ -181,7 +185,7 @@ final class SupervisorGraphExecutor {
                     // 回顾类用回顾专用指令（不得编造景点），其余用覆盖优先级指令
                     // （会话 feedback/最新确认 > constraint > 画像）。
                     String system;
-                    if (PlanningHeuristics.isRecallQuery(userInput)) {
+                    if (planningHeuristics.isRecallQuery(userInput)) {
                         system = promptTemplates.directRecallSystem();
                     } else {
                         system = promptTemplates.directAnswerSystem();
@@ -222,6 +226,14 @@ final class SupervisorGraphExecutor {
             SupervisorTraceSupport.applyTracePath(finalState);
             // M8-9：最终 state 的 routePlan JSON 随结果返回（供会话知识 itinerary_day 切片写入）
             String routePlanJson = SupervisorResponseSupport.toText(finalState.value("routePlan"));
+            // M20-1：outputKey 为空时从 messages 抢救（并行派发合并失败场景），保证 REFINE 建版不丢
+            if (routePlanJson == null || routePlanJson.isBlank()) {
+                String salvaged = SupervisorResponseSupport.salvageRoutePlan(finalState);
+                if (salvaged != null) {
+                    log.warn("[Supervisor] routePlan outputKey 为空，已从 messages 抢救回退（长度={}）", salvaged.length());
+                    routePlanJson = salvaged;
+                }
+            }
             String budgetJson = SupervisorResponseSupport.toText(
                     finalState.value("budgetEstimate"));
             return new TravelSupervisorAgent.PlanningResult(

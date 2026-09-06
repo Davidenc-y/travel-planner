@@ -61,9 +61,9 @@ public class AuthController {
      * <p>注销 Redis 中的 refreshToken</p>
      */
     @PostMapping("/logout")
-    public R<Void> logout(@RequestHeader(value = "X-User-Id", required = false) Long userId) {
-        // F68/B3-2：accessToken 优先，X-User-Id 头兜底
-        userService.logout(AuthUtils.resolveUserId(userId));
+    public R<Void> logout() {
+        // M16-1：身份仅认 accessToken（UserContextHolder）
+        userService.logout(AuthUtils.resolveUserId());
         return R.ok(null);
     }
 }

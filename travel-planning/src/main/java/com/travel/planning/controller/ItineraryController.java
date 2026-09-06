@@ -47,11 +47,10 @@ public class ItineraryController {
      * 生成行程
      */
     @PostMapping("/generate")
-    public R<ItineraryResponseDTO> generate(@Valid @RequestBody ItineraryGenerateRequestDTO req,
-                                             @RequestHeader(value = "X-User-Id", required = false) Long userId) {
+    public R<ItineraryResponseDTO> generate(@Valid @RequestBody ItineraryGenerateRequestDTO req) {
         log.info("生成行程: destination={}, days={}", req.getDestination(), req.getDays());
-        // F68/B3-2：身份来源优先 accessToken（UserContextHolder），其次 X-User-Id 头兜底
-        return R.ok(itineraryService.generate(req, AuthUtils.resolveUserId(userId)));
+        // M16-1：身份仅认 accessToken（UserContextHolder）
+        return R.ok(itineraryService.generate(req, AuthUtils.resolveUserId()));
     }
 
     /**
@@ -60,12 +59,11 @@ public class ItineraryController {
      * <p>注意：成功路径直接返回 SseEmitter（禁止 ResponseEntity 包装，见 M6-4）。</p>
      */
     @PostMapping("/generate/stream")
-    public Object generateStream(@Valid @RequestBody ItineraryGenerateRequestDTO req,
-                                 @RequestHeader(value = "X-User-Id", required = false) Long userIdHeader) {
+    public Object generateStream(@Valid @RequestBody ItineraryGenerateRequestDTO req) {
         if (!itineraryStreamProps.isEnabled()) {
             return ResponseEntity.notFound().build();
         }
-        Long userId = AuthUtils.resolveUserId(userIdHeader);
+        Long userId = AuthUtils.resolveUserId();
         StreamRequest request = new StreamRequest("itinerary", userId, null, null,
                 req.getClientRequestId(), Map.of("req", req), null);
         StreamPreflight pre = itineraryStreamingPipeline.preflight(request);
@@ -85,10 +83,9 @@ public class ItineraryController {
      * 同步等待（交互形态与 generate 一致，无轮询）。
      */
     @PostMapping("/{id}/resume")
-    public R<ItineraryResponseDTO> resume(@PathVariable Long id,
-                                          @RequestHeader(value = "X-User-Id", required = false) Long userId) {
+    public R<ItineraryResponseDTO> resume(@PathVariable Long id) {
         log.info("行程续跑: id={}", id);
-        return R.ok(itineraryService.resume(id, AuthUtils.resolveUserId(userId)));
+        return R.ok(itineraryService.resume(id, AuthUtils.resolveUserId()));
     }
 
     /**
@@ -112,10 +109,9 @@ public class ItineraryController {
      */
     @GetMapping
     public R<PageResult<ItineraryResponseDTO>> list(
-            @RequestParam(required = false) Long userId,
             @RequestParam(defaultValue = "1") int page,
             @RequestParam(defaultValue = "10") int size) {
-        return R.ok(itineraryService.listByUserId(AuthUtils.resolveUserId(userId), page, size));
+        return R.ok(itineraryService.listByUserId(AuthUtils.resolveUserId(), page, size));
     }
 
     /**
@@ -130,14 +126,14 @@ public class ItineraryController {
     /** M11-1：行程历史版本列表（本人行程，按版本倒序）。 */
     @GetMapping("/{id}/versions")
     public R<java.util.List<java.util.Map<String, Object>>> versions(@PathVariable Long id) {
-        return R.ok(itineraryVersionService.list(id, AuthUtils.resolveUserId(null)));
+        return R.ok(itineraryVersionService.list(id, AuthUtils.resolveUserId()));
     }
 
     /** M11-1：行程历史版本详情（只读快照回看）。 */
     @GetMapping("/{id}/versions/{version}")
     public R<java.util.Map<String, Object>> version(@PathVariable Long id,
                                                      @PathVariable Integer version) {
-        return R.ok(itineraryVersionService.detail(id, version, AuthUtils.resolveUserId(null)));
+        return R.ok(itineraryVersionService.detail(id, version, AuthUtils.resolveUserId()));
     }
 
     /**
@@ -147,10 +143,9 @@ public class ItineraryController {
     @PostMapping("/{id}/versions/{version}/switch")
     public R<java.util.Map<String, Object>> switchVersion(
             @PathVariable Long id,
-            @PathVariable Integer version,
-            @RequestHeader(value = "X-User-Id", required = false) Long userId) {
+            @PathVariable Integer version) {
         Integer activeVersion = itineraryVersionService.switchTo(
-                AuthUtils.resolveUserId(userId), id, version);
+                AuthUtils.resolveUserId(), id, version);
         return R.ok(java.util.Map.of(
                 "itineraryId", id, "version", activeVersion, "activeVersion", activeVersion));
     }
@@ -158,10 +153,9 @@ public class ItineraryController {
     @PostMapping("/{id}/versions/{version}/rollback")
     public R<java.util.Map<String, Object>> rollback(
             @PathVariable Long id,
-            @PathVariable Integer version,
-            @RequestHeader(value = "X-User-Id", required = false) Long userId) {
+            @PathVariable Integer version) {
         Integer activeVersion = itineraryVersionService.rollbackTo(
-                AuthUtils.resolveUserId(userId), id, version);
+                AuthUtils.resolveUserId(), id, version);
         return R.ok(java.util.Map.of(
                 "itineraryId", id, "version", activeVersion, "activeVersion", activeVersion));
     }

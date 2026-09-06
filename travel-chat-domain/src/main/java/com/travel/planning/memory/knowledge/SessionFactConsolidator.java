@@ -19,6 +19,14 @@ import java.util.regex.Pattern;
 @Component
 public class SessionFactConsolidator {
 
+    // M18-1：主题词表单源 travel.chat.word-lists.fact（cities 与 knowledge 18 城对齐）
+    private final com.travel.planning.config.ChatWordLists wordLists;
+
+    public SessionFactConsolidator(com.travel.planning.config.ChatWordLists wordLists) {
+        this.wordLists = wordLists;
+    }
+
+
     /** 共识主题 */
     public enum Topic {
         BUDGET("预算"), DESTINATION("目的地"), DAYS("天数"),
@@ -119,7 +127,7 @@ public class SessionFactConsolidator {
         return sb.toString().trim();
     }
 
-    private static Topic detectTopic(String content) {
+    private Topic detectTopic(String content) {
         // 预算优先，但含"天/日"的天数类表达（如"天数改成4天"）不被预算正则误判
         boolean hasDayMarker = content.contains("天") || content.contains("日");
         if (content.contains("预算") || content.contains("元")
@@ -129,14 +137,15 @@ public class SessionFactConsolidator {
         if (DAYS_PATTERN.matcher(content).find()) {
             return Topic.DAYS;
         }
-        if (containsAny(content, "想去", "去北京", "去上海", "去广州", "去深圳", "去杭州",
-                "去成都", "去西安", "去厦门", "去南京", "去重庆", "去武汉", "去长沙")) {
+        if (content.contains("想去")
+                || containsAny(content, wordLists.getFact().getCities().stream()
+                        .map(c -> "去" + c).toArray(String[]::new))) {
             return Topic.DESTINATION;
         }
-        if (containsAny(content, "带小孩", "带娃", "亲子", "家庭", "情侣", "独行", "朋友", "2人", "3人")) {
+        if (containsAny(content, wordLists.getFact().getPartyPatterns().toArray(new String[0]))) {
             return Topic.PARTY;
         }
-        if (containsAny(content, "舒适", "经济", "豪华", "穷游", "高性价比")) {
+        if (containsAny(content, wordLists.getFact().getStylePatterns().toArray(new String[0]))) {
             return Topic.STYLE;
         }
         if (content.contains("喜欢") || content.contains("爱好")) {

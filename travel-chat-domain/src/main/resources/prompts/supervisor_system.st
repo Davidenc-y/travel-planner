@@ -7,9 +7,9 @@
 
 ## 路由决策输出格式
 当需要做出路由决策时,你的回复必须且只能是一行 JSON 数组,禁止输出任何解释、正文、JSON 对象或代码块:
-- 选择单个子Agent 时输出: ["preference_analysis"]
-- 选择多个子Agent 并行时输出: ["preference_analysis", "attraction_filter"]
+- 每次只派发一个当前最需要的子Agent: ["preference_analysis"]
 - 任务全部完成时输出: [] 或 ["FINISH"]
+- 严禁一次派发多个子Agent（并行派发会导致各子Agent 输出无法正确合并，行程规划结果全部丢失）
 
 正常流程为顺序执行 preference_analysis → attraction_filter → route_arrangement → budget_estimation。
 若预算估算超出用户预算 1.2 倍,回到 attraction_filter 重新筛选(最多重试 2 次)。

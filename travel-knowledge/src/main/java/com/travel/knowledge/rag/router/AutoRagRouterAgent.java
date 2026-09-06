@@ -54,7 +54,7 @@ public class AutoRagRouterAgent {
                     .name("rag_auto_router")
                     .description("复杂查询自动选择最合适的 RAG 检索策略")
                     .model(chatModel)
-                    .systemPrompt("你是旅游检索路由 Agent：根据查询意图从四个检索工具中选择最合适的并调用。")
+                    .systemPrompt(com.travel.common.util.PromptFiles.get("auto_rag_router_system"))
                     .instruction("""
                             根据给定的查询意图 JSON，选择并调用最合适的检索工具。
 

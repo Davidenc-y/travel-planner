@@ -30,15 +30,19 @@ public class PreferenceSaveService {
     private final LlmGovernor llmGovernor;
     // M3-20：Prompt 模板外置（P1-17）
     private final PromptTemplates promptTemplates;
+    // M18-1：词表单源
+    private final com.travel.planning.config.ChatWordLists wordLists;
 
     public PreferenceSaveService(@Qualifier("lightModel") ChatModel lightModel,
                                  ProfilePort profilePort,
                                  LlmGovernor llmGovernor,
-                                 PromptTemplates promptTemplates) {
+                                 PromptTemplates promptTemplates,
+                                 com.travel.planning.config.ChatWordLists wordLists) {
         this.lightModel = lightModel;
         this.profilePort = profilePort;
         this.llmGovernor = llmGovernor;
         this.promptTemplates = promptTemplates;
+        this.wordLists = wordLists;
     }
 
     /**
@@ -69,14 +73,13 @@ public class PreferenceSaveService {
         }
     }
 
-    private static boolean isPreferenceStatement(String message) {
+    // M18-1：触发词单源 travel.chat.word-lists.preference.statement-keywords
+    private boolean isPreferenceStatement(String message) {
         if (message == null || message.isBlank()) {
             return false;
         }
-        return message.contains("记住") || message.contains("偏好")
-                || message.contains("设为") || message.contains("改为")
-                || message.contains("设置为") || message.contains("预算")
-                || message.contains("喜欢") || message.contains("消费");
+        return com.travel.common.util.AgentOutputUtils.containsAny(message,
+                wordLists.getPreference().getStatementKeywords().toArray(new String[0]));
     }
 
     private Map<String, Object> extract(String message) {
@@ -143,7 +146,7 @@ public class PreferenceSaveService {
     }
 
     /** M11-4：consumeLevel 归一（经济/穷游→ECONOMICAL，品质/舒适→COMFORT，其余合法原样）。 */
-    private static String toConsumeLevel(Object value) {
+    private String toConsumeLevel(Object value) {
         if (value == null) {
             return null;
         }
@@ -151,10 +154,12 @@ public class PreferenceSaveService {
         if (s.isBlank() || "null".equalsIgnoreCase(s)) {
             return null;
         }
-        if (s.contains("经济") || s.contains("穷游") || s.contains("实惠")) {
+        if (com.travel.common.util.AgentOutputUtils.containsAny(s,
+                wordLists.getPreference().getStyleEconomy().toArray(new String[0]))) {
             return "ECONOMICAL";
         }
-        if (s.contains("品质") || s.contains("舒适") || s.contains("享受")) {
+        if (com.travel.common.util.AgentOutputUtils.containsAny(s,
+                wordLists.getPreference().getStyleComfort().toArray(new String[0]))) {
             return "COMFORT";
         }
         String upper = s.toUpperCase();

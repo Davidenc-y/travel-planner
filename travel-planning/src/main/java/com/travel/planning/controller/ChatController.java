@@ -26,6 +26,10 @@ import java.util.Map;
 /**
  * 聊天接口
  *
+ * <p>M16-1：全部端点身份仅认 accessToken（UserContextHolder，经
+ * {@link AuthUtils#resolveUserId()}）；不再接受 X-User-Id 头 / body / query
+ * 显式身份回退（与 WebFlux 侧语义对齐）。</p>
+ *
  * @author david_ency
  * @since 1.0-SNAPSHOT
  */
@@ -46,20 +50,17 @@ public class ChatController {
      * 创建会话
      */
     @PostMapping("/sessions")
-    public R<String> createSession(@RequestBody Map<String, Object> body,
-                                   @RequestHeader(value = "X-User-Id", required = false) Long userId) {
-        Long bodyUserId = body.get("userId") != null ? Long.valueOf(body.get("userId").toString()) : null;
+    public R<String> createSession(@RequestBody Map<String, Object> body) {
         String title = body.get("title") != null ? body.get("title").toString() : null;
-        // F68/B3-2：身份来源优先 accessToken（UserContextHolder），其次 body/头兜底
-        return R.ok(chatService.createSession(AuthUtils.resolveUserId(bodyUserId != null ? bodyUserId : userId), title));
+        return R.ok(chatService.createSession(AuthUtils.resolveUserId(), title));
     }
 
     /**
      * 获取用户会话列表
      */
     @GetMapping("/sessions")
-    public R<List<ChatSession>> listSessions(@RequestParam(required = false) Long userId) {
-        return R.ok(chatService.listSessions(AuthUtils.resolveUserId(userId)));
+    public R<List<ChatSession>> listSessions() {
+        return R.ok(chatService.listSessions(AuthUtils.resolveUserId()));
     }
 
     /**
@@ -75,9 +76,8 @@ public class ChatController {
      * 归档后同步尽力收口摘要，超时/失败由后台补偿兜底。
      */
     @PostMapping("/sessions/{sessionId}/close")
-    public R<ChatService.CloseSessionResult> closeSession(@PathVariable String sessionId,
-                                                           @RequestHeader(value = "X-User-Id", required = false) Long userId) {
-        return R.ok(chatService.closeSession(AuthUtils.resolveUserId(userId), sessionId));
+    public R<ChatService.CloseSessionResult> closeSession(@PathVariable String sessionId) {
+        return R.ok(chatService.closeSession(AuthUtils.resolveUserId(), sessionId));
     }
 
     /**
@@ -85,9 +85,8 @@ public class ChatController {
      */
     @PutMapping("/sessions/{sessionId}/title")
     public R<Void> updateTitle(@PathVariable String sessionId,
-                               @RequestBody Map<String, String> body,
-                               @RequestHeader(value = "X-User-Id", required = false) Long userId) {
-        chatService.updateTitle(AuthUtils.resolveUserId(userId), sessionId, body.get("title"));
+                               @RequestBody Map<String, String> body) {
+        chatService.updateTitle(AuthUtils.resolveUserId(), sessionId, body.get("title"));
         return R.ok();
     }
 
@@ -97,10 +96,9 @@ public class ChatController {
      */
     @PostMapping("/sessions/{sessionId}/messages")
     public R<ChatResponseDTO> sendMessage(@PathVariable String sessionId,
-                                           @RequestBody ChatMessageRequest body,
-                                           @RequestHeader(value = "X-User-Id", required = false) Long userId) {
+                                           @RequestBody ChatMessageRequest body) {
         return R.ok(chatService.sendMessage(sessionId, body.getMessage(),
-                AuthUtils.resolveUserId(userId), body.getClientMessageId(), body.getModel()));
+                AuthUtils.resolveUserId(), body.getClientMessageId(), body.getModel()));
     }
 
     /**
@@ -119,12 +117,11 @@ public class ChatController {
     @PostMapping("/sessions/{sessionId}/messages/stream")
     public Object streamMessage(@PathVariable String sessionId,
                                 @RequestBody ChatMessageRequest body,
-                                @RequestHeader(value = "X-User-Id", required = false) Long userIdHeader,
                                 @RequestHeader(value = "Last-Event-ID", required = false) String lastEventId) {
         if (!chatStreamProps.isEnabled()) {
             return ResponseEntity.notFound().build();
         }
-        Long userId = AuthUtils.resolveUserId(userIdHeader);
+        Long userId = AuthUtils.resolveUserId();
         String message = body.getMessage();
         String clientMessageId = body.getClientMessageId();
         String model = body.getModel();
@@ -150,9 +147,8 @@ public class ChatController {
      */
     @PostMapping("/sessions/{sessionId}/turns/{clientMessageId}/interrupt")
     public R<Void> interruptTurn(@PathVariable String sessionId,
-                                 @PathVariable String clientMessageId,
-                                 @RequestHeader(value = "X-User-Id", required = false) Long userId) {
-        chatService.interruptTurn(AuthUtils.resolveUserId(userId), sessionId, clientMessageId);
+                                 @PathVariable String clientMessageId) {
+        chatService.interruptTurn(AuthUtils.resolveUserId(), sessionId, clientMessageId);
         return R.ok();
     }
 
@@ -161,9 +157,8 @@ public class ChatController {
      */
     @DeleteMapping("/sessions/{sessionId}/turns/{clientMessageId}/breakpoint")
     public R<Void> clearBreakpoint(@PathVariable String sessionId,
-                                   @PathVariable String clientMessageId,
-                                   @RequestHeader(value = "X-User-Id", required = false) Long userId) {
-        chatService.clearBreakpoint(AuthUtils.resolveUserId(userId), sessionId, clientMessageId);
+                                   @PathVariable String clientMessageId) {
+        chatService.clearBreakpoint(AuthUtils.resolveUserId(), sessionId, clientMessageId);
         return R.ok();
     }
 
@@ -173,10 +168,9 @@ public class ChatController {
     @GetMapping("/sessions/{sessionId}/turns/{clientMessageId}")
     public R<ChatService.TurnStatusResult> getTurnStatus(
             @PathVariable String sessionId,
-            @PathVariable String clientMessageId,
-            @RequestHeader(value = "X-User-Id", required = false) Long userId) {
+            @PathVariable String clientMessageId) {
         return R.ok(chatService.getTurnStatus(
-                AuthUtils.resolveUserId(userId), sessionId, clientMessageId));
+                AuthUtils.resolveUserId(), sessionId, clientMessageId));
     }
 
     /**
@@ -184,9 +178,8 @@ public class ChatController {
      */
     @GetMapping("/sessions/{sessionId}/interrupted-turn")
     public R<ChatService.LatestInterruptedTurn> getLatestInterruptedTurn(
-            @PathVariable String sessionId,
-            @RequestHeader(value = "X-User-Id", required = false) Long userId) {
+            @PathVariable String sessionId) {
         return R.ok(chatService.getLatestInterruptedTurn(
-                AuthUtils.resolveUserId(userId), sessionId));
+                AuthUtils.resolveUserId(), sessionId));
     }
 }

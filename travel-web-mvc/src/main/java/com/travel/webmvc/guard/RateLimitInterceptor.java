@@ -1,5 +1,8 @@
 package com.travel.webmvc.guard;
 
+import com.travel.common.util.JsonUtils;
+import com.travel.common.result.R;
+import com.travel.common.exception.ErrorCode;
 import com.travel.core.guard.RateLimiter;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
@@ -15,7 +18,7 @@ import org.springframework.web.servlet.HandlerInterceptor;
 @Slf4j
 public class RateLimitInterceptor implements HandlerInterceptor {
 
-    /** M3-1：JWT 拦截器写入的请求级 userId（优于可伪造的 X-User-Id 头） */
+    /** M3-1：JWT 拦截器写入的请求级 userId（M16-1 起为唯一身份源，无头回退） */
     public static final String ATTR_USER_ID = "travel.userId";
 
     private final RateLimiter limiter;
@@ -33,7 +36,9 @@ public class RateLimitInterceptor implements HandlerInterceptor {
             log.warn("[RateLimit] 请求超限被拦截: key={}", key);
             response.setStatus(429);
             response.setContentType("application/json;charset=UTF-8");
-            response.getWriter().write("{\"code\":40301,\"message\":\"请求过于频繁，请稍后重试\"}");
+            // M16-2：错误码与文案单源于 ErrorCode.RATE_LIMITED（消除与枚举的双源漂移）
+            response.getWriter().write(JsonUtils.toJson(
+                    R.fail(ErrorCode.RATE_LIMITED.code(), ErrorCode.RATE_LIMITED.message())));
             return false;
         }
         return true;
@@ -44,10 +49,7 @@ public class RateLimitInterceptor implements HandlerInterceptor {
         if (attr != null && !attr.toString().isBlank()) {
             return attr.toString();
         }
-        String userId = request.getHeader("X-User-Id");
-        if (userId == null || userId.isBlank()) {
-            userId = "anonymous";
-        }
-        return userId;
+        // M16-1：不再采信可伪造的 X-User-Id 头（与鉴权 JWT 单源对齐）；无身份请求共享 anonymous 桶
+        return "anonymous";
     }
 }

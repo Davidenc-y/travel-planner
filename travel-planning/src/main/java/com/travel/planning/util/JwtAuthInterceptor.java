@@ -13,11 +13,12 @@ import org.springframework.web.servlet.HandlerInterceptor;
  * JWT 认证拦截器（F68/B3-2）。
  *
  * <p>解析 {@code Authorization: Bearer <accessToken>}，校验通过后把 userId/username
- * 写入 {@link UserContextHolder}；控制器优先使用上下文身份，X-User-Id 头降级为兜底
- * （向后兼容既有 Postman 用例），从而逐步消除 X-User-Id 头依赖（F52 增强）。</p>
+ * 写入 {@link UserContextHolder}，控制器经 AuthUtils 仅认该上下文身份
+ * （M16-1 起 X-User-Id 头/body/query 显式回退已全部移除，与 WebFlux 侧
+ * JWT-only 语义对齐；Postman 用例请改带 Bearer token）。</p>
  *
- * <p>token 缺失/无效时不阻断请求（控制器兜底校验仍会抛 40101），保证迁移期
- * 双通道共存；请求结束后 {@link #afterCompletion} 清理 ThreadLocal。</p>
+ * <p>token 缺失/无效时不阻断请求（控制器兜底校验仍会抛 40101）；
+ * 请求结束后 {@link #afterCompletion} 清理 ThreadLocal。</p>
  */
 @Slf4j
 @Component

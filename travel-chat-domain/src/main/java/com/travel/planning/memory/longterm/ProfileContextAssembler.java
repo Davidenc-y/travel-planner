@@ -1,7 +1,7 @@
 package com.travel.planning.memory.longterm;
 
+import com.travel.planning.prompt.Markers;
 import com.travel.common.entity.TravelProfile;
-import com.travel.common.util.JsonUtils;
 import com.travel.planning.memory.shortterm.SessionMemoryPort;
 import com.travel.planning.memory.shortterm.ShortTermMemoryProperties;
 import org.springframework.stereotype.Component;
@@ -19,7 +19,7 @@ import java.util.List;
 @Component
 public class ProfileContextAssembler {
 
-    private static final String PREFIX = "【用户画像】";
+    private static final String PREFIX = Markers.USER_PROFILE;
 
     private final SessionMemoryPort sessionMemoryPort;
     private final ShortTermMemoryProperties memoryProps;
@@ -37,31 +37,91 @@ public class ProfileContextAssembler {
     }
 
     /**
-     * B3-4/F72：带 token 预算组装画像上下文。
+     * M17-1：视图路径（结构化画像）。
+     */
+    public String assembleView(com.travel.common.dto.ProfileView view) {
+        return assembleView(view, memoryProps.getProfileMaxTokens());
+    }
+
+    /**
+     * M17-3：实体路径 + 行为特征段（section 为 null 时与单参路径逐字节等价）。
+     */
+    public String assemble(TravelProfile profile, String behaviorSection) {
+        return assembleView(com.travel.common.dto.ProfileView.from(profile), behaviorSection);
+    }
+
+    /**
+     * M17-3：视图路径 + 行为特征段（section 为 null 时与无段路径逐字节等价；
+     * 行为段作为最后一个 part 追加，预算超限时天然最先被截断）。
+     */
+    public String assembleView(com.travel.common.dto.ProfileView view, String behaviorSection) {
+        return assembleView(view, behaviorSection, memoryProps.getProfileMaxTokens());
+    }
+
+    public String assembleView(com.travel.common.dto.ProfileView view, String behaviorSection,
+                               int maxTokens) {
+        String base = assembleView(view, maxTokens);
+        if (behaviorSection == null || behaviorSection.isBlank() || base.isEmpty()) {
+            return base; // 无行为段 / 画像本身为空：与原路径完全一致
+        }
+        // 行为段与画像合并后重新过预算（段顺序不变，行为段最后 → 截断优先）
+        String nl = String.valueOf('\n');
+        List<String> parts = new ArrayList<>(java.util.Arrays.asList(base.split(nl, -1)));
+        parts.add(behaviorSection);
+        if (sessionMemoryPort.estimateTokens(String.join(nl, parts)) <= maxTokens) {
+            return String.join(nl, parts);
+        }
+        // 超限：逐尾丢弃（行为段整段最先丢弃；仍超则等价于原路径截断结果）
+        for (int i = parts.size() - 1; i > 0; i--) {
+            parts.remove(i);
+            if (sessionMemoryPort.estimateTokens(String.join(nl, parts)) <= maxTokens) {
+                return String.join(nl, parts);
+            }
+        }
+        return base; // 兜底：返回不含行为段的原路径结果
+    }
+
+    /**
+     * B3-4/F72：带 token 预算组装画像上下文（M17-1 起内部统一走 ProfileView 视图路径，
+     * 输出与旧实体直读路径逐字节等价——见 ProfileContextAssemblerViewEquivalenceTest）。
      *
      * <p>按重要性顺序排列（预算 → 风格 → 目的地 → 兴趣 → 历史），超限时保留前缀段、
      * 最后一段按 token 截断，避免画像段吃满注入总预算。</p>
      */
     public String assemble(TravelProfile profile, int maxTokens) {
-        if (profile == null) {
+        return assembleView(com.travel.common.dto.ProfileView.from(profile), maxTokens);
+    }
+
+    /**
+     * M17-1：视图路径组装（渲染规则与旧 addJsonList 逐字对齐）。
+     */
+    public String assembleView(com.travel.common.dto.ProfileView view, int maxTokens) {
+        if (view == null) {
             return "";
         }
         if (maxTokens <= 0) {
             return "";
         }
         List<String> parts = new ArrayList<>();
-        if (StringUtils.hasText(profile.getBudgetRange())) {
-            parts.add("预算区间：" + profile.getBudgetRange());
+        if (StringUtils.hasText(view.budgetRange())) {
+            parts.add("预算区间：" + view.budgetRange());
         }
-        if (StringUtils.hasText(profile.getTravelStyle())) {
-            parts.add("出行风格：" + profile.getTravelStyle());
+        if (StringUtils.hasText(view.travelStyle())) {
+            parts.add("出行风格：" + view.travelStyle());
         }
-        if (StringUtils.hasText(profile.getConsumeLevel())) {
-            parts.add("消费水平：" + profile.getConsumeLevel());
+        if (StringUtils.hasText(view.consumeLevel())) {
+            parts.add("消费水平：" + view.consumeLevel());
         }
-        addJsonList(parts, "常去目的地", profile.getPreferredDestinations());
-        addJsonList(parts, "偏好兴趣", profile.getPreferredInterests());
-        addJsonList(parts, "历史行程", profile.getHistoryTrips());
+        addList(parts, "常去目的地", view.destinations());
+        addList(parts, "偏好兴趣", view.interests());
+        // 历史：摘要通道优先（压缩后形态），否则标题级事实
+        if (StringUtils.hasText(view.historySummary())) {
+            parts.add("历史行程：" + view.historySummary());
+        } else {
+            List<String> titles = new ArrayList<>();
+            view.history().forEach(f -> titles.add(f.title()));
+            addList(parts, "历史行程", titles);
+        }
         if (parts.isEmpty()) {
             return "";
         }
@@ -105,19 +165,11 @@ public class ProfileContextAssembler {
         return text.substring(0, Math.max(idx, 8)) + "…（已裁剪）";
     }
 
-    private void addJsonList(List<String> parts, String label, String json) {
-        if (json == null || json.isBlank() || "[]".equals(json.trim())) {
+    /** M17-1：视图列表渲染（与旧 addJsonList 输出逐字一致：顿号连接） */
+    private void addList(List<String> parts, String label, List<String> items) {
+        if (items == null || items.isEmpty()) {
             return;
         }
-        try {
-            List<String> items = JsonUtils.parseList(json, String.class);
-            if (items != null && !items.isEmpty()) {
-                parts.add(label + "：" + String.join("、", items));
-                return;
-            }
-        } catch (Exception ignored) {
-            // F64/B2：history_trips 压缩后可能不再是 JSON 数组，按原文展示。
-        }
-        parts.add(label + "：" + json.trim());
+        parts.add(label + "：" + String.join("、", items));
     }
 }

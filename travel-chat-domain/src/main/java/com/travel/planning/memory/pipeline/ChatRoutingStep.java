@@ -1,5 +1,6 @@
 package com.travel.planning.memory.pipeline;
 
+import com.travel.planning.service.ResponseTexts;
 import com.travel.planning.agent.supervisor.TravelSupervisorAgent;
 import com.travel.planning.agent.supervisor.SupervisorResponseSupport;
 import com.travel.planning.agent.support.AttractionGroundingChecker;
@@ -167,7 +168,7 @@ public class ChatRoutingStep {
             ModelCircuitExceptionSupport.rethrowIfCircuitOpen(e);
             ModelQuotaExceptionSupport.rethrowIfQuotaExceeded(e);
             log.error("Agent 调用失败", e);
-            response = "抱歉，处理您的请求时出现错误，请稍后重试。";
+            response = ResponseTexts.GENERIC_ROUTE_FAILURE;
             fallback = true;
         }
         long routeElapsed = System.currentTimeMillis() - routeStart;
@@ -262,7 +263,7 @@ public class ChatRoutingStep {
             ModelCircuitExceptionSupport.rethrowIfCircuitOpen(e);
             ModelQuotaExceptionSupport.rethrowIfQuotaExceeded(e);
             log.error("Agent 流式调用失败", e);
-            return new StreamRouteResult("抱歉，处理您的请求时出现错误，请稍后重试。", 0, true, false);
+            return new StreamRouteResult(ResponseTexts.GENERIC_ROUTE_FAILURE, 0, true, false);
         }
     }
 
@@ -324,8 +325,14 @@ public class ChatRoutingStep {
     private void writebackIfEnabled(ChatIntent intent, Long userId, String sessionId,
                                     String userInput, String routePlanJson, String budgetJson) {
         if (!itineraryWritebackEnabled || itineraryVersionPort == null
-                || intent != ChatIntent.PLANNING && intent != ChatIntent.REFINE
-                || routePlanJson == null || routePlanJson.isBlank()) {
+                || intent != ChatIntent.PLANNING && intent != ChatIntent.REFINE) {
+            return;
+        }
+        if (routePlanJson == null || routePlanJson.isBlank()) {
+            // M20-1：不再静默——2026-09-06 实证 REFINE 因图流输出丢失而无声跳过建版，
+            // 用户仅在详情页发现"少了一个版本"。WARN 暴露原因供诊断。
+            log.warn("[ItineraryWriteback] 跳过回写（routePlan 为空，图流子Agent 输出未合并或走了直答兜底）: "
+                    + "sessionId={}, intent={}, answer将不建版", sessionId, intent);
             return;
         }
         try {

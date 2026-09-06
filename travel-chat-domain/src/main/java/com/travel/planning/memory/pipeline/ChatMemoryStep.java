@@ -1,7 +1,11 @@
 package com.travel.planning.memory.pipeline;
 
+import com.travel.planning.prompt.Markers;
 import com.travel.planning.memory.longterm.ProfileContextAssembler;
 import com.travel.planning.memory.longterm.ProfilePort;
+import com.travel.planning.memory.longterm.behavior.BehaviorProfileService;
+import com.travel.planning.memory.longterm.behavior.BehaviorProfileProperties;
+import com.travel.planning.memory.longterm.behavior.BehaviorSections;
 import com.travel.planning.memory.shortterm.SessionMemoryPort;
 import com.travel.planning.memory.shortterm.ShortTermMemoryProperties;
 import lombok.RequiredArgsConstructor;
@@ -27,12 +31,23 @@ public class ChatMemoryStep {
     private final ProfileContextAssembler profileContextAssembler;
     private final SessionMemoryPort sessionMemoryPort;
     private final ShortTermMemoryProperties memoryProps;
+    // M17-3：行为画像注入（inject-enabled=false 时零调用零注入，行为逐字节等价）
+    private final BehaviorProfileService behaviorProfileService;
+    private final BehaviorProfileProperties behaviorProps;
 
     /**
      * 组装 画像 + (摘要+滑动窗口 | 原文历史)（F50/F55/F57/F60 语义不变）。
      */
     public MemoryContext assemble(Long userId, String sessionId) {
-        String profileContext = profileContextAssembler.assemble(profilePort.getOrCreate(userId));
+        String behaviorSection = behaviorSectionOrNull(userId);
+        String profileContext;
+        if (behaviorSection == null) {
+            // M17-3 红线：inject 关闭/无可靠行为画像时走原路径（与现状逐字节等价）
+            profileContext = profileContextAssembler.assemble(profilePort.getOrCreate(userId));
+        } else {
+            profileContext = profileContextAssembler.assemble(
+                    profilePort.getOrCreate(userId), behaviorSection);
+        }
         String rawHistory = sessionMemoryPort.composeHistoryContext(sessionId, memoryProps.getMaxTurns());
         int turns = sessionMemoryPort.countUserTurns(sessionId);
         // F57：以全量汇总 token 作为触发依据（截断前统计），配合轮数触发。
@@ -53,7 +68,7 @@ public class ChatMemoryStep {
                 // 摘要尚未生成（首轮触发）：本轮仍用原文窗口。
                 historySection = rawHistory;
             } else {
-                StringBuilder sb = new StringBuilder("【会话摘要】\n").append(summary);
+                StringBuilder sb = new StringBuilder(Markers.SESSION_SUMMARY + "\n").append(summary);
                 String recent = sessionMemoryPort.composeRecentWindow(sessionId, memoryProps.getRecentWindowTurns());
                 if (!recent.isBlank()) {
                     sb.append("\n\n【最近对话】\n").append(recent);
@@ -66,5 +81,18 @@ public class ChatMemoryStep {
         }
         return new MemoryContext(profileContext, historySection, summaryUsed, summaryTriggered,
                 turns, totalHistoryTokens);
+    }
+
+    /**
+     * M17-3：行为特征段（inject-enabled 且画像可靠且可渲染出内容时非 null）。
+     */
+    private String behaviorSectionOrNull(Long userId) {
+        if (!behaviorProps.isInjectEnabled()) {
+            return null;
+        }
+        return behaviorProfileService.getBehavior(userId)
+                .filter(behaviorProfileService::isReliable)
+                .map(row -> BehaviorSections.render(row, behaviorProps.getInjectMaxTokens()))
+                .orElse(null);
     }
 }

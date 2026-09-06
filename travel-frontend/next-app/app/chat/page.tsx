@@ -339,7 +339,7 @@ function ChatContent() {
       creatingRef.current = true;
       setCreatingSession(true);
       try {
-        sid = await sessionList.createSession(userId!);
+        sid = await sessionList.createSession();
         if (!sid) return;
         // M6-59：标记新建会话——本次发送的乐观消息优先，历史空响应不得覆盖
         freshSessionRef.current = sid;

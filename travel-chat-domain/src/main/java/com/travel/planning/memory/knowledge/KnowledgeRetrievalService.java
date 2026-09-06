@@ -31,10 +31,9 @@ public class KnowledgeRetrievalService {
 
     private static final int SNIPPET_MAX = 80;
 
-    /** M8-2：数据来源说明段（候选 JSON 前一行；null 字段=知识库暂无数据） */
+    /** M8-2 数据来源说明段（M18-2 起外置 prompts/knowledge_source_note.st；null 字段=知识库暂无数据） */
     private static final String SOURCE_NOTE =
-            "【数据来源说明】以下候选景点数据来自本地知识库（高德地图采集/人工录入），"
-                    + "字段值为知识库事实，回答时须以其为准；null 字段表示知识库暂无数据。";
+            com.travel.common.util.PromptFiles.get("knowledge_source_note");
 
     private final KnowledgeClient knowledgeClient;
 
@@ -80,9 +79,8 @@ public class KnowledgeRetrievalService {
             boolean hasWebEnrich = compact.stream()
                     .anyMatch(c -> "web_enrich".equals(c.get("dataSource")));
             if (hasWebEnrich) {
-                json += "\n其中标注 dataSource=web_enrich 的字段来自联网搜索补充，"
-                        + "可靠性低于本地知识库，回答时须提示用户\"开放时间/价格来自网络信息，"
-                        + "建议出行前官方渠道确认\"。";
+                // M18-2：低置信提示外置 prompts/web_enrich_notice.st
+                json += com.travel.common.util.PromptFiles.get("web_enrich_notice");
             }
             return SOURCE_NOTE + "\n" + json;
         } catch (Exception e) {

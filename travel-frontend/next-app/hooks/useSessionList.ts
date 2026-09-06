@@ -81,7 +81,7 @@ export function useSessionList(userId: number | null) {
       }
     }
     try {
-      const res = await chatApi.listSessions(userId);
+      const res = await chatApi.listSessions();
       setSessions(res.data.data || []);
     } catch {
       // ignore
@@ -113,9 +113,9 @@ export function useSessionList(userId: number | null) {
   }, [loadSessions, moveSessionToTop]);
 
   /** M6-50/M6-60：真实创建会话（调用后端；仅首条消息发送时触发） */
-  const createSession = useCallback(async (uid: number): Promise<string | null> => {
+  const createSession = useCallback(async (): Promise<string | null> => {
     try {
-      const res = await chatApi.createSession(uid);
+      const res = await chatApi.createSession();
       const sid = res.data.data;
       pendingNewSessionRef.current = sid;
       // M6-60：创建成功立即加入左侧列表（思考期间切走也能点回在途会话）；
@@ -125,7 +125,7 @@ export function useSessionList(userId: number | null) {
         return [{
           id: 0, // 占位 id：列表操作均以 sessionId 为准，最终由权威列表替换
           sessionId: sid,
-          userId: uid,
+          userId: 0, // M16-1：会话归属由后端 JWT 决定，占位列表随后端权威列表替换
           title: '新会话…',
           status: 'ACTIVE',
           createdAt: new Date().toISOString(),

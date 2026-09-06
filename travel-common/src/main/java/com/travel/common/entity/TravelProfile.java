@@ -37,6 +37,12 @@ public class TravelProfile extends BaseEntity {
     /** JSON: 历史行程摘要 */
     private String historyTrips;
 
+    /** M17-1：LLM 压缩摘要独立通道（与 historyTrips 的 JSON 数组形态分离；过渡期双写） */
+    private String historySummary;
+
+    /** M17-1：最后写入来源观测（update/record-trip/compact） */
+    private String updatedSource;
+
     /** 累计行程数 */
     private Integer totalTrips;
 

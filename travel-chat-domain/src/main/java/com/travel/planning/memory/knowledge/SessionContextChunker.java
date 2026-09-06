@@ -1,6 +1,7 @@
 package com.travel.planning.memory.knowledge;
 
 import com.travel.common.util.JsonUtils;
+import com.travel.planning.config.ChatWordLists;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
@@ -18,19 +19,12 @@ import java.util.Map;
 @Component
 public class SessionContextChunker {
 
-    // F81：约束模式收紧——裸"预算"会把"按我的预算帮我规划"误分类为 constraint 噪音；
-    // 改为"预算+数字/改成/是/上限"等确认性表达，天数用正则（\d+天/\d+日）。
-    private static final String[] CONSTRAINT_SUBSTRINGS = {
-            "预算改成", "预算是", "预算上限", "预算控制", "预算调整", "降低预算",
-            "想去", "喜欢", "不要", "必须", "带", "免费", "亲子",
-            "家庭", "独行", "情侣", "朋友", "住", "酒店", "门票"
-    };
-    private static final String[] CONSTRAINT_REGEX = {
-            "预算\\s*\\d", "\\d+\\s*天"
-    };
-    private static final String[] FEEDBACK_PATTERNS = {
-            "改", "超支", "太贵", "换", "调整", "取消", "便宜", "重新", "不行"
-    };
+    // M18-1：词表单源 travel.chat.word-lists.chunker（F81 收紧语义与注释见 yml/ChatWordLists）
+    private final ChatWordLists wordLists;
+
+    public SessionContextChunker(ChatWordLists wordLists) {
+        this.wordLists = wordLists;
+    }
 
     /**
      * 从用户消息中提取 constraint / feedback 切片（一句一条，语义句切分）。
@@ -45,7 +39,7 @@ public class SessionContextChunker {
             if (s.length() < 2) {
                 continue;
             }
-            if (containsAny(s, FEEDBACK_PATTERNS)) {
+            if (containsAny(s, wordLists.getChunker().getFeedbackPatterns().toArray(new String[0]))) {
                 chunks.add(new SessionChunk(sessionId, "feedback", null, s, "user", "chat"));
             } else if (matchesConstraint(s)) {
                 chunks.add(new SessionChunk(sessionId, "constraint", null, s, "user", "chat"));
@@ -126,14 +120,14 @@ public class SessionContextChunker {
     }
 
     /** F81：约束判定 = 确认性子串 或 数字预算/天数 正则 */
-    private static boolean matchesConstraint(String text) {
-        for (String p : CONSTRAINT_SUBSTRINGS) {
+    private boolean matchesConstraint(String text) {
+        for (String p : wordLists.getChunker().getConstraintSubstrings()) {
             if (text.contains(p)) {
                 return true;
             }
         }
-        for (String r : CONSTRAINT_REGEX) {
-            if (text.matches(".*" + r + ".*")) {
+        for (java.util.regex.Pattern pattern : wordLists.getChunker().getCompiledRegex()) {
+            if (pattern.matcher(text).find()) {
                 return true;
             }
         }

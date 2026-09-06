@@ -393,7 +393,8 @@ public class SessionMemoryServiceImpl implements SessionMemoryPort {
             return summary;
         }
         String recompressed = callSummarize(
-                "把以下摘要压缩到不超过 " + hard + " tokens，只保留最关键信息：\n" + summary, hard);
+                com.travel.common.util.PromptFiles.get("session_summary_recompress")
+                        .formatted(hard, summary), hard);
         if (recompressed.isBlank() || estimateTokens(recompressed) > hard) {
             String truncated = truncateByTokens(
                     recompressed.isBlank() ? summary : recompressed, hard);

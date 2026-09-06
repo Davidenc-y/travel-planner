@@ -1,5 +1,6 @@
 package com.travel.planning.service;
 
+import com.travel.planning.prompt.Markers;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.travel.common.entity.Itinerary;
 import com.travel.common.dto.ItineraryResponseDTO;
@@ -34,27 +35,17 @@ import java.util.regex.Pattern;
 @RequiredArgsConstructor
 public class ItineraryVersionPortImpl implements ItineraryVersionPort {
 
-    private static final Pattern DAYS_DIGIT =
-            Pattern.compile("(\\d{1,2})\\s*(?:日游|天)");
-    private static final Pattern DAYS_CN =
-            Pattern.compile("(?<![第])([一二三四五六七八九十]+)\\s*(?:日游|天)");
-    private static final Pattern DEST_PLAN =
-            Pattern.compile("(?:规划|安排|推荐|设计)(?:一下|一个|一次)?\\s*([\\u4e00-\\u9fa5]{2,10}?)"
-                    + "\\s*(?:的)?(?:\\d{1,2}|[一二三四五六七八九十]+)\\s*(?:日游|天)");
-    private static final Pattern DEST_GO =
-            Pattern.compile("(?:去|到)([\\u4e00-\\u9fa5]{2,10}?)"
-                    + "(?:玩|旅游|旅行|游玩|度假|，|,|\\s|\\d)");
-    private static final Pattern DEST_LEADING =
-            Pattern.compile("^([\\u4e00-\\u9fa5]{2,10}?)\\s*(?:的)?"
-                    + "(?:\\d{1,2}|[一二三四五六七八九十]+)\\s*(?:日游|天)");
-    private static final Pattern BUDGET_PATTERN =
-            Pattern.compile("预算\\s*(?:约)?\\s*(\\d+(?:\\.\\d+)?)");
-
     private final ItineraryMapper itineraryMapper;
     private final ItineraryPersistenceService persistenceService;
     private final ItinerarySliceWriter sliceWriter;
     /** M15-3：聊天建行程/REFINE 时确定性生成思维导图（避免新版 mindmap 丢失） */
     private final MindmapGenerator mindmapGenerator;
+
+    /** M18-2：解析词表/算法迁 ItineraryWritebackProperties（默认值=原字面量，可 yml 覆盖） */
+    private final ItineraryWritebackProperties parseProps;
+    /** M20-1：聊天建行程/REFINE 成功后异步重算行为画像（此前仅 /generate 与 /resume 触发） */
+    private final com.travel.planning.memory.longterm.behavior.BehaviorProfileService behaviorProfileService;
+
 
     /** M11-1 版本服务（可选；缺失时首次创建不记快照，不影响主流程） */
     private ItineraryVersionService versionService;
@@ -65,6 +56,24 @@ public class ItineraryVersionPortImpl implements ItineraryVersionPort {
     @Autowired(required = false)
     void setItineraryVersionService(ItineraryVersionService versionService) {
         this.versionService = versionService;
+    }
+
+    /**
+     * M20-1：成功建行程/建版后异步触发行为画像重算（chat 路径补挂，此前仅 /generate 与
+     * /resume 触发；重算无 LLM、有界查询 + 单飞，失败静默）。
+     */
+    private void triggerBehaviorRecompute(Long userId) {
+        if (userId == null || userId <= 0) {
+            return;
+        }
+        java.util.concurrent.CompletableFuture.runAsync(
+                        () -> behaviorProfileService.recomputeIfEnabled(userId))
+                .whenComplete((v, e) -> {
+                    if (e != null) {
+                        log.warn("[BehaviorProfile] 聊天回写后重算触发失败（不影响主流程）: userId={}, error={}",
+                                userId, e.getMessage());
+                    }
+                });
     }
 
     @Override
@@ -83,12 +92,16 @@ public class ItineraryVersionPortImpl implements ItineraryVersionPort {
                     log.warn("[ItineraryWriteback] 会话行程归属不符，跳过回写: sessionId={}", sessionId);
                     return Optional.empty();
                 }
-                return refine(existing, sessionId, routePlanJson, budgetJson);
+                Optional<Long> refined = refine(existing, sessionId, routePlanJson, budgetJson);
+                refined.ifPresent(id -> triggerBehaviorRecompute(userId));
+                return refined;
             }
             if (!createOnChat) {
                 return Optional.empty();
             }
-            return createFromChat(userId, sessionId, userInput, routePlanJson, budgetJson);
+            Optional<Long> created = createFromChat(userId, sessionId, userInput, routePlanJson, budgetJson);
+            created.ifPresent(id -> triggerBehaviorRecompute(userId));
+            return created;
         } catch (Exception e) {
             log.warn("[ItineraryWriteback] 行程回写失败（静默降级）: sessionId={}, error={}",
                     sessionId, e.getMessage());
@@ -242,112 +255,16 @@ public class ItineraryVersionPortImpl implements ItineraryVersionPort {
         }
     }
 
-    static Integer parseDays(String input) {
-        String question = currentQuestion(input);
-        if (question == null) {
-            return null;
-        }
-        Matcher m = DAYS_DIGIT.matcher(question);
-        if (m.find()) {
-            return Integer.parseInt(m.group(1));
-        }
-        Matcher cn = DAYS_CN.matcher(question);
-        if (cn.find()) {
-            return chineseNumber(cn.group(1));
-        }
-        return null;
+    Integer parseDays(String input) {
+        return parseProps.parseDays(input);
     }
 
-    static String parseDestination(String input) {
-        String question = currentQuestion(input);
-        if (question == null || question.isBlank()) {
-            return null;
-        }
-        Matcher plan = DEST_PLAN.matcher(question);
-        if (plan.find()) {
-            return normalizeCity(plan.group(1));
-        }
-        Matcher go = DEST_GO.matcher(question);
-        if (go.find()) {
-            return normalizeCity(go.group(1));
-        }
-        Matcher leading = DEST_LEADING.matcher(question.trim());
-        if (leading.find()) {
-            return normalizeCity(leading.group(1));
-        }
-        return null;
+    String parseDestination(String input) {
+        return parseProps.parseDestination(input);
     }
 
-    static BigDecimal parseBudget(String input) {
-        String question = currentQuestion(input);
-        if (question == null) {
-            return null;
-        }
-        Matcher m = BUDGET_PATTERN.matcher(question);
-        if (m.find()) {
-            try {
-                return new BigDecimal(m.group(1));
-            } catch (NumberFormatException ignored) {
-                // 非法数字忽略
-            }
-        }
-        return null;
+    BigDecimal parseBudget(String input) {
+        return parseProps.parseBudget(input);
     }
 
-    /** 从完整 composed 上下文中截取“【当前问题】”之后的用户原始问题。 */
-    private static String currentQuestion(String input) {
-        if (input == null) {
-            return null;
-        }
-        String marker = "【当前问题】";
-        int idx = input.lastIndexOf(marker);
-        String question = idx >= 0 ? input.substring(idx + marker.length()) : input;
-        int userId = question.lastIndexOf(", userId=");
-        if (userId >= 0) {
-            question = question.substring(0, userId);
-        }
-        return question.trim();
-    }
-
-    private static String normalizeCity(String city) {
-        String c = city == null ? "" : city.trim();
-        if (c.endsWith("市") && c.length() > 2) {
-            c = c.substring(0, c.length() - 1);
-        }
-        if (c.isEmpty() || c.length() < 2 || c.length() > 4) {
-            return null;
-        }
-        if (c.contains("避开人流") || c.contains("宽窄巷子") || c.contains("第一天")
-                || c.contains("第二天") || c.contains("改到") || c.contains("游玩")
-                || c.contains("把") || c.contains("第") || c.contains("到")
-                || c.contains("改") || c.contains("的")) {
-            return null;
-        }
-        return c;
-    }
-
-    private static Integer chineseNumber(String cn) {
-        char[] chars = cn.toCharArray();
-        int sum = 0;
-        for (char ch : chars) {
-            int v = switch (ch) {
-                case '一' -> 1;
-                case '二' -> 2;
-                case '三' -> 3;
-                case '四' -> 4;
-                case '五' -> 5;
-                case '六' -> 6;
-                case '七' -> 7;
-                case '八' -> 8;
-                case '九' -> 9;
-                case '十' -> 10;
-                default -> -1;
-            };
-            if (v < 0) {
-                return null;
-            }
-            sum += v;
-        }
-        return sum;
-    }
 }

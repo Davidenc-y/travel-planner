@@ -1,5 +1,6 @@
 package com.travel.planning.weather;
 
+import com.travel.planning.prompt.Markers;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
@@ -36,7 +37,7 @@ public class WeatherContextBuilder {
             if (list.isEmpty()) {
                 return "";
             }
-            StringBuilder sb = new StringBuilder("【出行天气参考】");
+            StringBuilder sb = new StringBuilder(Markers.WEATHER_REFERENCE);
             for (int i = 0; i < list.size(); i++) {
                 DailyWeather w = list.get(i);
                 sb.append("\n- D").append(i + 1).append(" ").append(w.date())

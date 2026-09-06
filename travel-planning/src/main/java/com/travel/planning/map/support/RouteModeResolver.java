@@ -7,9 +7,16 @@ import org.springframework.stereotype.Component;
 
 /**
  * 行程交通文本/距离 → 路线模式决策（M12-2，策略模式）。
+ * M18-2：距离阈值经 AmapMapProperties 配置（原硬编码 5000 米）。
  */
 @Component
 public class RouteModeResolver {
+
+    private final com.travel.planning.map.amap.AmapMapProperties mapProps;
+
+    public RouteModeResolver(com.travel.planning.map.amap.AmapMapProperties mapProps) {
+        this.mapProps = mapProps;
+    }
 
     public MapRouteMode resolve(DayPlan day, GeoPoint a, GeoPoint b) {
         String text = day == null ? "" : (day.getTransportMode() == null ? "" : day.getTransportMode());
@@ -21,7 +28,8 @@ public class RouteModeResolver {
         }
         // 公交/地铁等暂不单独接入方向 API：可视化统一走驾车路网，
         // 近距离（≤5km）仍按步行处理，避免“虚线示意”影响地图体验。
-        return haversineMeters(a, b) > 5000 ? MapRouteMode.DRIVING : MapRouteMode.WALKING;
+        return haversineMeters(a, b) > mapProps.getModeWalkMaxMeters()
+                ? MapRouteMode.DRIVING : MapRouteMode.WALKING;
     }
 
     static boolean containsAny(String text, String... keys) {

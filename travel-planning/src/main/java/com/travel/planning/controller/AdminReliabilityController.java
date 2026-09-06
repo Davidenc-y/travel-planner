@@ -28,7 +28,7 @@ public class AdminReliabilityController {
 
     @GetMapping("/stats")
     public R<Map<String, Object>> stats(@RequestParam(defaultValue = "7") Integer days) {
-        Long userId = AuthUtils.resolveUserId(null);
+        Long userId = AuthUtils.resolveUserId();
         if (!adminAccessService.isAdmin(userId)) {
             throw new BusinessException(40302, "无权访问可靠性看板");
         }

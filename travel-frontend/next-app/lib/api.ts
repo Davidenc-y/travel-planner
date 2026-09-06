@@ -98,10 +98,7 @@ function createClient(baseURL: string): AxiosInstance {
       if (token) {
         config.headers.Authorization = `Bearer ${token}`;
       }
-      const userId = localStorage.getItem('userId');
-      if (userId) {
-        config.headers['X-User-Id'] = userId;
-      }
+      // M16-1：身份仅认 Bearer token（后端已移除 X-User-Id 显式回退）
     }
     return config;
   });
@@ -215,8 +212,6 @@ export const itineraryApi = {
     if (typeof window !== 'undefined') {
       const token = localStorage.getItem('accessToken');
       if (token) headers.Authorization = `Bearer ${token}`;
-      const userId = localStorage.getItem('userId');
-      if (userId) headers['X-User-Id'] = userId;
     }
     return consumeSseStream(
       `${PLANNING_BASE}/api/v1/itineraries/generate/stream`,
@@ -228,8 +223,8 @@ export const itineraryApi = {
   },
   getById: (id: number) =>
     planningApi.get<R<import('@/types').ItineraryResponse>>(`/api/v1/itineraries/${id}`),
-  list: (userId: number, page = 1, size = 10) =>
-    planningApi.get<R<import('@/types').PageResult<import('@/types').ItineraryResponse>>>('/api/v1/itineraries', { params: { userId, page, size } }),
+  list: (page = 1, size = 10) =>
+    planningApi.get<R<import('@/types').PageResult<import('@/types').ItineraryResponse>>>('/api/v1/itineraries', { params: { page, size } }),
   delete: (id: number) =>
     planningApi.delete<R<void>>(`/api/v1/itineraries/${id}`),
   /** M4-9：断点续跑（仅 FAILED/僵尸 GENERATING 可续；同步等待同 generate） */
@@ -254,10 +249,10 @@ export const itineraryApi = {
 
 // ==================== Chat ====================
 export const chatApi = {
-  createSession: (userId: number, title?: string) =>
-    planningApi.post<R<string>>('/api/v1/chat/sessions', { userId, title }),
-  listSessions: (userId: number) =>
-    planningApi.get<R<import('@/types').ChatSession[]>>('/api/v1/chat/sessions', { params: { userId } }),
+  createSession: (title?: string) =>
+    planningApi.post<R<string>>('/api/v1/chat/sessions', { title }),
+  listSessions: () =>
+    planningApi.get<R<import('@/types').ChatSession[]>>('/api/v1/chat/sessions'),
   getHistory: (sessionId: string) =>
     planningApi.get<R<import('@/types').ChatMessage[]>>(`/api/v1/chat/sessions/${sessionId}/history`),
   /** M4-9：clientMessageId 为消息幂等键——超时/40904 退避重试须携带同键 */
@@ -304,8 +299,6 @@ export const chatApi = {
     if (typeof window !== 'undefined') {
       const token = localStorage.getItem('accessToken');
       if (token) headers.Authorization = `Bearer ${token}`;
-      const userId = localStorage.getItem('userId');
-      if (userId) headers['X-User-Id'] = userId;
     }
     // P1：断线续传——携带最近收到的事件 id（仅 COMPLETED 重放生效）
     if (lastEventId) headers['Last-Event-ID'] = lastEventId;

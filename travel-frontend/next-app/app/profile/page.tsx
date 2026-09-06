@@ -49,7 +49,7 @@ function ProfileContent() {
   useEffect(() => {
     if (!isAuthenticated || userId == null) return;
     // F87：展示真实行程统计（用户面 GET /api/v1/itineraries）
-    itineraryApi.list(userId, 1, 1)
+    itineraryApi.list(1, 1)
       .then((res) => setTripCount(res.data.data.total))
       .catch(() => setTripCount(null));
     // F121：展示邮箱（头像由 AuthContext 统一管理）

@@ -31,8 +31,8 @@ import java.util.Map;
  * M6-30：WebFlux 聊天流式端点（对应 MVC ChatController.streamMessage）。
  *
  * <p>路径/请求体/事件协议与 MVC 完全一致：POST
- * /api/v1/chat/sessions/{sessionId}/messages/stream；身份优先 exchange
- * attribute（ReactiveJwtAuthFilter 注入），其次 X-User-Id，缺失 40101；
+ * /api/v1/chat/sessions/{sessionId}/messages/stream；身份仅认 exchange
+ * attribute（ReactiveJwtAuthFilter 注入），缺失 40101；
  * 同步门禁失败直接抛 BusinessException（由全局异常映射 HTTP 状态）；
  * 成功返回 {@code Flux<ServerSentEvent<String>>}，data 由共享
  * StreamPayloadMapper 序列化，保证与 MVC SseStreamAdapter 逐字节一致。</p>

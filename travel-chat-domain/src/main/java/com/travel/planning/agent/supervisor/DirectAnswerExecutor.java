@@ -1,5 +1,6 @@
 package com.travel.planning.agent.supervisor;
 
+import com.travel.planning.prompt.Markers;
 import com.travel.core.guard.CircuitBreaker;
 import com.travel.planning.prompt.PromptTemplates;
 import com.travel.planning.service.TurnCancellation;
@@ -248,9 +249,9 @@ public final class DirectAnswerExecutor {
         if (userInput == null) {
             return "";
         }
-        int idx = userInput.lastIndexOf("【当前问题】");
+        int idx = userInput.lastIndexOf(Markers.CURRENT_QUESTION);
         if (idx >= 0) {
-            return userInput.substring(idx + "【当前问题】".length()).trim();
+            return userInput.substring(idx + Markers.CURRENT_QUESTION.length()).trim();
         }
         return userInput.trim();
     }

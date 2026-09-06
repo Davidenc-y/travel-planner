@@ -1,0 +1,196 @@
+﻿# ============================================================
+# chat-domain 域共享配置（M16-3 配置单源）
+# ============================================================
+# 本文件是 travel-chat-domain（含其依赖 ai-gateway/chat-stream）域配置的
+# 唯一维护点，由 travel-planning 与 travel-stream-webflux 两个进程经
+#   spring.config.import: classpath:application-chat.yml
+# 引用。进程专属配置（端口/数据源/地图/天气/admin 等）仍留在各进程 yml，
+# 且进程 yml 中的同名键优先级高于本文件（可按进程覆盖）。
+# 键值与 2026-09-05 单源化前两进程重复段完全一致（行为等价红线）。
+travel:
+  # M7：模型注册表（单一事实源；enabled=false 回退旧行为——Batch 2 后旧 AiModelConfig 已删除）
+  ai:
+    model-registry:
+      enabled: true
+      default-timeout-seconds: 120
+      models:
+        - key: qwen3.7-max
+          provider: dashscope-native
+          display-name: "Qwen3.7 Max · 深度推理"
+          api-key-env: DASHSCOPE_API_KEY
+          temperature: 0.7
+          max-tokens: 8000
+          top-p: 0.9
+          roles: [main]
+          selectable: true
+          enabled: true
+        - key: qwen-turbo
+          provider: dashscope-native
+          display-name: "Qwen Turbo · 轻量高速"
+          api-key-env: DASHSCOPE_API_KEY
+          temperature: 0.5
+          max-tokens: 2000
+          roles: [light]
+          selectable: true
+          enabled: true
+        - key: qwen3.7-plus
+          provider: openai-compatible
+          # M8-9g 修复：不能带结尾 /v1（Spring AI OpenAiApi 会自动追加 /v1/chat/completions）
+          base-url: https://dashscope.aliyuncs.com/compatible-mode
+          display-name: "Qwen3.7 Plus · 均衡"
+          api-key-env: DASHSCOPE_API_KEY
+          roles: []
+          selectable: true
+          enabled: true
+        - key: deepseek-chat
+          provider: openai-compatible
+          base-url: https://api.deepseek.com
+          display-name: "DeepSeek Chat · 通用"
+          api-key-env: DEEPSEEK_API_KEY
+          roles: []
+          selectable: true
+          enabled: true
+    # M10-2c：模型维度熔断（按 model key；false=直通现状）
+    model-circuit:
+      enabled: true
+      failure-threshold: 5
+      open-ms: 60000
+  # knowledge 服务地址（Feign 调用）
+  knowledge:
+    base-url: ${KNOWLEDGE_BASE_URL:http://localhost:8082}
+  # F55/B1：短期会话记忆（摘要压缩）
+  memory:
+    shortterm:
+      enabled: true
+      max-turns: 10
+      history-max-tokens: 2000
+      summary-threshold-ratio: 0.7
+      summary-min-turns: 6
+      summary-max-tokens: 800
+      summary-hard-max-tokens: 800
+      summary-max-chars: 20000
+      summary-refresh-turns: 5
+      summary-validate: true
+      summary-retry-times: 1
+      input-max-tokens: 4000
+      profile-max-tokens: 800
+      summary-ttl-days: 7
+      recent-window-turns: 2
+      # M4-1a/P0-1：摘要写入走 Lua CAS 原子路径（回滚开关）
+      cas-enabled: true
+      # M4-4：close 收口同步等待上限（秒），超时转后台+补偿兜底
+      finalize-sync-wait-seconds: 15
+    # M17-2/M17-3：行为画像（D-Q2 两档开关——compute 先行观测，inject 验证后开启）
+    behavior-profile:
+      compute-enabled: true      # 重算+落表（观测期 true；false=零重算零落表）
+      inject-enabled: false      # 注入【行为特征】段（红线：false 时组装输出逐字节等价）
+      stats-window-days: 90      # 滚动统计窗口
+      stale-after-minutes: 60    # 重算结果新鲜期（懒重算复用阈值）
+      min-trips: 2               # 可靠性门槛：窗口内行程数
+      min-sessions: 5            # 可靠性门槛：窗口内会话数
+      inject-max-tokens: 120     # 注入段 token 预算上限
+      trace-scan-limit: 2000     # 单次重算 trace 读取上限
+  # M4-2/P0-2：planning 侧检索注入 topK（默认值等于 F63/F83 硬编码，行为不变）
+  rag:
+    session-context:
+      top-k: 8
+    attraction-candidates:
+      top-k: 5
+    # M4-5a：在线相关性 Judge（默认关；fail-open：异常/超时/解析失败一律放行）
+    judge:
+      enabled: false
+      timeout-ms: 3000
+    # M4-5b：会话知识二次取父（默认开；取父失败降级保留原命中）
+    parent-context:
+      enabled: true
+  # F75/B3-5：LLM 调用统一治理（后台摘要/压缩/偏好抽取并发上限）
+  llm:
+    background-max-concurrent: 2
+    acquire-timeout-ms: 5000
+  chat:
+    # M4-3/P0-3：消息级幂等（带 clientMessageId 的请求走幂等门禁；不带键走原路径）
+    idempotency:
+      enabled: true
+    # M4-4：ARCHIVED 会话拒绝新消息（COMPLETED 幂等重放豁免）
+    session:
+      reject-archived: true
+    # M5-1：首条消息标题生成（短全量/长截断；不引 LLM）
+    title:
+      max-length: 20
+    # M6：流式发送（SSE；timeout 覆盖 Supervisor 300s 硬超时）
+    stream:
+      enabled: true
+      timeout-ms: 330000
+      keepalive-ms: 15000
+      chunk-max-chars: 16
+      planning-graph-stream-enabled: true
+    # F85 第二步：对话入口意图分类（PLANNING/REFINE/RECALL/PROFILE/CHAT/FUNCTIONAL）
+    intent:
+      enabled: true          # false → 全部走原 supervisor 流程（回滚开关）
+      cache-size: 256
+      llm-fallback: true     # 规则无法判定时用轻模型；false → 直接回退 PLANNING
+    # M18-1：五组高频词表单源（此前硬编码于五类，git 多轮补词迭代；匹配算法在各消费方不变）
+    word-lists:
+      intents:
+        FUNCTIONAL: [你能做什么, 有什么功能, 你是谁, 怎么用, 能干嘛, 帮助, 说明书]
+        PROFILE: [画像, 我的偏好, 我的记忆, 历史行程, 我的行程, 我的预算是什么, 我的预算是多少, 我的预算多少, 记住, 设为, 设置为]
+        CHAT: [你好, 您好, 谢谢, 再见, 在吗, 嗨]
+        REFINE: [优化, 调整, 重新规划, 换成, 改成, 修改, 重新安排, 换一个]
+        RECALL: [上次, 之前, 回顾, 安排了哪些, 都去了, 去过, 行程记录]
+      heuristics:
+        planning: [规划, 行程, 推荐, 景点, 日游, 预算, 攻略, 哪里]
+        recall: [上次, 之前, 回顾, 安排了哪些, 都去了, 去过, 行程记录]
+        change: [优化, 调整, 重新规划, 改成, 换, 重新安排]
+      chunker:
+        constraint-substrings: [预算改成, 预算是, 预算上限, 预算控制, 预算调整, 降低预算, 想去, 喜欢, 不要, 必须, 带, 免费, 亲子, 家庭, 独行, 情侣, 朋友, 住, 酒店, 门票]
+        constraint-regex: ['预算\s*\d', '\d+\s*天']
+        feedback-patterns: [改, 超支, 太贵, 换, 调整, 取消, 便宜, 重新, 不行]
+      fact:
+        # H5 决策：与 knowledge 侧 QueryUnderstandingProperties.cities 18 城对齐
+        cities: [北京, 上海, 广州, 深圳, 杭州, 成都, 西安, 厦门, 南京, 天津, 重庆, 武汉, 长沙, 苏州, 桂林, 青岛, 大连, 三亚]
+        party-patterns: [带小孩, 带娃, 亲子, 家庭, 情侣, 独行, 朋友, 2人, 3人]
+        style-patterns: [舒适, 经济, 豪华, 穷游, 高性价比]
+      preference:
+        statement-keywords: [记住, 偏好, 设为, 改为, 设置为, 预算, 喜欢, 消费]
+        style-economy: [经济, 穷游, 实惠]
+        style-comfort: [品质, 舒适, 享受]
+    supervisor:
+      # M9-4：聊天规划路径冲突观测（只写 trace，不阻断；false=行为等价现状）
+      conflict-observe:
+        enabled: true
+      # M13-2：聊天规划/REFINE 行程资产同步（显式值=代码默认，webflux 进程此前依赖默认）
+      itinerary-writeback:
+        enabled: true
+        create-on-chat: true
+      # M13-3：派发去重（输出已有值短路子Agent，false=现状灰度）
+      dispatch-dedup:
+        enabled: false
+  # F90：Agent 调用前安全防护（Prompt 注入 / 熔断 / 限流）
+  # M16-3：注入词表本文件为唯一源（PromptInjectionRule 已删除代码默认词表，
+  # guard 开启时词表缺失将启动失败——拒绝以空词表静默放行）
+  guard:
+    enabled: true
+    prompt-injection:
+      enabled: true
+      block-keywords: 忽略以上,忽略之前,忽略系统,忽略所有指令,system prompt,系统提示词,扮演管理员,越权,泄露提示词,绕过限制,bypass,你的指令是什么
+      warn-keywords: 不要遵守,忘记之前的,假装你是
+    circuit-breaker:
+      failure-threshold: 3
+      window-ms: 60000
+      open-timeout-ms: 15000
+  # F89：Agent 调用追溯（t_agent_trace）
+  trace:
+    enabled: true
+    store: mysql
+    buffer-size: 1024
+    flush-interval-ms: 1000
+    batch-size: 50
+  # F87/F92：前端跨域白名单（精确 origin；代码层叠加 localhost:* 通配）
+  cors:
+    allowed-origins: http://localhost:3000,http://127.0.0.1:3000,http://localhost:3100,http://127.0.0.1:3100
+
+# ============ JWT（两进程同源同键） ============
+jwt:
+  secret: ${JWT_SECRET:travel-planner-secret-key-2026-must-be-long-enough-32chars}
+  expiration: 86400000       # 24h
+  refresh-expiration: 604800000  # 7d

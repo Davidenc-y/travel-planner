@@ -13,7 +13,8 @@ import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
  * Web MVC 配置（F68/B3-2）：注册 JWT 认证拦截器。
  *
  * <p>对 /api/** 生效，公开端点（注册/登录/刷新 Token）排除；
- * 拦截器只负责"有 token 则注入身份"，不强制阻断（兼容 X-User-Id 兜底）。</p>
+ * 拦截器只负责"有 token 则注入身份"，不强制阻断（控制器 AuthUtils 兜底校验
+ * 抛 40101；M16-1 起身份仅认 accessToken，无显式回退通道）。</p>
  */
 @Configuration
 @RequiredArgsConstructor

@@ -37,7 +37,7 @@ public class MeController {
 
     @GetMapping("/me")
     public R<Map<String, Object>> me() {
-        Long userId = AuthUtils.resolveUserId(null);
+        Long userId = AuthUtils.resolveUserId();
         User user = userMapper.selectById(userId);
         if (user == null) {
             return R.fail(40401, "用户不存在");
@@ -58,7 +58,7 @@ public class MeController {
      */
     @PutMapping("/email")
     public R<Void> updateEmail(@RequestBody Map<String, String> body) {
-        userService.updateEmail(AuthUtils.resolveUserId(null), body.get("email"));
+        userService.updateEmail(AuthUtils.resolveUserId(), body.get("email"));
         return R.ok();
     }
 
@@ -70,6 +70,6 @@ public class MeController {
     @GetMapping("/me/usage-stats")
     public R<UsageStatsDTO> usageStats(@RequestParam(defaultValue = "30") Integer rangeDays) {
         int range = (rangeDays != null && rangeDays == 7) ? 7 : 30;
-        return R.ok(userUsageStatsService.getUsageStats(AuthUtils.resolveUserId(null), range));
+        return R.ok(userUsageStatsService.getUsageStats(AuthUtils.resolveUserId(), range));
     }
 }

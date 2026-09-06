@@ -1,5 +1,6 @@
 package com.travel.planning.agent.supervisor;
 
+import com.travel.planning.prompt.Markers;
 import com.alibaba.cloud.ai.graph.OverAllState;
 import com.travel.common.util.AgentOutputUtils;
 import com.travel.common.util.JsonUtils;
@@ -104,6 +105,38 @@ public final class SupervisorResponseSupport {
     }
 
     /** F66：四个子 Agent 输出键是否至少有一个非空（判断是否真正走了规划流程） */
+    /**
+     * M20-1：routePlan 抢救回退——outputKey 合并失败（典型：并行派发，M9-3a 框架问题域，
+     * 2026-09-06 REFINE 实证：子 Agent 已执行但父 state 各段落全空）时，从 messages
+     * 尾部向前找含行程结构的助手消息并提取 JSON。找不到返回 null（调用方保持原语义）。
+     */
+    static String salvageRoutePlan(OverAllState state) {
+        if (state == null) {
+            return null;
+        }
+        Object messages = state.value("messages").orElse(null);
+        if (!(messages instanceof List<?> list)) {
+            return null;
+        }
+        for (int i = list.size() - 1; i >= 0; i--) {
+            Object item = list.get(i);
+            String text = null;
+            if (item instanceof org.springframework.ai.chat.messages.AssistantMessage am) {
+                text = am.getText();
+            } else if (item instanceof String str) {
+                text = str;
+            }
+            if (text == null || text.isBlank() || !text.contains("\"days\"")) {
+                continue;
+            }
+            String json = com.travel.common.util.AgentOutputUtils.extractJson(text);
+            if (json != null && json.contains("\"days\"")) {
+                return json;
+            }
+        }
+        return null;
+    }
+
     static boolean hasSectionOutput(OverAllState state) {
         return !toText(state.value("preference")).isBlank()
                 || !toText(state.value("attractions")).isBlank()
@@ -222,7 +255,7 @@ public final class SupervisorResponseSupport {
         if (composed == null || composed.isBlank()) {
             return null;
         }
-        int marker = composed.indexOf("【知识库检索候选景点】");
+        int marker = composed.indexOf(Markers.ATTRACTION_CANDIDATES);
         String segment = marker >= 0 ? composed.substring(marker) : composed;
         return AttractionGroundingChecker.extractJsonArray(segment);
     }

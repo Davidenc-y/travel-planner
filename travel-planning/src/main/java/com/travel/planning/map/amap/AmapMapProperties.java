@@ -16,6 +16,9 @@ public class AmapMapProperties {
 
     private boolean enabled = true;
 
+    /** M18-2：无交通文本时的步行/驾车距离阈值（米）——原 RouteModeResolver 硬编码 5000 */
+    private int modeWalkMaxMeters = 5000;
+
     /** 高德 Web 服务 Key（与 travel-crawl 同源环境变量）。 */
     private String webApiKey = "";
 

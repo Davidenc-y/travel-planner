@@ -36,7 +36,7 @@ public class AvatarController {
 
     @PostMapping("/avatar")
     public R<String> uploadAvatar(@RequestParam("file") MultipartFile file) {
-        Long userId = AuthUtils.resolveUserId(null);
+        Long userId = AuthUtils.resolveUserId();
         if (file == null || file.isEmpty()) {
             return R.fail(40001, "文件不能为空");
         }
