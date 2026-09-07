@@ -32,6 +32,10 @@ public class ItineraryVersion extends BaseEntity {
 
     /** 上次→本次 diff JSON（四列表） */
     private String versionDiff;
+    /** M28-7：约束快照（版本切换恢复 budget/days/start_date 的唯一来源；存量行为 NULL） */
+    private Integer days;
+    private BigDecimal budget;
+    private String startDate;
 
     /** t_itinerary_version 无 updated_at 列：覆盖父类字段避免 MyBatis-Plus 查询报错 */
     @TableField(exist = false)

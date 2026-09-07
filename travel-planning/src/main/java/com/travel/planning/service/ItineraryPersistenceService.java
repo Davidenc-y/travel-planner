@@ -51,10 +51,22 @@ public class ItineraryPersistenceService {
         return entity;
     }
 
-    /** M4-8：全链路成功——终态更新 GENERATED + 产物回填 */
+    /** M4-8：全链路成功——终态更新 GENERATED + 产物回填（约束快照回退读列） */
     @Transactional
     public int updateCompleted(Long id, String status, String content, String mindmapData,
                                java.math.BigDecimal estimatedCost) {
+        return updateCompleted(id, status, content, mindmapData, estimatedCost, null, null, null);
+    }
+
+    /**
+     * M28-7：带显式约束快照的终态更新——聊天 REFINE 必须走此重载：
+     * 约束列更新（applyRefinedConstraints）在本方法之后执行，回退读列会把
+     * vN 快照错记为 v(N-1) 的旧约束。
+     */
+    @Transactional
+    public int updateCompleted(Long id, String status, String content, String mindmapData,
+                               java.math.BigDecimal estimatedCost,
+                               Integer days, java.math.BigDecimal budget, String startDate) {
         Itinerary patch = new Itinerary();
         patch.setId(id);
         patch.setStatus(status);
@@ -64,7 +76,8 @@ public class ItineraryPersistenceService {
         int rows = itineraryMapper.updateById(patch);
         // M11-1：终态内容变化后记录历史版本与 diff（失败不影响主流程）
         if (rows > 0 && versionService != null) {
-            versionService.recordFinalized(id, content, mindmapData, estimatedCost);
+            versionService.recordFinalized(id, content, mindmapData, estimatedCost,
+                    days, budget, startDate);
         }
         return rows;
     }

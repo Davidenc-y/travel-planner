@@ -120,19 +120,28 @@ public class ItineraryVersionPortImpl implements ItineraryVersionPort {
         CostedContent merged = mergeContent(
                 current.getContent(), routePlanJson, budgetJson);
         String mindmapData = buildMindmap(current, merged.content());
+        // M28-7：本轮有效约束先解析（未提及=null）——vN 版本快照必须记录"本轮后"的约束值，
+        // 而版本记录发生在 applyRefinedConstraints 之前，故显式传参而非回退读列
+        java.math.BigDecimal refineBudget = parseBudget(userInput);
+        Integer refineDays = parseDays(userInput);
+        String refineStart = extractStartDate(routePlanJson);
+        java.math.BigDecimal snapBudget = refineBudget != null ? refineBudget : current.getBudget();
+        Integer snapDays = refineDays != null && refineDays > 0 ? refineDays : current.getDays();
+        String snapStart = refineStart != null ? refineStart : current.getStartDate();
         int rows = persistenceService.updateCompleted(
                 current.getId(),
                 ItineraryStatus.GENERATED.name(),
                 merged.content(),
                 mindmapData,
-                merged.estimatedCost());
+                merged.estimatedCost(),
+                snapDays, snapBudget, snapStart);
         if (rows <= 0) {
             return Optional.empty();
         }
         // M26-F1：用本轮确定性解析更新约束列（预算改成 5000 → t_itinerary.budget=5000；
         // 天数变更同理；未提及的字段保持原值）——行程详情页预算展示与偏好回写的数据源
         // M28-3：出发日期改从 routePlan 首日提取（"从9月20日开始"→LLM 输出首日 2026-09-20）
-        applyRefinedConstraints(current, userInput, routePlanJson);
+        applyRefinedConstraints(current, refineBudget, refineDays, refineStart);
         sliceWriter.writeAfterGenerated(sessionId, current.getId(), merged.content());
         log.info("[ItineraryWriteback] REFINE 回写完成: itineraryId={}, sessionId={}",
                 current.getId(), sessionId);
@@ -166,8 +175,10 @@ public class ItineraryVersionPortImpl implements ItineraryVersionPort {
         entity.setSessionId(sessionId);
         persistenceService.insert(entity);
         if (versionService != null) {
+            // M28-7：首版带约束快照（切换回 v1 时 budget/days/startDate 可恢复）
             versionService.recordFinalized(entity.getId(), entity.getContent(),
-                    entity.getMindmapData(), entity.getEstimatedCost());
+                    entity.getMindmapData(), entity.getEstimatedCost(),
+                    entity.getDays(), entity.getBudget(), entity.getStartDate());
         }
         // 首次建版（v1）；版本服务缺失不影响主流程
         log.info("[ItineraryWriteback] 聊天规划已创建行程: itineraryId={}, destination={}, days={}",
@@ -182,10 +193,14 @@ public class ItineraryVersionPortImpl implements ItineraryVersionPort {
      * M28-3：出发日期来源 routePlan 首日日期（权威=LLM 本轮实际输出）。
      */
     private void applyRefinedConstraints(Itinerary current, String userInput, String routePlanJson) {
+        applyRefinedConstraints(current, parseBudget(userInput), parseDays(userInput),
+                extractStartDate(routePlanJson));
+    }
+
+    /** M28-7：约束值由调用方解析传入（refine 复用同一份解析结果）。 */
+    private void applyRefinedConstraints(Itinerary current,
+            java.math.BigDecimal newBudget, Integer newDays, String newStart) {
         try {
-            java.math.BigDecimal newBudget = parseBudget(userInput);
-            Integer newDays = parseDays(userInput);
-            String newStart = extractStartDate(routePlanJson);
             boolean budgetChanged = newBudget != null
                     && (current.getBudget() == null || newBudget.compareTo(current.getBudget()) != 0);
             boolean daysChanged = newDays != null && newDays > 0

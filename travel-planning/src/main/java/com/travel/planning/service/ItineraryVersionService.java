@@ -50,9 +50,20 @@ public class ItineraryVersionService {
         this.mindmapGenerator = mindmapGenerator;
     }
 
-    /** 终态内容落库后调用（幂等：同内容不重复建版本）。 */
+    /** 终态内容落库后调用（幂等：同内容不重复建版本）。约束快照回退读当前列。 */
     public void recordFinalized(Long itineraryId, String content,
                                 String mindmapData, BigDecimal estimatedCost) {
+        recordFinalized(itineraryId, content, mindmapData, estimatedCost, null, null, null);
+    }
+
+    /**
+     * M28-7：带约束快照的版本记录——REFINE 场景必须传显式约束值：
+     * 版本记录发生在 applyRefinedConstraints 之前，回退读列会错记旧约束
+     * （"预算9000"的 v2 快照若读列会记成 5000）。
+     */
+    public void recordFinalized(Long itineraryId, String content,
+                                String mindmapData, BigDecimal estimatedCost,
+                                Integer days, BigDecimal budget, String startDate) {
         if (itineraryId == null || content == null || content.isBlank()) {
             return;
         }
@@ -60,6 +71,15 @@ public class ItineraryVersionService {
             Itinerary current = itineraryMapper.selectById(itineraryId);
             if (current == null) {
                 return;
+            }
+            if (days == null) {
+                days = current.getDays();
+            }
+            if (budget == null) {
+                budget = current.getBudget();
+            }
+            if (startDate == null) {
+                startDate = current.getStartDate();
             }
             ItineraryVersion latest = latest(itineraryId);
             if (latest != null && sameContent(latest.getContent(), content)) {
@@ -73,6 +93,9 @@ public class ItineraryVersionService {
             snap.setContent(content);
             snap.setMindmapData(mindmapData);
             snap.setEstimatedCost(estimatedCost);
+            snap.setDays(days);
+            snap.setBudget(budget);
+            snap.setStartDate(startDate);
             snap.setVersionDiff(diff);
             snap.setCreatedAt(LocalDateTime.now());
             versionMapper.insert(snap);
@@ -153,9 +176,9 @@ public class ItineraryVersionService {
         if (rows <= 0) {
             throw new BusinessException(50001, "行程内容更新失败: " + itineraryId);
         }
-        // M28-6：切换后重算约束列（days=版本天数，start_date=版本首日；budget 版本快照无
-        // 约束来源保持原值）——偏好标签 preferenceSync 与详情页约束展示的数据源
-        applySwitchedConstraints(itineraryId, current, target.getContent());
+        // M28-7：切换后恢复约束列——优先版本快照（budget 唯一可恢复来源）；
+        // 存量快照 NULL 时 fallback：days 用 content 推断，budget/startDate 保持现值
+        applySwitchedConstraints(itineraryId, current, target);
         Itinerary updated = itineraryMapper.selectById(itineraryId);
         log.info("[ItineraryVersion] 版本切换完成（不新增版本）: itineraryId={}, activeVersion={}",
                 itineraryId, targetVersion);
@@ -163,28 +186,40 @@ public class ItineraryVersionService {
     }
 
     /**
-     * M28-6：版本切换后同步约束列（确定性；与聊天 REFINE 的 applyRefinedConstraints 同语义）。
-     * 解析失败仅 DEBUG（约束列保持原值，不阻断切换）。
+     * M28-7：版本切换后恢复约束列。
+     *
+     * <p>优先 target 快照（days/budget/start_date；M28-7 起新版本记录时写入，
+     * budget 唯一可恢复来源）；快照 NULL（存量版本行）fallback：days 从 content
+     * 确定性推断（天数组长度）、start_date 取首日，budget 无来源保持现值。
+     * 修 historic 缺陷：切回 v1 后 t_itinerary.budget 仍是 vN 的最新值
+     * （“最新预算覆盖旧预算”），偏好标签/详情页/分享页全部跟着错。</p>
      */
-    private void applySwitchedConstraints(Long itineraryId, Itinerary current, String contentJson) {
+    private void applySwitchedConstraints(Long itineraryId, Itinerary current, ItineraryVersion target) {
         try {
-            com.fasterxml.jackson.databind.JsonNode root = objectMapper.readTree(contentJson);
-            com.fasterxml.jackson.databind.JsonNode days = root.path("days");
-            if (!days.isArray() || days.isEmpty()) {
-                days = root.path("routePlan").path("days");
+            Integer newDays = target.getDays();
+            java.math.BigDecimal newBudget = target.getBudget();
+            String newStart = target.getStartDate();
+            String source = "snapshot";
+            if (newDays == null && newBudget == null && newStart == null) {
+                source = "content-fallback";
+                com.fasterxml.jackson.databind.JsonNode root = objectMapper.readTree(target.getContent());
+                com.fasterxml.jackson.databind.JsonNode days = root.path("days");
+                if (!days.isArray() || days.isEmpty()) {
+                    days = root.path("routePlan").path("days");
+                }
+                if (days.isArray() && !days.isEmpty()) {
+                    newDays = days.size();
+                    String date = days.get(0).path("date").asText(null);
+                    if (date != null && date.length() >= 10) {
+                        newStart = java.time.LocalDate.parse(date.trim().substring(0, 10)).toString();
+                    }
+                }
             }
-            if (!days.isArray() || days.isEmpty()) {
-                return;
-            }
-            Integer newDays = days.size();
-            String newStart = null;
-            String date = days.get(0).path("date").asText(null);
-            if (date != null && date.length() >= 10) {
-                newStart = java.time.LocalDate.parse(date.trim().substring(0, 10)).toString();
-            }
-            boolean daysChanged = newDays > 0 && !newDays.equals(current.getDays());
+            boolean daysChanged = newDays != null && !newDays.equals(current.getDays());
+            boolean budgetChanged = newBudget != null
+                    && (current.getBudget() == null || newBudget.compareTo(current.getBudget()) != 0);
             boolean startChanged = newStart != null && !newStart.equals(current.getStartDate());
-            if (!daysChanged && !startChanged) {
+            if (!daysChanged && !budgetChanged && !startChanged) {
                 return;
             }
             com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper<Itinerary> uw =
@@ -193,15 +228,20 @@ public class ItineraryVersionService {
             if (daysChanged) {
                 uw.set("days", newDays);
             }
+            if (budgetChanged) {
+                uw.set("budget", newBudget);
+            }
             if (startChanged) {
                 uw.set("start_date", newStart);
             }
             itineraryMapper.update(null, uw);
-            log.info("[ItineraryVersion] 版本切换约束列已更新: itineraryId={}, days={}, startDate={}",
-                    itineraryId, daysChanged ? newDays : "(unchanged)",
+            log.info("[ItineraryVersion] 版本切换约束列已恢复({}): itineraryId={}, days={}, budget={}, startDate={}",
+                    source, itineraryId,
+                    daysChanged ? newDays : "(unchanged)",
+                    budgetChanged ? newBudget.toPlainString() : "(unchanged)",
                     startChanged ? newStart : "(unchanged)");
         } catch (Exception e) {
-            log.debug("[ItineraryVersion] 版本切换约束列重算降级: itineraryId={}, {}", itineraryId, e.getMessage());
+            log.debug("[ItineraryVersion] 版本切换约束列恢复降级: itineraryId={}, {}", itineraryId, e.getMessage());
         }
     }
 
@@ -219,13 +259,18 @@ public class ItineraryVersionService {
             return null;
         }
         try {
+            // M28-7：days/budget 优先 target 快照——current 列此时仍是切换前的最新值
+            // （如 v2 的 9000），直接用会把旧版本补生成的思维导图预算写成最新值
+            Integer days = target.getDays() != null ? target.getDays() : current.getDays();
+            java.math.BigDecimal budget = target.getBudget() != null
+                    ? target.getBudget() : current.getBudget();
             ItineraryResponseDTO.MindmapData md = mindmapGenerator.generate(
                     current.getTitle() == null || current.getTitle().isBlank()
-                            ? current.getDestination() + current.getDays() + "日游"
+                            ? current.getDestination() + days + "日游"
                             : current.getTitle(),
                     current.getDestination(),
-                    current.getDays(),
-                    current.getBudget() != null ? current.getBudget().toPlainString() : null,
+                    days,
+                    budget != null ? budget.toPlainString() : null,
                     target.getContent());
             return md == null ? null : JsonUtils.toJson(md);
         } catch (Exception e) {
