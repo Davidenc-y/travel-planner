@@ -45,6 +45,7 @@ public class ItineraryBriefPortImpl implements ItineraryBriefPort {
                 entity.getTitle(),
                 entity.getDestination(),
                 entity.getDays(),
+                entity.getStartDate(),
                 entity.getBudget() == null ? null : entity.getBudget().toPlainString(),
                 entity.getParty(),
                 entity.getVersion(),

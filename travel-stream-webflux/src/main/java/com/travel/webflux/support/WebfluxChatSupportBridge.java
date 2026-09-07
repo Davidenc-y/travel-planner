@@ -72,6 +72,7 @@ public class WebfluxChatSupportBridge implements ItineraryBriefPort, ChatWeather
                     data.path("title").asText(null),
                     data.path("destination").asText(null),
                     data.path("days").isNumber() ? data.path("days").asInt() : null,
+                    data.path("startDate").isTextual() ? data.path("startDate").asText(null) : null,
                     data.path("budget").isTextual() ? data.path("budget").asText(null) : null,
                     data.path("party").isTextual() ? data.path("party").asText(null) : null,
                     data.path("version").isNumber() ? data.path("version").asInt() : null,

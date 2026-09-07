@@ -84,6 +84,7 @@ export function mergePreferenceSync(
     budget?: string;
     party?: string;
     interests?: string[];
+    startDate?: string;
   },
 ): PreferenceTags {
   const merged: PreferenceTags = { ...current };
@@ -94,6 +95,8 @@ export function mergePreferenceSync(
     if (Number.isFinite(budgetNum) && budgetNum >= 0) merged.budget = budgetNum;
   }
   if (sync.party) merged.party = sync.party as PreferenceTags['party'];
+  // M28-3：出发日期（yyyy-MM-dd，行程 routePlan 首日；同样为权威值覆盖）
+  if (sync.startDate) merged.startDate = sync.startDate;
   if (sync.interests && sync.interests.length > 0) {
     merged.interests = sync.interests as PreferenceTags['interests'];
   }

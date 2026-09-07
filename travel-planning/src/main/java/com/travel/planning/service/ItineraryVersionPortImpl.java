@@ -40,6 +40,9 @@ public class ItineraryVersionPortImpl implements ItineraryVersionPort {
     private final ItinerarySliceWriter sliceWriter;
     /** M15-3：聊天建行程/REFINE 时确定性生成思维导图（避免新版 mindmap 丢失） */
     private final MindmapGenerator mindmapGenerator;
+    /** M28-3：routePlan 首日日期提取（start_date 约束列） */
+    private final com.fasterxml.jackson.databind.ObjectMapper objectMapper =
+            new com.fasterxml.jackson.databind.ObjectMapper();
 
     /** M18-2：解析词表/算法迁 ItineraryWritebackProperties（默认值=原字面量，可 yml 覆盖） */
     private final ItineraryWritebackProperties parseProps;
@@ -128,7 +131,8 @@ public class ItineraryVersionPortImpl implements ItineraryVersionPort {
         }
         // M26-F1：用本轮确定性解析更新约束列（预算改成 5000 → t_itinerary.budget=5000；
         // 天数变更同理；未提及的字段保持原值）——行程详情页预算展示与偏好回写的数据源
-        applyRefinedConstraints(current, userInput);
+        // M28-3：出发日期改从 routePlan 首日提取（"从9月20日开始"→LLM 输出首日 2026-09-20）
+        applyRefinedConstraints(current, userInput, routePlanJson);
         sliceWriter.writeAfterGenerated(sessionId, current.getId(), merged.content());
         log.info("[ItineraryWriteback] REFINE 回写完成: itineraryId={}, sessionId={}",
                 current.getId(), sessionId);
@@ -150,6 +154,8 @@ public class ItineraryVersionPortImpl implements ItineraryVersionPort {
         entity.setDestination(destination);
         entity.setDays(days);
         entity.setBudget(parseBudget(userInput));
+        // M28-3：出发日期取 routePlan 首日（与 /plan 表单路径对齐，start_date 列不再恒空）
+        entity.setStartDate(extractStartDate(routePlanJson));
         entity.setStatus(ItineraryStatus.GENERATED.name());
         entity.setTitle(destination + days + "日游");
         CostedContent content = mergeContent(null, routePlanJson, budgetJson);
@@ -173,19 +179,19 @@ public class ItineraryVersionPortImpl implements ItineraryVersionPort {
     /**
      * M26-F1：REFINE 后同步约束列（确定性 parse；null=未提及不覆盖）。
      * 直接 UpdateWrapper 定向更新，避免与 updateCompleted 的全量更新耦合。
+     * M28-3：出发日期来源 routePlan 首日日期（权威=LLM 本轮实际输出）。
      */
-    private void applyRefinedConstraints(Itinerary current, String userInput) {
-        if (userInput == null || userInput.isBlank()) {
-            return;
-        }
+    private void applyRefinedConstraints(Itinerary current, String userInput, String routePlanJson) {
         try {
             java.math.BigDecimal newBudget = parseBudget(userInput);
             Integer newDays = parseDays(userInput);
+            String newStart = extractStartDate(routePlanJson);
             boolean budgetChanged = newBudget != null
                     && (current.getBudget() == null || newBudget.compareTo(current.getBudget()) != 0);
             boolean daysChanged = newDays != null && newDays > 0
                     && !newDays.equals(current.getDays());
-            if (!budgetChanged && !daysChanged) {
+            boolean startChanged = newStart != null && !newStart.equals(current.getStartDate());
+            if (!budgetChanged && !daysChanged && !startChanged) {
                 return;
             }
             com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper<Itinerary> uw =
@@ -199,15 +205,46 @@ public class ItineraryVersionPortImpl implements ItineraryVersionPort {
                 uw.set("days", newDays);
                 current.setDays(newDays);
             }
+            if (startChanged) {
+                uw.set("start_date", newStart);
+                current.setStartDate(newStart);
+            }
             itineraryMapper.update(null, uw);
-            log.info("[ItineraryWriteback] 约束列已更新: itineraryId={}, budget={}, days={}",
+            log.info("[ItineraryWriteback] 约束列已更新: itineraryId={}, budget={}, days={}, startDate={}",
                     current.getId(),
                     budgetChanged ? newBudget.toPlainString() : "(unchanged)",
-                    daysChanged ? newDays : "(unchanged)");
+                    daysChanged ? newDays : "(unchanged)",
+                    startChanged ? newStart : "(unchanged)");
         } catch (Exception e) {
             log.warn("[ItineraryWriteback] 约束列更新失败（不阻断回写）: id={}, error={}",
                     current.getId(), e.getMessage());
         }
+    }
+
+    /**
+     * M28-3：从 routePlan JSON 提取首日出发日期（yyyy-MM-dd）。
+     * 兼容根级 days 与 routePlan.days 两种形态；日期非法/缺失返回 null（不覆盖）。
+     */
+    private String extractStartDate(String routePlanJson) {
+        if (routePlanJson == null || routePlanJson.isBlank()) {
+            return null;
+        }
+        try {
+            com.fasterxml.jackson.databind.JsonNode root = objectMapper.readTree(routePlanJson);
+            com.fasterxml.jackson.databind.JsonNode days = root.path("days");
+            if (!days.isArray() || days.isEmpty()) {
+                days = root.path("routePlan").path("days");
+            }
+            if (days.isArray() && !days.isEmpty()) {
+                String date = days.get(0).path("date").asText(null);
+                if (date != null && date.length() >= 10) {
+                    return java.time.LocalDate.parse(date.trim().substring(0, 10)).toString();
+                }
+            }
+        } catch (Exception e) {
+            log.debug("[ItineraryWriteback] routePlan 首日日期解析降级: {}", e.getMessage());
+        }
+        return null;
     }
 
     /** 用确定性 MindmapGenerator 根据最新 content 生成思维导图；失败保留原值/null。 */

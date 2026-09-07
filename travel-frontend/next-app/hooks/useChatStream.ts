@@ -40,6 +40,7 @@ export interface StreamedResult {
     budget?: string;
     party?: string;
     interests?: string[];
+    startDate?: string;
   };
 }
 
@@ -170,6 +171,7 @@ export function useChatStream(
         budget?: string;
         party?: string;
         interests?: string[];
+        startDate?: string;
       };
     } = {};
     thinkingRef.current[sid] = [];

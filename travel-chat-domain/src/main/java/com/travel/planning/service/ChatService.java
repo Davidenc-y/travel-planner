@@ -584,13 +584,15 @@ public class ChatService implements ChatStreamExecutor {
                                 "ANCHOR_NEW_ITINERARY", b.id(), b.title()))
                         .orElse(null);
             }
-            // M26-F3：本轮有效约束回写——回写成功后从行程约束列构建（含 F1 更新后的 budget/days）
+            // M26-F3：本轮有效约束回写——回写成功后从行程约束列构建（含 F1 更新后的 budget/days；
+            // M28-3：含 start_date——聊天建行程/改签时从 routePlan 首日提取）
             com.travel.planning.service.ChatStreamExecutor.ChatStreamResult.PreferenceSync preferenceSync = null;
             if (routedItineraryId != null) {
                 preferenceSync = itineraryBriefPort.briefOf(userId, routedItineraryId)
                         .map(b -> new com.travel.planning.service.ChatStreamExecutor.ChatStreamResult.PreferenceSync(
-                                b.destination(), b.days(), b.budget(), b.party(), null))
-                        .filter(ps -> ps.destination() != null || ps.days() != null || ps.budget() != null)
+                                b.destination(), b.days(), b.budget(), b.party(), null, b.startDate()))
+                        .filter(ps -> ps.destination() != null || ps.days() != null
+                                || ps.budget() != null || ps.startDate() != null)
                         .orElse(null);
             }
             return new ChatStreamExecutor.ChatStreamResult(

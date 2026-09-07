@@ -31,6 +31,7 @@ export interface StreamDonePayload {
     budget?: string;
     party?: string;
     interests?: string[];
+    startDate?: string;
   };
   // M6-16：行程流式 done（/itineraries/generate/stream）
   itineraryId?: number;

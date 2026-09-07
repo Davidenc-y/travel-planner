@@ -179,6 +179,10 @@ public class ChatStreamService extends AbstractStreamingPipeline {
                     if (result.preferenceSync().party() != null) {
                         sync.put("party", result.preferenceSync().party());
                     }
+                    // M28-3：出发日期（yyyy-MM-dd；routePlan 首日提取，前端同步"出发日期"标签）
+                    if (result.preferenceSync().startDate() != null) {
+                        sync.put("startDate", result.preferenceSync().startDate());
+                    }
                     if (result.preferenceSync().interests() != null
                             && !result.preferenceSync().interests().isEmpty()) {
                         sync.put("interests", result.preferenceSync().interests());

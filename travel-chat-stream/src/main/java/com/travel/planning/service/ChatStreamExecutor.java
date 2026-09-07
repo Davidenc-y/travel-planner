@@ -90,7 +90,8 @@ public interface ChatStreamExecutor {
          * 前端据此同步偏好标签）。null=本轮无规划资产变化，不触发同步。
          */
         public record PreferenceSync(String destination, Integer days, String budget,
-                                    String party, java.util.List<String> interests) {
+                                    String party, java.util.List<String> interests,
+                                    String startDate) {
         }
 
         /** M25（E4 收尾）：偏好目的地 vs 锚定目的地冲突结构化信号（供前端提示条）。 */
