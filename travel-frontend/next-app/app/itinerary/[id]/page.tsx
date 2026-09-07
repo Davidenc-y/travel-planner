@@ -1,12 +1,13 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import { Share2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { ArrowLeft, MapPin, Calendar, DollarSign, Clock, Maximize2, Copy, History } from 'lucide-react';
 import { decodeItineraryId } from '@/lib/url-guard';
 import { itineraryApi, getErrorMessage, shareApi } from '@/lib/api';
+import { titleNeedsSave } from '@/lib/schemas';
 import { ExportIcsButton } from '@/components/feature/ExportIcsButton';
 import { useAuth } from '@/lib/auth-context';
 import type { ItineraryResponse } from '@/types';
@@ -71,8 +72,38 @@ function ItineraryDetailContent() {
   const [data, setData] = useState<ItineraryResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [versionsOpen, setVersionsOpen] = useState(false);
+  // M28-6：标题双击编辑（同会话列表交互语义；同值零请求）
+  const [titleEditing, setTitleEditing] = useState(false);
+  const [titleDraft, setTitleDraft] = useState('');
+  const [titleSaving, setTitleSaving] = useState(false);
+  const titleInputRef = useRef<HTMLInputElement | null>(null);
   // B3（04 §4.5）：思维导图全屏查看
   const [mindmapFull, setMindmapFull] = useState(false);
+
+  // M28-6：进入编辑态聚焦全选
+  useEffect(() => {
+    if (titleEditing) titleInputRef.current?.select();
+  }, [titleEditing]);
+
+  /** M28-6：保存标题——trim 后与原标题一致直接退出（零请求）；不同才 PATCH。 */
+  const saveTitle = async () => {
+    if (!data || titleSaving) return;
+    const next = titleDraft.trim();
+    setTitleEditing(false);
+    if (!titleNeedsSave(data.title, next)) return;
+    setTitleSaving(true);
+    try {
+      await itineraryApi.renameItinerary(data.id, next);
+      setData({ ...data, title: next });
+      toast.success('标题已更新');
+    } catch (err) {
+      toast.error('标题更新失败: ' + getErrorMessage(err));
+      setTitleEditing(true);
+      setTitleDraft(next);
+    } finally {
+      setTitleSaving(false);
+    }
+  };
 
   useEffect(() => {
     if (!isAuthenticated) {
@@ -137,7 +168,32 @@ function ItineraryDetailContent() {
       </button>
 
       <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
-        <h1 className="text-2xl font-bold">{data.title}</h1>
+        {titleEditing ? (
+          <input
+            ref={titleInputRef}
+            value={titleDraft}
+            onChange={(e) => setTitleDraft(e.target.value)}
+            onBlur={saveTitle}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') saveTitle();
+              if (e.key === 'Escape') setTitleEditing(false);
+            }}
+            maxLength={100}
+            aria-label="编辑行程标题"
+            className="text-2xl font-bold bg-transparent border-b-2 border-brand-500 outline-none focus:border-brand-600 min-w-0 flex-1"
+          />
+        ) : (
+          <h1
+            className="text-2xl font-bold cursor-text select-none"
+            title="双击修改标题"
+            onDoubleClick={() => {
+              setTitleDraft(data.title ?? '');
+              setTitleEditing(true);
+            }}
+          >
+            {data.title}
+          </h1>
+        )}
         <div className="flex items-center gap-2">
           <Button variant="secondary" size="sm" onClick={openVersions}>
             <History className="h-3.5 w-3.5" /> 历史版本

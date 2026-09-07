@@ -4,6 +4,8 @@ import { useEffect, useState } from 'react';
 import { toast } from 'sonner';
 import { Dialog } from '@/components/ui/dialog';
 import { itineraryApi, getErrorMessage } from '@/lib/api';
+import { mergePreferenceSync } from '@/lib/schemas';
+import { PREFS_STORAGE_KEY } from '@/hooks/useSessionPreference';
 
 /**
  * M13-2h/M15-5：行程历史版本对话框（卡片弹窗与完整详情页共用能力）。
@@ -47,6 +49,9 @@ export function ItineraryVersionDialog({
       setVersionDetail(detailRes.data.data);
       if (activeVersion !== version) {
         const res = await itineraryApi.activateVersion(itineraryId, version);
+        // M28-6：切换后同步该行程来源会话的偏好标签（约束列已随版本重算；
+        // localStorage 直写，返回聊天页挂载时恢复即真实生效于后续消息）
+        await syncPreferenceToSession(itineraryId);
         toast.success(`已切换至 v${String(res.data.data?.activeVersion ?? version)}`);
         onActivated?.();
       }
@@ -54,6 +59,33 @@ export function ItineraryVersionDialog({
       toast.error('版本切换失败: ' + getErrorMessage(err));
     } finally {
       setSwitching(false);
+    }
+  };
+
+  /**
+   * M28-6：版本切换后把行程最新约束（destination/days/budget/startDate）合并进
+   * 来源会话的偏好标签（localStorage travel.chat.prefs）。失败静默（不阻断切换）。
+   */
+  const syncPreferenceToSession = async (iid: number) => {
+    try {
+      const res = await itineraryApi.getById(iid);
+      const d = res.data.data;
+      if (!d?.sessionId) return;
+      const firstDate = d.dayPlans?.[0]?.date ?? d.startDate;
+      const raw = localStorage.getItem(PREFS_STORAGE_KEY);
+      const all: Record<string, unknown> = raw ? JSON.parse(raw) : {};
+      all[d.sessionId] = mergePreferenceSync(
+        (all[d.sessionId] ?? {}) as Parameters<typeof mergePreferenceSync>[0],
+        {
+          destination: d.destination,
+          days: d.days,
+          budget: d.budget != null ? String(d.budget) : undefined,
+          startDate: firstDate,
+        },
+      );
+      localStorage.setItem(PREFS_STORAGE_KEY, JSON.stringify(all));
+    } catch {
+      // 偏好同步失败不影响版本切换结果
     }
   };
 

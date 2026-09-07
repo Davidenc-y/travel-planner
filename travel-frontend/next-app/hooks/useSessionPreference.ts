@@ -3,7 +3,9 @@
 import { useCallback, useEffect, useState } from 'react';
 import { isPreferenceEmpty, type PreferenceTags } from '@/lib/schemas';
 
-const STORAGE_KEY = 'travel.chat.prefs';
+/** M28-6：导出供跨页面（版本弹窗）直写偏好标签用（挂载时恢复即生效） */
+export const PREFS_STORAGE_KEY = 'travel.chat.prefs';
+const STORAGE_KEY = PREFS_STORAGE_KEY;
 
 /** 按会话隔离的偏好标签状态（M23c，E4）——localStorage 持久化（跨刷新保留）。 */
 export function useSessionPreference(currentSessionId?: string | null) {

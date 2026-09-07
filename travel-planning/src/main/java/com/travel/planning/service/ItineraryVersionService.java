@@ -38,6 +38,9 @@ public class ItineraryVersionService {
 
     private final ItineraryMapper itineraryMapper;
     private final ItineraryVersionMapper versionMapper;
+    /** M28-6：版本切换约束列重算（routePlan 解析） */
+    private final com.fasterxml.jackson.databind.ObjectMapper objectMapper =
+            new com.fasterxml.jackson.databind.ObjectMapper();
 
     /** M15-4：旧快照缺失 mindmap 时切换前确定性补齐（不修改只读快照） */
     private MindmapGenerator mindmapGenerator;
@@ -150,10 +153,56 @@ public class ItineraryVersionService {
         if (rows <= 0) {
             throw new BusinessException(50001, "行程内容更新失败: " + itineraryId);
         }
+        // M28-6：切换后重算约束列（days=版本天数，start_date=版本首日；budget 版本快照无
+        // 约束来源保持原值）——偏好标签 preferenceSync 与详情页约束展示的数据源
+        applySwitchedConstraints(itineraryId, current, target.getContent());
         Itinerary updated = itineraryMapper.selectById(itineraryId);
         log.info("[ItineraryVersion] 版本切换完成（不新增版本）: itineraryId={}, activeVersion={}",
                 itineraryId, targetVersion);
         return updated == null ? null : updated.getVersion();
+    }
+
+    /**
+     * M28-6：版本切换后同步约束列（确定性；与聊天 REFINE 的 applyRefinedConstraints 同语义）。
+     * 解析失败仅 DEBUG（约束列保持原值，不阻断切换）。
+     */
+    private void applySwitchedConstraints(Long itineraryId, Itinerary current, String contentJson) {
+        try {
+            com.fasterxml.jackson.databind.JsonNode root = objectMapper.readTree(contentJson);
+            com.fasterxml.jackson.databind.JsonNode days = root.path("days");
+            if (!days.isArray() || days.isEmpty()) {
+                days = root.path("routePlan").path("days");
+            }
+            if (!days.isArray() || days.isEmpty()) {
+                return;
+            }
+            Integer newDays = days.size();
+            String newStart = null;
+            String date = days.get(0).path("date").asText(null);
+            if (date != null && date.length() >= 10) {
+                newStart = java.time.LocalDate.parse(date.trim().substring(0, 10)).toString();
+            }
+            boolean daysChanged = newDays > 0 && !newDays.equals(current.getDays());
+            boolean startChanged = newStart != null && !newStart.equals(current.getStartDate());
+            if (!daysChanged && !startChanged) {
+                return;
+            }
+            com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper<Itinerary> uw =
+                    new com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper<Itinerary>()
+                            .eq("id", itineraryId);
+            if (daysChanged) {
+                uw.set("days", newDays);
+            }
+            if (startChanged) {
+                uw.set("start_date", newStart);
+            }
+            itineraryMapper.update(null, uw);
+            log.info("[ItineraryVersion] 版本切换约束列已更新: itineraryId={}, days={}, startDate={}",
+                    itineraryId, daysChanged ? newDays : "(unchanged)",
+                    startChanged ? newStart : "(unchanged)");
+        } catch (Exception e) {
+            log.debug("[ItineraryVersion] 版本切换约束列重算降级: itineraryId={}, {}", itineraryId, e.getMessage());
+        }
     }
 
     /** M13-2e 兼容别名：历史“恢复此版本”行为等同 switchTo（不新增版本）。 */

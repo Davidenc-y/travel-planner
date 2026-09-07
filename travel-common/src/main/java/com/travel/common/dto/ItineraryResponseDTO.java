@@ -22,6 +22,10 @@ public class ItineraryResponseDTO {
 
     private Long id;
     private String title;
+    /** M28-6：来源会话 id（版本切换后前端据此同步该会话的偏好标签） */
+    private String sessionId;
+    /** M28-6：出发日期（yyyy-MM-dd；约束列） */
+    private String startDate;
     private String destination;
     private Integer days;
     /** M15-4：当前启用的版本号（版本切换不再递增；供前端高亮“当前使用”） */

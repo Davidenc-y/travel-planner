@@ -44,6 +44,7 @@ public class ItineraryController {
     private final com.travel.planning.service.share.ShareTokenService shareTokenService;
     private final ItineraryMapRouteService itineraryMapRouteService;
     private final com.travel.planning.service.export.ItineraryIcsService itineraryIcsService;
+    private final com.travel.planning.service.ItineraryRenameService itineraryRenameService;
 
     /**
      * 生成行程
@@ -136,6 +137,15 @@ public class ItineraryController {
     public R<Void> delete(@PathVariable Long id) {
         itineraryService.delete(id, AuthUtils.resolveUserId());
         return R.ok();
+    }
+
+    /**
+     * M28-6：行程标题重命名（详情页双击编辑；归属校验；同值幂等）。
+     */
+    @org.springframework.web.bind.annotation.PatchMapping("/{id}/title")
+    public R<String> renameTitle(@PathVariable Long id,
+                                 @RequestBody java.util.Map<String, String> body) {
+        return R.ok(itineraryRenameService.rename(AuthUtils.resolveUserId(), id, body.get("title")));
     }
 
     /** M11-1：行程历史版本列表（本人行程，按版本倒序）。 */

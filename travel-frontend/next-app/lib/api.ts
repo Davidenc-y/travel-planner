@@ -240,6 +240,9 @@ export const itineraryApi = {
     planningApi.get<R<import('@/types').PageResult<import('@/types').ItineraryResponse>>>('/api/v1/itineraries', { params: { page, size } }),
   delete: (id: number) =>
     planningApi.delete<R<void>>(`/api/v1/itineraries/${id}`),
+  /** M28-6：标题重命名（同值前端已拦截；后端幂等兜底） */
+  renameItinerary: (id: number, title: string) =>
+    planningApi.patch<R<string>>(`/api/v1/itineraries/${id}/title`, { title }),
   /** M4-9：断点续跑（仅 FAILED/僵尸 GENERATING 可续；同步等待同 generate） */
   resume: (id: number) =>
     planningApi.post<R<import('@/types').ItineraryResponse>>(`/api/v1/itineraries/${id}/resume`),

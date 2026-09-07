@@ -70,6 +70,19 @@ export function removePreferenceField(tags: PreferenceTags, key: string): Prefer
 }
 
 /**
+ * M28-6：标题是否需要保存——trim 后与新值不同且非空才发请求
+ * （会话标题与行程标题双击编辑共用；同值零请求）。
+ */
+export function titleNeedsSave(
+  current: string | null | undefined,
+  next: string | null | undefined,
+): boolean {
+  const a = (current ?? '').trim();
+  const b = (next ?? '').trim();
+  return b.length > 0 && a !== b;
+}
+
+/**
  * M26-F3：done.preferenceSync → 偏好标签合并。
  *
  * <p>sync 来自行程约束列（本轮有效约束的权威值），覆盖同名字段；

@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
+import { titleNeedsSave } from '@/lib/schemas';
 import { chatApi, getErrorMessage } from '@/lib/api';
 import type { ChatSession } from '@/types';
 import { takePrefetch } from '@/lib/prefetch';
@@ -35,6 +36,9 @@ export function useSessionList(userId: number | null) {
   const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
   const [editingTitle, setEditingTitle] = useState('');
   const titleSavingRef = useRef(false);
+  // M28-6：saveTitle 读取最新会话标题做同值比较（避免闭包陈旧）
+  const sessionsRef = useRef(sessions);
+  sessionsRef.current = sessions;
   // M5-1：Esc 取消编辑后，输入框卸载触发的 onBlur 不得误保存
   const cancelEditRef = useRef(false);
   // M6-50：首条消息发送中才真实创建的会话（完成后再拉取列表，避免提前出现）
@@ -175,6 +179,12 @@ export function useSessionList(userId: number | null) {
     }
     if (title.length > 200) {
       toast.error('标题不能超过200个字符');
+      return;
+    }
+    // M28-6：同值零请求（trim 后与原会话标题一致 → 仅退出编辑态）
+    const original = sessionsRef.current.find((s) => s.sessionId === sid)?.title;
+    if (!titleNeedsSave(original, title)) {
+      setEditingSessionId(null);
       return;
     }
     titleSavingRef.current = true;

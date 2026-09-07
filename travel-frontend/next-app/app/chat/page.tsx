@@ -170,6 +170,16 @@ function ChatContent() {
       void anchor.load(currentSessionId);
     }
   }, [anchorPanelOpen, currentSessionId, anchor.load]);
+
+  // M28-6：窗口重新聚焦（从行程详情/版本切换返回）时回读锚定——
+  // 锚定标签行/面板中的行程标题与勾选态即时同步（标题重命名/版本切换联动）
+  useEffect(() => {
+    const onFocus = () => {
+      if (currentSessionId) void anchor.load(currentSessionId);
+    };
+    window.addEventListener('focus', onFocus);
+    return () => window.removeEventListener('focus', onFocus);
+  }, [currentSessionId, anchor.load]);
   // M23c（E4）：本轮偏好标签（按会话隔离 + localStorage 持久化；不自动写长期画像）
   const preference = useSessionPreference(currentSessionId);
   const [prefPanelOpen, setPrefPanelOpen] = useState(false);

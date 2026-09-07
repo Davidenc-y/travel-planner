@@ -61,6 +61,8 @@ public class ItineraryDtoAssembler {
                 .budget(entity.getBudget())
                 .estimatedCost(entity.getEstimatedCost())
                 .version(entity.getVersion())
+                .sessionId(entity.getSessionId())
+                .startDate(entity.getStartDate())
                 .generatedAt(entity.getCreatedAt() != null ? entity.getCreatedAt().toString() : null)
                 .status(entity.getStatus())
                 .resumable(resumable)

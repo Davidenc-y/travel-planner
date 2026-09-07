@@ -67,6 +67,10 @@ export interface ItineraryResponse {
   status?: string;
   /** M6-52：是否可继续生成（FAILED 或僵尸 GENERATING） */
   resumable?: boolean;
+  /** M28-6：来源会话 id（版本切换后据此同步该会话偏好标签） */
+  sessionId?: string;
+  /** M28-6：出发日期（yyyy-MM-dd 约束列） */
+  startDate?: string;
 }
 
 export interface PageResult<T> {
