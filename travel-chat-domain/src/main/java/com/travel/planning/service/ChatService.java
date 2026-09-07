@@ -491,6 +491,16 @@ public class ChatService implements ChatStreamExecutor {
                 }
                 // M25（E4 收尾）：目的地冲突确定性信号（渲染器已附提示行；此处结构化供前端卡片）
                 preferenceConflict = preferenceConflictOf(preferences, anchorSection);
+                boolean anchorBasedConflict = preferenceConflict != null;
+                // M28-4：无锚定时的回退比对——偏好目的地 vs 会话最新行程目的地
+                // （用户手动改城市后的可见性；仅卡片信号，不注入口径 guidance——
+                //  无锚定场景本轮实际沿用会话行程，"按偏好处理"口径不成立）
+                if (preferenceConflict == null && preferences != null
+                        && preferences.getDestination() != null
+                        && !preferences.getDestination().isBlank()) {
+                    preferenceConflict = conflictAgainstSessionItinerary(
+                            userId, sessionId, preferences.getDestination());
+                }
                 ChatBudgetStep.BudgetContext budget = chatBudgetStep.compose(sessionId, userId, intent,
                         message, profileContext, historySection, anchorSection, anchorIds,
                         preferenceSection, preferenceSectionRenderer.querySuffix(preferences));
@@ -504,7 +514,7 @@ public class ChatService implements ChatStreamExecutor {
                 // M28-2：偏好-锚定冲突的"回答可见性"——冲突且本轮是规划/改规划时，
                 // 注入确定性口径说明指令，要求回答开头向用户解释锚定与偏好不一致及处理依据
                 // （操作受限原因/修复依据可见；CHAT/FUNCTIONAL 直答轮不注入，避免答非所问）
-                if (preferenceConflict != null
+                if (anchorBasedConflict
                         && (intent == ChatIntent.PLANNING || intent == ChatIntent.REFINE)) {
                     composed = composed + "\n" + conflictAnswerGuidance(
                             preferenceConflict.preferredDestination(),
@@ -573,16 +583,18 @@ public class ChatService implements ChatStreamExecutor {
             }
 
             // M25（E4 收尾）：conflict 于 gate 块内计算（见 preferenceConflictOf 赋值）
-            // M23（P-D）："可选规划为空"确定性判定——本轮回写成功且会话无锚定、无关联行程
+            // M23（P-D）→M28-4：会话首个生成行程"自动锚定"（用户心智模型：初始规划即本会话基准；
+            // 原"询问卡"在该场景冗余——已默认锚定，后续轮 getAnchors 非空不再触发。
+            // 询问卡载荷/前端卡片保留为兼容死代码，不再发送）
             Long routedItineraryId = routed == null ? null : routed.writtenItineraryId();
             com.travel.planning.service.ChatStreamExecutor.ChatStreamResult.AnchorSuggestion suggestion = null;
             if (routedItineraryId != null
                     && sessionAnchorStore.getAnchors(prepared.sessionId()).isEmpty()
                     && itineraryBriefPort.findSessionItineraryIds(prepared.sessionId()).isEmpty()) {
-                suggestion = itineraryBriefPort.briefOf(userId, routedItineraryId)
-                        .map(b -> new com.travel.planning.service.ChatStreamExecutor.ChatStreamResult.AnchorSuggestion(
-                                "ANCHOR_NEW_ITINERARY", b.id(), b.title()))
-                        .orElse(null);
+                sessionAnchorStore.replaceAnchors(userId, prepared.sessionId(),
+                        java.util.List.of(routedItineraryId));
+                log.info("[SessionAnchor] 会话首个行程已自动锚定: sessionId={}, itineraryId={}",
+                        prepared.sessionId(), routedItineraryId);
             }
             // M26-F3：本轮有效约束回写——回写成功后从行程约束列构建（含 F1 更新后的 budget/days；
             // M28-3：含 start_date——聊天建行程/改签时从 routePlan 首日提取）
@@ -658,7 +670,30 @@ public class ChatService implements ChatStreamExecutor {
             return null;
         }
         return new com.travel.planning.service.ChatStreamExecutor.ChatStreamResult.PreferenceConflict(
-                preferences.getDestination(), anchored);
+                preferences.getDestination(), anchored, "anchor");
+    }
+
+    /**
+     * M28-4：无锚定会话的回退冲突比对——偏好目的地 vs 会话最新行程目的地。
+     * 降级语义：任一失败返回 null（可见性信号不阻断主链路）。source=itinerary。
+     */
+    private com.travel.planning.service.ChatStreamExecutor.ChatStreamResult.PreferenceConflict
+    conflictAgainstSessionItinerary(Long userId, String sessionId, String preferred) {
+        try {
+            java.util.List<Long> ids = itineraryBriefPort.findSessionItineraryIds(sessionId);
+            if (ids.isEmpty()) {
+                return null;
+            }
+            return itineraryBriefPort.briefOf(userId, ids.get(0))
+                    .map(b -> b.destination())
+                    .filter(d -> d != null && !d.isBlank() && !d.equals(preferred))
+                    .map(d -> new com.travel.planning.service.ChatStreamExecutor
+                            .ChatStreamResult.PreferenceConflict(preferred, d, "itinerary"))
+                    .orElse(null);
+        } catch (Exception e) {
+            log.debug("[ChatService] 会话行程目的地回退比对降级: {}", e.getMessage());
+            return null;
+        }
     }
 
     /** M23b（E4）：从【锚定行程】段提取首个锚定目的地（单锚定首发；无则 null）。 */

@@ -23,7 +23,7 @@ export interface StreamDonePayload {
   // M23（P-D）：锚定询问（AI 生成新规划且会话无可选规划）
   suggestion?: { type: string; itineraryId: number; title: string };
   // M25（E4 收尾）：偏好目的地 vs 锚定目的地冲突
-  preferenceConflict?: { preferredDestination: string; anchoredDestination: string };
+  preferenceConflict?: { preferredDestination: string; anchoredDestination: string; source?: string };
   // M26-F3：本轮有效约束回写（来自行程约束列；空字段由后端过滤）
   preferenceSync?: {
     destination?: string;

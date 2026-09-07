@@ -31,8 +31,8 @@ export interface StreamedResult {
   /** M10-1b：业务错误已在 hook 内处理（如 40303 已提示+气泡），调用方不再兜底 */
   handled?: boolean;
   suggestion?: AnchorSuggestion;
-  /** M25（E4 收尾）：偏好目的地 vs 锚定目的地冲突（供提示条） */
-  preferenceConflict?: { preferredDestination: string; anchoredDestination: string };
+  /** M25（E4 收尾）/M28-4：偏好-行程目的地冲突（source=anchor|itinerary，供提示卡） */
+  preferenceConflict?: { preferredDestination: string; anchoredDestination: string; source?: string };
   /** M26-F3：本轮有效约束回写（供偏好标签动态同步） */
   preferenceSync?: {
     destination?: string;
@@ -164,7 +164,7 @@ export function useChatStream(
       sessionTitle?: string;
       tokens?: number;
       suggestion?: { type: string; itineraryId: number; title: string };
-      preferenceConflict?: { preferredDestination: string; anchoredDestination: string };
+      preferenceConflict?: { preferredDestination: string; anchoredDestination: string; source?: string };
       preferenceSync?: {
         destination?: string;
         days?: number;

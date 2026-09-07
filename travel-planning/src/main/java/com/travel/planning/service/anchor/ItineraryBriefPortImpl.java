@@ -59,6 +59,7 @@ public class ItineraryBriefPortImpl implements ItineraryBriefPort {
         }
         return itineraryMapper.selectList(new QueryWrapper<Itinerary>()
                         .eq("session_id", sessionId)
+                        .orderByDesc("updated_at")
                         .select("id"))
                 .stream().map(Itinerary::getId).toList();
     }

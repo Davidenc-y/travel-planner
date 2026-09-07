@@ -160,7 +160,7 @@ function ChatContent() {
   const anchor = useSessionAnchor(currentSessionId);
   const [anchorPanelOpen, setAnchorPanelOpen] = useState(false);
   const [pendingSuggestion, setPendingSuggestion] = useState<{ itineraryId: number; title: string } | null>(null);
-  const [conflictNotice, setConflictNotice] = useState<{ preferredDestination: string; anchoredDestination: string } | null>(null);
+  const [conflictNotice, setConflictNotice] = useState<{ preferredDestination: string; anchoredDestination: string; source?: string } | null>(null);
   const anchorState = anchor.stateOf(currentSessionId);
 
   // M28-2：锚定面板打开即回读校准——勾选状态以服务端真实锚定为准，
@@ -440,6 +440,12 @@ function ChatContent() {
       if (streamed.preferenceSync) {
         preference.setTags(sid!, mergePreferenceSync(preference.tagsOf(sid!), streamed.preferenceSync));
       }
+      // M28-4：冲突卡接线（M25 遗留缺口：done.preferenceConflict 此前从未落到状态，卡片为死 UI）
+      if (streamed.preferenceConflict) {
+        setConflictNotice(streamed.preferenceConflict);
+      }
+      // M28-4：done 后回读锚定——会话首个行程已服务端自动锚定，标签行/面板勾选即时可见
+      void anchor.load(sid!);
       if (streamed.handled) return; // M10-1b：40303 已在 hook 内完成提示与气泡
       const stages = chatStream.getThinkingLines(sid!);
       const aiMsg: ChatMessage = {
@@ -806,14 +812,23 @@ function ChatContent() {
         {conflictNotice && (
           <div className="mx-2 mb-2 flex flex-wrap items-center gap-2 rounded-lg border border-amber-500/40 bg-amber-500/5 px-3 py-2 text-sm">
             <span className="min-w-0 flex-1">
-              本轮按偏好目的地「{conflictNotice.preferredDestination}」处理（锚定行程目的地：{conflictNotice.anchoredDestination}）
+              {conflictNotice.source === 'itinerary'
+                ? `偏好目的地「${conflictNotice.preferredDestination}」与当前会话行程（${conflictNotice.anchoredDestination}）不一致，本轮沿用会话行程；如需切换请按偏好重新规划`
+                : `本轮按偏好目的地「${conflictNotice.preferredDestination}」处理（锚定行程目的地：${conflictNotice.anchoredDestination}）`}
             </span>
             <Button
               variant="secondary"
               size="sm"
-              title="解除当前锚定，后续轮次按偏好目的地重新规划"
+              title={conflictNotice.source === 'itinerary'
+                ? '按偏好目的地生成新的规划（预填输入，可修改后发送）'
+                : '解除当前锚定，后续轮次按偏好目的地重新规划'}
               onClick={() => {
-                if (currentSessionId) {
+                if (conflictNotice.source === 'itinerary' && anchorState.ids.length === 0) {
+                  // 无锚定（会话行程场景）：预填一条新规划请求，用户确认后发送
+                  const prompt = `帮我规划${conflictNotice.preferredDestination}行程`;
+                  setDrafts((prev) => ({ ...prev, [activeDraftKey]: prompt }));
+                  textareaRef.current?.focus();
+                } else if (currentSessionId) {
                   void anchor.clear(currentSessionId).then(() => {
                     toast.success('已解除锚定，后续将按偏好目的地规划');
                     anchor.load(currentSessionId);

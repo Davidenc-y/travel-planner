@@ -95,7 +95,8 @@ public interface ChatStreamExecutor {
         }
 
         /** M25（E4 收尾）：偏好目的地 vs 锚定目的地冲突结构化信号（供前端提示条）。 */
-        public record PreferenceConflict(String preferredDestination, String anchoredDestination) {
+        public record PreferenceConflict(String preferredDestination, String anchoredDestination,
+                                        String source) {
         }
 
         /** M23（P-D）：done.suggestion 载荷（null=done.data 不追加该键，旧契约字节不变）。 */

@@ -162,7 +162,9 @@ public class ChatStreamService extends AbstractStreamingPipeline {
                 if (result.preferenceConflict() != null) {
                     done.put("preferenceConflict", Map.of(
                             "preferredDestination", result.preferenceConflict().preferredDestination(),
-                            "anchoredDestination", result.preferenceConflict().anchoredDestination()));
+                            "anchoredDestination", result.preferenceConflict().anchoredDestination(),
+                            "source", result.preferenceConflict().source() == null
+                                    ? "anchor" : result.preferenceConflict().source()));
                 }
                 // M26-F3：本轮有效约束回写（null 不追加；前端同步偏好标签）
                 if (result.preferenceSync() != null) {
