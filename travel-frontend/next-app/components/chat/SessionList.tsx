@@ -192,7 +192,14 @@ export function SessionList({
                   aria-label="已置顶"
                 />
               )}
-              <span className="truncate" title={s.title}>
+              <span
+                className="truncate cursor-text"
+                title={s.title}
+                onDoubleClick={(e) => {
+                  e.stopPropagation();
+                  onStartEdit(s);
+                }}
+              >
                 {s.title}
               </span>
             </span>

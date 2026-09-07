@@ -3,7 +3,9 @@
 import { useCallback, useEffect, useState } from 'react';
 import { MapPin, Calendar, DollarSign, Clock } from 'lucide-react';
 import { useRouter } from 'next/navigation';
+import { toast } from 'sonner';
 import { encodeItineraryId } from '@/lib/url-guard';
+import { titleNeedsSave } from '@/lib/schemas';
 import { ExportIcsButton } from '@/components/feature/ExportIcsButton';
 import { itineraryApi, getErrorMessage } from '@/lib/api';
 import type { ItineraryResponse } from '@/types';
@@ -42,6 +44,30 @@ interface Props {
 export function ItineraryCardModal({ itineraryId, onClose, originRect }: Props) {
   const router = useRouter();
   const [data, setData] = useState<ItineraryResponse | null>(null);
+  // M28-8：标题双击编辑（同详情页语义；同值零请求）
+  const [titleEditing, setTitleEditing] = useState(false);
+  const [titleDraft, setTitleDraft] = useState('');
+  const [titleSaving, setTitleSaving] = useState(false);
+
+  const saveTitle = async () => {
+    if (!data || titleSaving) return;
+    const next = titleDraft.trim();
+    setTitleEditing(false);
+    if (!titleNeedsSave(data.title, next)) return;
+    setTitleSaving(true);
+    try {
+      await itineraryApi.renameItinerary(data.id, next);
+      setData({ ...data, title: next });
+      toast.success('标题已更新');
+      // 打开中的面板数据刷新由调用方 focus 回读兜底
+    } catch (err) {
+      toast.error('标题更新失败: ' + getErrorMessage(err));
+      setTitleEditing(true);
+      setTitleDraft(next);
+    } finally {
+      setTitleSaving(false);
+    }
+  };
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [versionsOpen, setVersionsOpen] = useState(false);
@@ -90,7 +116,31 @@ export function ItineraryCardModal({ itineraryId, onClose, originRect }: Props) 
       {!loading && !error && data && (
           <>
             <div className="mb-4 flex items-start justify-between gap-2">
-              <h2 className="text-xl font-bold">{data.title}</h2>
+              {titleEditing ? (
+                <input
+                  value={titleDraft}
+                  onChange={(e) => setTitleDraft(e.target.value)}
+                  onBlur={saveTitle}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') saveTitle();
+                    if (e.key === 'Escape') setTitleEditing(false);
+                  }}
+                  maxLength={100}
+                  aria-label="编辑行程标题"
+                  className="text-xl font-bold bg-transparent border-b-2 border-brand-500 outline-none min-w-0 flex-1"
+                />
+              ) : (
+                <h2
+                  className="text-xl font-bold cursor-text select-none"
+                  title="双击修改标题"
+                  onDoubleClick={() => {
+                    setTitleDraft(data.title ?? '');
+                    setTitleEditing(true);
+                  }}
+                >
+                  {data.title}
+                </h2>
+              )}
               <div className="flex shrink-0 items-center gap-1.5">
                 <button
                   type="button"
