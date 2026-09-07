@@ -501,6 +501,16 @@ public class ChatService implements ChatStreamExecutor {
                 candidates = budget.candidates();
                 sessionHits = budget.sessionHits();
 
+                // M28-2：偏好-锚定冲突的"回答可见性"——冲突且本轮是规划/改规划时，
+                // 注入确定性口径说明指令，要求回答开头向用户解释锚定与偏好不一致及处理依据
+                // （操作受限原因/修复依据可见；CHAT/FUNCTIONAL 直答轮不注入，避免答非所问）
+                if (preferenceConflict != null
+                        && (intent == ChatIntent.PLANNING || intent == ChatIntent.REFINE)) {
+                    composed = composed + "\n" + conflictAnswerGuidance(
+                            preferenceConflict.preferredDestination(),
+                            preferenceConflict.anchoredDestination());
+                }
+
                 log.info("聊天输入组装完成: 总长度={}, 含画像={}, 含历史={}, 含摘要={}, 摘要触发={}, 历史轮数={}, 全量历史token={}, 注入token={}, 含知识库候选={}",
                         composed.length(), !profileContext.isBlank(), !historySection.isBlank(),
                         summaryUsed, summaryTriggered, turns, totalHistoryTokens, inputTokens,
@@ -657,6 +667,22 @@ public class ChatService implements ChatStreamExecutor {
         java.util.regex.Matcher m = java.util.regex.Pattern
                 .compile("目的地:([^\s]+)").matcher(anchorSection);
         return m.find() ? m.group(1) : null;
+    }
+
+    /**
+     * M28-2：偏好-锚定冲突的回答口径说明指令（确定性文本，追加在 composed 末尾）。
+     *
+     * <p>要求模型在回答开头用一两句话向用户说明：锚定行程目的地与偏好目的地不一致、
+     * 本轮按偏好目的地处理（受限原因与依据可见），并指引用户可通过输入框下方的
+     * 冲突卡片选择「保留锚定」回到锚定行程。静态纯函数便于单测。</p>
+     */
+    static String conflictAnswerGuidance(String preferred, String anchored) {
+        return "【本轮口径说明（回答要求）】检测到用户当前锚定行程的目的地为「" + anchored
+                + "」，与用户偏好目的地「" + preferred + "」不一致。本轮行程已按偏好目的地「"
+                + preferred + "」处理。请在回答的最开头先用一小段自然的话向用户说明这一点"
+                + "（指出锚定行程与偏好目的地不一致、本轮按偏好目的地规划，属于系统按用户最新偏好执行的口径），"
+                + "并提示用户：若想继续按锚定行程（" + anchored + "）调整，可点击输入框下方提示条中的「保留锚定」。"
+                + "说明须简短（两三句内），之后再进入正题。";
     }
 
     /** 异常链中是否存在 InterruptedException（含 Lettuce RedisCommandInterruptedException）。 */

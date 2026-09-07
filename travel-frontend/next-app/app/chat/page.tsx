@@ -162,6 +162,14 @@ function ChatContent() {
   const [pendingSuggestion, setPendingSuggestion] = useState<{ itineraryId: number; title: string } | null>(null);
   const [conflictNotice, setConflictNotice] = useState<{ preferredDestination: string; anchoredDestination: string } | null>(null);
   const anchorState = anchor.stateOf(currentSessionId);
+
+  // M28-2：锚定面板打开即回读校准——勾选状态以服务端真实锚定为准，
+  // 消除任何来源的本地漂移（竞态/他端变更/乐观回滚残留）
+  useEffect(() => {
+    if (anchorPanelOpen && currentSessionId) {
+      void anchor.load(currentSessionId);
+    }
+  }, [anchorPanelOpen, currentSessionId, anchor.load]);
   // M23c（E4）：本轮偏好标签（按会话隔离 + localStorage 持久化；不自动写长期画像）
   const preference = useSessionPreference(currentSessionId);
   const [prefPanelOpen, setPrefPanelOpen] = useState(false);
