@@ -2,6 +2,9 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { MapPin, Calendar, DollarSign, Clock } from 'lucide-react';
+import { useRouter } from 'next/navigation';
+import { encodeItineraryId } from '@/lib/url-guard';
+import { ExportIcsButton } from '@/components/feature/ExportIcsButton';
 import { itineraryApi, getErrorMessage } from '@/lib/api';
 import type { ItineraryResponse } from '@/types';
 import { formatCurrency, formatDate } from '@/lib/utils';
@@ -37,6 +40,7 @@ interface Props {
 
 /** 行程名片弹窗（F103）+ C5 容器变换：以被点击卡片为起点展开/收回；×/遮罩/Esc 关闭 */
 export function ItineraryCardModal({ itineraryId, onClose, originRect }: Props) {
+  const router = useRouter();
   const [data, setData] = useState<ItineraryResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -87,13 +91,23 @@ export function ItineraryCardModal({ itineraryId, onClose, originRect }: Props) 
           <>
             <div className="mb-4 flex items-start justify-between gap-2">
               <h2 className="text-xl font-bold">{data.title}</h2>
-              <button
-                type="button"
-                onClick={() => setVersionsOpen(true)}
-                className="shrink-0 rounded-lg border border-line px-2.5 py-1.5 text-xs text-ink-secondary hover:border-brand-400 hover:text-brand-500 focus-ring"
-              >
-                历史版本
-              </button>
+              <div className="flex shrink-0 items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => router.push(`/itinerary/${encodeURIComponent(String(data.id))}?itineraryId=${encodeItineraryId(data.id)}`)}
+                  className="rounded-lg border border-line px-2.5 py-1.5 text-xs text-ink-secondary hover:border-brand-400 hover:text-brand-500 focus-ring"
+                >
+                  完整详情
+                </button>
+                <ExportIcsButton itineraryId={data.id} />
+                <button
+                  type="button"
+                  onClick={() => setVersionsOpen(true)}
+                  className="rounded-lg border border-line px-2.5 py-1.5 text-xs text-ink-secondary hover:border-brand-400 hover:text-brand-500 focus-ring"
+                >
+                  历史版本
+                </button>
+              </div>
             </div>
 
             <div className="grid grid-cols-2 gap-3 mb-5 md:grid-cols-4">

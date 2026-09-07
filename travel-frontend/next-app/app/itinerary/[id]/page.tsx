@@ -4,9 +4,10 @@ import { useEffect, useState } from 'react';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import { Share2 } from 'lucide-react';
 import { toast } from 'sonner';
-import { ArrowLeft, MapPin, Calendar, CalendarPlus, DollarSign, Clock, Maximize2, Copy, History } from 'lucide-react';
+import { ArrowLeft, MapPin, Calendar, DollarSign, Clock, Maximize2, Copy, History } from 'lucide-react';
 import { decodeItineraryId } from '@/lib/url-guard';
 import { itineraryApi, getErrorMessage, shareApi } from '@/lib/api';
+import { ExportIcsButton } from '@/components/feature/ExportIcsButton';
 import { useAuth } from '@/lib/auth-context';
 import type { ItineraryResponse } from '@/types';
 import { formatCurrency, formatDate } from '@/lib/utils';
@@ -305,32 +306,3 @@ function ShareButton({ itineraryId }: { itineraryId: number }) {
   );
 }
 
-/** M27（E7）：导出日历按钮——拉取 .ics Blob 并触发浏览器保存（导入手机/系统日历）。 */
-function ExportIcsButton({ itineraryId }: { itineraryId: number }) {
-  const [busy, setBusy] = useState(false);
-  const download = async () => {
-    if (busy) return;
-    setBusy(true);
-    try {
-      const blob = await itineraryApi.exportIcs(itineraryId);
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `itinerary-${itineraryId}.ics`;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      URL.revokeObjectURL(url);
-      toast.success('日历文件已导出，可导入手机/系统日历');
-    } catch {
-      toast.error('日历导出失败');
-    } finally {
-      setBusy(false);
-    }
-  };
-  return (
-    <Button variant="secondary" size="sm" onClick={download} disabled={busy}>
-      <CalendarPlus className="h-3.5 w-3.5" /> {busy ? '导出中…' : '导出日历'}
-    </Button>
-  );
-}

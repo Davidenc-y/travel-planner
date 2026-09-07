@@ -590,7 +590,8 @@ public class ChatService implements ChatStreamExecutor {
             com.travel.planning.service.ChatStreamExecutor.ChatStreamResult.AnchorSuggestion suggestion = null;
             if (routedItineraryId != null
                     && sessionAnchorStore.getAnchors(prepared.sessionId()).isEmpty()
-                    && itineraryBriefPort.findSessionItineraryIds(prepared.sessionId()).isEmpty()) {
+                    && isSessionFirstItinerary(routedItineraryId,
+                            itineraryBriefPort.findSessionItineraryIds(prepared.sessionId()))) {
                 sessionAnchorStore.replaceAnchors(userId, prepared.sessionId(),
                         java.util.List.of(routedItineraryId));
                 log.info("[SessionAnchor] 会话首个行程已自动锚定: sessionId={}, itineraryId={}",
@@ -704,6 +705,21 @@ public class ChatService implements ChatStreamExecutor {
         java.util.regex.Matcher m = java.util.regex.Pattern
                 .compile("目的地:([^\s]+)").matcher(anchorSection);
         return m.find() ? m.group(1) : null;
+    }
+
+    /**
+     * M28-5：会话"首个行程"判定（自动锚定资格）。
+     *
+     * <p>M28-4 首版要求 findSessionItineraryIds 为空——但结果装配在路由回写之后执行，
+     * 本轮新建的行程已挂到会话上（列表恒非空），条件永假（M23 询问卡同病从未真正触发）。
+     * 修正语义：会话无任何行程，或唯一行程恰为本轮新建/改写的那个。</p>
+     */
+    static boolean isSessionFirstItinerary(Long routedItineraryId, java.util.List<Long> sessionItineraries) {
+        if (routedItineraryId == null) {
+            return false;
+        }
+        return sessionItineraries == null || sessionItineraries.isEmpty()
+                || (sessionItineraries.size() == 1 && sessionItineraries.contains(routedItineraryId));
     }
 
     /**
