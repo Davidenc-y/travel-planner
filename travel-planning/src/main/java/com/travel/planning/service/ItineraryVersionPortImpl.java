@@ -125,6 +125,8 @@ public class ItineraryVersionPortImpl implements ItineraryVersionPort {
         java.math.BigDecimal refineBudget = parseBudget(userInput);
         Integer refineDays = parseDays(userInput);
         String refineStart = extractStartDate(routePlanJson);
+        // M28-9：同行人确定性解析（"同行改成情侣"→情侣；未提及 null 不覆盖）
+        String refineParty = parseParty(userInput);
         java.math.BigDecimal snapBudget = refineBudget != null ? refineBudget : current.getBudget();
         Integer snapDays = refineDays != null && refineDays > 0 ? refineDays : current.getDays();
         String snapStart = refineStart != null ? refineStart : current.getStartDate();
@@ -141,7 +143,7 @@ public class ItineraryVersionPortImpl implements ItineraryVersionPort {
         // M26-F1：用本轮确定性解析更新约束列（预算改成 5000 → t_itinerary.budget=5000；
         // 天数变更同理；未提及的字段保持原值）——行程详情页预算展示与偏好回写的数据源
         // M28-3：出发日期改从 routePlan 首日提取（"从9月20日开始"→LLM 输出首日 2026-09-20）
-        applyRefinedConstraints(current, refineBudget, refineDays, refineStart);
+        applyRefinedConstraints(current, refineBudget, refineDays, refineStart, refineParty);
         sliceWriter.writeAfterGenerated(sessionId, current.getId(), merged.content());
         log.info("[ItineraryWriteback] REFINE 回写完成: itineraryId={}, sessionId={}",
                 current.getId(), sessionId);
@@ -163,6 +165,8 @@ public class ItineraryVersionPortImpl implements ItineraryVersionPort {
         entity.setDestination(destination);
         entity.setDays(days);
         entity.setBudget(parseBudget(userInput));
+        // M28-9：同行人同确定性解析（"和家人去成都"→家庭；未提及 null）
+        entity.setParty(parseParty(userInput));
         // M28-3：出发日期取 routePlan 首日（与 /plan 表单路径对齐，start_date 列不再恒空）
         entity.setStartDate(extractStartDate(routePlanJson));
         entity.setStatus(ItineraryStatus.GENERATED.name());
@@ -194,19 +198,21 @@ public class ItineraryVersionPortImpl implements ItineraryVersionPort {
      */
     private void applyRefinedConstraints(Itinerary current, String userInput, String routePlanJson) {
         applyRefinedConstraints(current, parseBudget(userInput), parseDays(userInput),
-                extractStartDate(routePlanJson));
+                extractStartDate(routePlanJson), parseParty(userInput));
     }
 
     /** M28-7：约束值由调用方解析传入（refine 复用同一份解析结果）。 */
     private void applyRefinedConstraints(Itinerary current,
-            java.math.BigDecimal newBudget, Integer newDays, String newStart) {
+            java.math.BigDecimal newBudget, Integer newDays, String newStart, String newParty) {
         try {
+            boolean partyChanged = newParty != null && !newParty.isBlank()
+                    && !newParty.equals(current.getParty());
             boolean budgetChanged = newBudget != null
                     && (current.getBudget() == null || newBudget.compareTo(current.getBudget()) != 0);
             boolean daysChanged = newDays != null && newDays > 0
                     && !newDays.equals(current.getDays());
             boolean startChanged = newStart != null && !newStart.equals(current.getStartDate());
-            if (!budgetChanged && !daysChanged && !startChanged) {
+            if (!budgetChanged && !daysChanged && !startChanged && !partyChanged) {
                 return;
             }
             com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper<Itinerary> uw =
@@ -224,16 +230,45 @@ public class ItineraryVersionPortImpl implements ItineraryVersionPort {
                 uw.set("start_date", newStart);
                 current.setStartDate(newStart);
             }
+            if (partyChanged) {
+                uw.set("party", newParty);
+                current.setParty(newParty);
+            }
             itineraryMapper.update(null, uw);
-            log.info("[ItineraryWriteback] 约束列已更新: itineraryId={}, budget={}, days={}, startDate={}",
+            log.info("[ItineraryWriteback] 约束列已更新: itineraryId={}, budget={}, days={}, startDate={}, party={}",
                     current.getId(),
                     budgetChanged ? newBudget.toPlainString() : "(unchanged)",
                     daysChanged ? newDays : "(unchanged)",
-                    startChanged ? newStart : "(unchanged)");
+                    startChanged ? newStart : "(unchanged)",
+                    partyChanged ? newParty : "(unchanged)");
         } catch (Exception e) {
             log.warn("[ItineraryWriteback] 约束列更新失败（不阻断回写）: id={}, error={}",
                     current.getId(), e.getMessage());
         }
+    }
+
+    /**
+     * M28-9：从用户输入解析同行人（与 chat-domain party-patterns 同语义词表，
+     * 本地独立实现避免 planning→chat-domain 反向依赖）。未提及返回 null（不臆造）。
+     */
+    static String parseParty(String input) {
+        if (input == null || input.isBlank()) {
+            return null;
+        }
+        if (input.contains("带小孩") || input.contains("带娃") || input.contains("亲子")
+                || input.contains("家庭") || input.contains("家人")) {
+            return "家庭";
+        }
+        if (input.contains("情侣") || input.contains("夫妻") || input.contains("两个人")) {
+            return "情侣";
+        }
+        if (input.contains("朋友") || input.contains("闺蜜") || input.contains("同事")) {
+            return "朋友";
+        }
+        if (input.contains("独行") || input.contains("一个人")) {
+            return "独行";
+        }
+        return null;
     }
 
     /**

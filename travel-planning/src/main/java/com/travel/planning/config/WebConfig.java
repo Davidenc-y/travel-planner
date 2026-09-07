@@ -36,7 +36,9 @@ public class WebConfig implements WebMvcConfigurer {
     public void addCorsMappings(CorsRegistry registry) {
         registry.addMapping("/api/**")
                 .allowedOriginPatterns(mergeOrigins())
-                .allowedMethods("GET", "POST", "PUT", "DELETE", "OPTIONS")
+                // M28-9：PATCH 必须在允许方法内——行程标题重命名用 PATCH，缺失时预检
+                // 响应的 Allow-Methods 不含 PATCH，浏览器拦截实际请求（前端表现为 Network Error）
+                .allowedMethods("GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS")
                 .allowedHeaders("*")
                 .allowCredentials(true)
                 .maxAge(3600);
