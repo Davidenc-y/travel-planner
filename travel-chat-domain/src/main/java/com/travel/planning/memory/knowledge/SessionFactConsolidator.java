@@ -46,10 +46,18 @@ public class SessionFactConsolidator {
     // 兼容："预算3000元" / "预算3000" / "改成3000" / "预算是3000" / "3000元"
     // 数字部分兼容千分位（3,000）：[0-9]+(?:,[0-9]{3})*(?:\.[0-9]+)?
     private static final String NUM = "[0-9]+(?:,[0-9]{3})*(?:\\.[0-9]+)?";
-    private static final Pattern BUDGET_PATTERN =
-            Pattern.compile("预算\\s*(" + NUM + ")\\s*元?"
-                    + "|(?:改成|是|为|上限|控制在)\\s*(" + NUM + ")\\s*元?"
-                    + "|(" + NUM + ")\\s*元");
+    // M28-1（热修）：预算数字按"显式词 → 动词 → 裸元"优先级依次匹配，
+    // 不再单正则交替（交替正则按最左命中——"改成5日游，预算8000"会被
+    // 动词分支的"改成5"抢先，返回 5 元的错误口径并注入提示词）
+    private static final Pattern BUDGET_EXPLICIT =
+            Pattern.compile("预算\\s*(" + NUM + ")\\s*元?");
+    private static final Pattern BUDGET_VERB =
+            Pattern.compile("(?:改成|是|为|上限|控制在)\\s*(" + NUM + ")\\s*元?");
+    private static final Pattern BUDGET_BARE =
+            Pattern.compile("(" + NUM + ")\\s*元");
+    /** 兼容 detectTopic 的"任意预算表达存在"判定（口径选择交给 budgetNumberOf） */
+    private static final Pattern BUDGET_ANY =
+            Pattern.compile("预算|" + BUDGET_VERB + "|" + BUDGET_BARE);
     // 中文数字（三千/五千/一万/两万等），F85 U4：与数字写法统一归一化
     private static final Pattern CHINESE_NUMBER_PATTERN =
             Pattern.compile("([零一二两三四五六七八九十百千万]+)\\s*元?");
@@ -131,7 +139,7 @@ public class SessionFactConsolidator {
         // 预算优先，但含"天/日"的天数类表达（如"天数改成4天"）不被预算正则误判
         boolean hasDayMarker = content.contains("天") || content.contains("日");
         if (content.contains("预算") || content.contains("元")
-                || (BUDGET_PATTERN.matcher(content).find() && !hasDayMarker)) {
+                || (BUDGET_ANY.matcher(content).find() && !hasDayMarker)) {
             return Topic.BUDGET;
         }
         if (DAYS_PATTERN.matcher(content).find()) {
@@ -154,13 +162,53 @@ public class SessionFactConsolidator {
         return null;
     }
 
+    /**
+     * 按优先级提取预算数字（M28-1 热修）：
+     * ① 断言类（显式"预算N"与动词"改成/是/为/上限/控制在 N"）同场竞争，取<b>位置最靠后</b>
+     *    的命中=用户最新口径（"预算8000改成7000"→7000；动词跳过紧邻"天/日"的天数表达，
+     *    如"改成5日游，预算8000"→8000 而非 5）；
+     * ② 裸"N元"仅在无任何断言命中时兜底（最低优先级——"预算5000，车票300元"不得被 300 覆盖）。
+     * 均未命中返回 null。
+     */
+    private static String budgetNumberOf(String content) {
+        String best = null;
+        int bestStart = -1;
+        Matcher m = BUDGET_EXPLICIT.matcher(content);
+        while (m.find()) {
+            if (m.start() >= bestStart) {
+                bestStart = m.start();
+                best = m.group(1);
+            }
+        }
+        m = BUDGET_VERB.matcher(content);
+        while (m.find()) {
+            int end = m.end(1);
+            if (end < content.length()) {
+                char next = content.charAt(end);
+                if (next == '天' || next == '日') {
+                    continue; // "改成5日游"的 5 是天数不是预算
+                }
+            }
+            if (m.start() >= bestStart) {
+                bestStart = m.start();
+                best = m.group(1);
+            }
+        }
+        if (best != null) {
+            return best;
+        }
+        m = BUDGET_BARE.matcher(content);
+        while (m.find()) {
+            best = m.group(1);
+        }
+        return best;
+    }
+
     /** 数字归一化（预算/天数），失败保留原文 */
     private static String normalize(Topic topic, String content) {
         if (topic == Topic.BUDGET) {
-            Matcher m = BUDGET_PATTERN.matcher(content);
-            if (m.find()) {
-                String num = m.group(1) != null ? m.group(1)
-                        : (m.group(2) != null ? m.group(2) : m.group(3));
+            String num = budgetNumberOf(content);
+            if (num != null) {
                 return num.replace(",", "") + "元";
             }
             Matcher cn = CHINESE_NUMBER_PATTERN.matcher(content);
