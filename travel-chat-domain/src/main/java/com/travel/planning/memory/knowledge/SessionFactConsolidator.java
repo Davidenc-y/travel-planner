@@ -43,6 +43,17 @@ public class SessionFactConsolidator {
     public record ConsensusEntry(Topic topic, String value, String type, String createdAt) {
     }
 
+    /**
+     * M28-10：同行人规范值映射（与 travel-planning ItineraryVersionPortImpl#parseParty 同口径）。
+     * 词表未覆盖的写法（如"2人/3人"）返回命中词本身，保守不臆造。
+     */
+    private static final Map<String, String> PARTY_CANONICAL = Map.ofEntries(
+            Map.entry("带小孩", "家庭"), Map.entry("带娃", "家庭"), Map.entry("亲子", "家庭"),
+            Map.entry("家庭", "家庭"), Map.entry("家人", "家庭"),
+            Map.entry("情侣", "情侣"), Map.entry("夫妻", "情侣"), Map.entry("两个人", "情侣"),
+            Map.entry("朋友", "朋友"), Map.entry("闺蜜", "朋友"), Map.entry("同事", "朋友"),
+            Map.entry("独行", "独行"), Map.entry("一个人", "独行"));
+
     // 兼容："预算3000元" / "预算3000" / "改成3000" / "预算是3000" / "3000元"
     // 数字部分兼容千分位（3,000）：[0-9]+(?:,[0-9]{3})*(?:\.[0-9]+)?
     private static final String NUM = "[0-9]+(?:,[0-9]{3})*(?:\\.[0-9]+)?";
@@ -95,11 +106,14 @@ public class SessionFactConsolidator {
             if (!"constraint".equals(type) && !"feedback".equals(type)) {
                 continue;
             }
-            Topic topic = detectTopic(String.valueOf(hit.getOrDefault("content", "")));
-            if (topic == null) {
-                continue;
+            String content = String.valueOf(hit.getOrDefault("content", ""));
+            // M28-10：多主题归属——一条陈述可同时携带多个主题（"同行人改成情侣，
+            // 天数改成5天"=PARTY+DAYS）。旧单主题 if-else 把它只归 DAYS，PARTY 信息
+            // 整条丢失，组内只剩最旧 constraint"独行"，连续多轮注入错误口径，
+            // 诱导图流 LLM 把同行人私改回独行（2026-09-07 21:12/21:14 实测日志实证）
+            for (Topic topic : detectTopics(content)) {
+                byTopic.computeIfAbsent(topic, k -> new ArrayList<>()).add(hit);
             }
-            byTopic.computeIfAbsent(topic, k -> new ArrayList<>()).add(hit);
         }
         List<ConsensusEntry> result = new ArrayList<>();
         for (Map.Entry<Topic, List<Map<String, Object>>> e : byTopic.entrySet()) {
@@ -135,31 +149,36 @@ public class SessionFactConsolidator {
         return sb.toString().trim();
     }
 
-    private Topic detectTopic(String content) {
+    /**
+     * M28-10：多主题归属——一条陈述可同时命中多个主题，各自独立成组参与
+     * "最新者胜"合并；无命中返回空列表（不注入，不影响其它主题）。
+     */
+    private List<Topic> detectTopics(String content) {
+        List<Topic> topics = new ArrayList<>();
         // 预算优先，但含"天/日"的天数类表达（如"天数改成4天"）不被预算正则误判
         boolean hasDayMarker = content.contains("天") || content.contains("日");
         if (content.contains("预算") || content.contains("元")
                 || (BUDGET_ANY.matcher(content).find() && !hasDayMarker)) {
-            return Topic.BUDGET;
+            topics.add(Topic.BUDGET);
         }
         if (DAYS_PATTERN.matcher(content).find()) {
-            return Topic.DAYS;
+            topics.add(Topic.DAYS);
         }
         if (content.contains("想去")
                 || containsAny(content, wordLists.getFact().getCities().stream()
                         .map(c -> "去" + c).toArray(String[]::new))) {
-            return Topic.DESTINATION;
+            topics.add(Topic.DESTINATION);
         }
         if (containsAny(content, wordLists.getFact().getPartyPatterns().toArray(new String[0]))) {
-            return Topic.PARTY;
+            topics.add(Topic.PARTY);
         }
         if (containsAny(content, wordLists.getFact().getStylePatterns().toArray(new String[0]))) {
-            return Topic.STYLE;
+            topics.add(Topic.STYLE);
         }
         if (content.contains("喜欢") || content.contains("爱好")) {
-            return Topic.INTEREST;
+            topics.add(Topic.INTEREST);
         }
-        return null;
+        return topics;
     }
 
     /**
@@ -204,8 +223,8 @@ public class SessionFactConsolidator {
         return best;
     }
 
-    /** 数字归一化（预算/天数），失败保留原文 */
-    private static String normalize(Topic topic, String content) {
+    /** 值归一化（预算/天数/目的地/同行人），失败保留原文 */
+    private String normalize(Topic topic, String content) {
         if (topic == Topic.BUDGET) {
             String num = budgetNumberOf(content);
             if (num != null) {
@@ -223,6 +242,22 @@ public class SessionFactConsolidator {
             Matcher m = DAYS_PATTERN.matcher(content);
             if (m.find()) {
                 return m.group(1) + "天";
+            }
+        }
+        // M28-10：目的地/同行人输出规范值——此前 PARTY 注入的是用户原句
+        // （"人数：同行人帮我设置为独行"），LLM 需自行解读，易被放大为错误操作
+        if (topic == Topic.DESTINATION) {
+            for (String city : wordLists.getFact().getCities()) {
+                if (content.contains(city)) {
+                    return city;
+                }
+            }
+        }
+        if (topic == Topic.PARTY) {
+            for (String p : wordLists.getFact().getPartyPatterns()) {
+                if (content.contains(p)) {
+                    return PARTY_CANONICAL.getOrDefault(p, p);
+                }
             }
         }
         return content;

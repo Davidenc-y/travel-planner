@@ -13,13 +13,15 @@ import {
   type PreferenceTags,
 } from '@/lib/schemas';
 
-/** M23c（E4）：偏好圆钮（锚定圆钮右侧同族）。 */
+/** M23c（E4）：偏好圆钮（锚定圆钮右侧同族）。M28-10：思考/流式期间锁定。 */
 export function PreferenceDotButton({
   active,
   onClick,
+  disabled,
 }: {
   active: boolean;
   onClick: () => void;
+  disabled?: boolean;
 }) {
   return (
     <button
@@ -27,7 +29,8 @@ export function PreferenceDotButton({
       aria-label="本轮偏好标签"
       title="本轮偏好标签"
       onClick={onClick}
-      className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full border transition-colors ${
+      disabled={disabled}
+      className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full border transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
         active ? 'border-brand bg-brand/10 text-brand' : 'border-line text-ink-faint hover:bg-surface-2'
       }`}
     >
@@ -40,9 +43,11 @@ export function PreferenceDotButton({
 export function PreferenceTagsRow({
   tags,
   onRemoveField,
+  disabled,
 }: {
   tags: PreferenceTags;
   onRemoveField: (key: string) => void;
+  disabled?: boolean;
 }) {
   const items = preferenceTagTexts(tags);
   if (items.length === 0) return null;
@@ -58,7 +63,8 @@ export function PreferenceTagsRow({
             type="button"
             aria-label={`移除偏好 ${text}`}
             onClick={() => onRemoveField(key)}
-            className="ml-0.5 hover:text-danger"
+            disabled={disabled}
+            className="ml-0.5 hover:text-danger disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:text-brand"
           >
             <X className="h-3 w-3" />
           </button>

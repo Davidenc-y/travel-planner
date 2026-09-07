@@ -112,6 +112,9 @@ function ChatContent() {
   const interruptedRef = useRef<Record<string, InterruptedTurn>>({});
   const activeTurnRef = useRef<{ sid: string; key: string; text: string } | null>(null);
   const stopRequestedRef = useRef(false);
+  // M28-10：phase 转变监听（离场轮次结束补拉）与"本实例轮次刚结束"标记
+  const prevPhaseRef = useRef<string | undefined>(undefined);
+  const ownTurnDoneRef = useRef(false);
   // B3/09 C-03/C-07：本轮执行耗时起点（success 时与 thinkingRef 一起生成 process）
   const turnStartRef = useRef<number>(0);
   // B3/09 C-04：消息镜像（regenerate 取最后一条 user 文本用，避免闭包过期）
@@ -237,10 +240,78 @@ function ChatContent() {
     chatStream.stopRevealForSwitch();
   }, [currentSessionId]);
 
-  // M6：组件卸载时取消在途流
-  useEffect(() => () => {
-    chatStream.dispose();
-  }, []);
+  // M28-10：路由切换（chat→itinerary 等）不再中断在途流——流状态已提升为
+  // 模块级 store（useChatStream），组件卸载仅取消订阅；仅浏览器刷新/关闭
+  // （连接随页面销毁）与用户主动停止会中断思考。
+  useEffect(() => {
+    if (!currentSessionId) return;
+    // ① 离场期间已完成的轮次：补收尾（历史由 loadHistory effect 重拉，此处补
+    //    偏好标签/锚定回读/询问卡/冲突卡/会话列表）
+    const away = chatStream.takeAwayResult(currentSessionId);
+    if (away && !away.handled) {
+      sessionList.loadSessions();
+      void anchor.load(currentSessionId);
+      if (away.preferenceSync) {
+        preference.setTags(currentSessionId,
+          mergePreferenceSync(preference.tagsOf(currentSessionId), away.preferenceSync));
+      }
+      if (away.suggestion?.type === 'ANCHOR_NEW_ITINERARY') {
+        setPendingSuggestion({ itineraryId: away.suggestion.itineraryId, title: away.suggestion.title });
+      }
+      if (away.preferenceConflict) {
+        setConflictNotice(away.preferenceConflict);
+      }
+    }
+    // ② 当前会话仍有在途流（离场时发起）→ 恢复发送锁定，防重复发送；
+    //    结束由下方 phase 监听解锁并补拉结果（发起实例的 setState 已随卸载失效）
+    const phase = chatStream.streamStates[currentSessionId]?.phase;
+    if (phase === 'thinking' || phase === 'streaming') {
+      sendingRef.current = true;
+      setSending(true);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentSessionId]);
+
+  // M28-10：在途流结束（流态清除）→ 解除离场轮次的发送锁定；若结束的是
+  // 离场发起的轮次（本实例 messages 为旧快照且消息 append 已失效），
+  // 补拉历史并消费离场结果。本实例自己发起的轮次由 handleSend 的
+  // finally 收尾（ownTurnDone 标记跳过，避免多余重拉丢 process 元数据）。
+  const streamPhase = currentSessionId
+    ? chatStream.streamStates[currentSessionId]?.phase : undefined;
+  useEffect(() => {
+    const wasActive = prevPhaseRef.current
+      && prevPhaseRef.current !== 'idle'
+      && (!streamPhase || streamPhase === 'idle')
+      && !activeTurnRef.current
+      && !ownTurnDoneRef.current;
+    if (wasActive) {
+      const sid = currentSessionRef.current;
+      if (sid) {
+        const away = chatStream.takeAwayResult(sid);
+        if (away && !away.handled) {
+          if (away.preferenceSync) {
+            preference.setTags(sid, mergePreferenceSync(preference.tagsOf(sid), away.preferenceSync));
+          }
+          if (away.suggestion?.type === 'ANCHOR_NEW_ITINERARY') {
+            setPendingSuggestion({ itineraryId: away.suggestion.itineraryId, title: away.suggestion.title });
+          }
+          if (away.preferenceConflict) {
+            setConflictNotice(away.preferenceConflict);
+          }
+        }
+        void loadHistory(sid);
+        sessionList.loadSessions();
+        void anchor.load(sid);
+      }
+    }
+    if ((!streamPhase || streamPhase === 'idle') && sendingRef.current && !activeTurnRef.current) {
+      sendingRef.current = false;
+      setSending(false);
+    }
+    ownTurnDoneRef.current = false;
+    prevPhaseRef.current = streamPhase;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [streamPhase]);
 
   // B3/PE-05（F-26）：onScroll 经 rAF 节流，避免高频 setState
   const scrollRafRef = useRef<number | null>(null);
@@ -423,6 +494,9 @@ function ChatContent() {
     }
     sendingRef.current = true;
     setSending(true);
+    // M28-10：本轮在途期间锁定约束类交互（锚定/偏好标签不可改），先收起面板
+    setAnchorPanelOpen(false);
+    setPrefPanelOpen(false);
     chatStream.setStreamState(sid!, (s) => ({
       ...s,
       phase: 'thinking',
@@ -522,6 +596,8 @@ function ChatContent() {
         }
       }
     } finally {
+      // M28-10：本实例轮次结束标记（phase 监听据此跳过离场补拉分支）
+      ownTurnDoneRef.current = true;
       sendingRef.current = false;
       setSending(false);
       chatStream.clearStream(sid!);
@@ -772,6 +848,7 @@ function ChatContent() {
                 count={anchorState.ids.length}
                 active={anchorState.ids.length > 0}
                 onClick={() => setAnchorPanelOpen((v) => !v)}
+                disabled={sending}
               />
               <AnchorPanel
                 open={anchorPanelOpen}
@@ -780,10 +857,12 @@ function ChatContent() {
                 onToggle={(id) => {
                   if (currentSessionId) void anchor.toggle(currentSessionId, id);
                 }}
+                disabled={sending}
               />
               <PreferenceDotButton
                 active={prefTagTexts > 0}
                 onClick={() => setPrefPanelOpen((v) => !v)}
+                disabled={sending}
               />
               <PreferencePanel
                 open={prefPanelOpen}
@@ -802,6 +881,7 @@ function ChatContent() {
               onRemove={(id) => {
                 if (currentSessionId) void anchor.toggle(currentSessionId, id);
               }}
+              disabled={sending}
             />
           }
           preferenceTags={
@@ -814,6 +894,7 @@ function ChatContent() {
                   preference.setTags(currentSessionId, next as typeof prefTags);
                 }
               }}
+              disabled={sending}
             />
           }
           textareaRef={textareaRef}

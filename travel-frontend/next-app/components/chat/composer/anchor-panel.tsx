@@ -11,14 +11,17 @@ import type { AnchorBrief } from '@/types';
  * <p>面板内仅提供"添加/移除锚定"（checkbox 语义）与只读预览，
  * 无任何编辑行程入口（§1.7 禁止编辑约束；行程内容变更唯一通道是 AI REFINE）。</p>
  */
+/** M28-10：思考/流式期间锁定（disabled）——防止本轮约束在途被改动造成口径不一致。 */
 export function AnchorDotButton({
   count,
   active,
   onClick,
+  disabled,
 }: {
   count: number;
   active: boolean;
   onClick: () => void;
+  disabled?: boolean;
 }) {
   return (
     <button
@@ -26,7 +29,8 @@ export function AnchorDotButton({
       aria-label={`锚定基准行程${count > 0 ? `（${count}）` : ''}`}
       title="锚定基准行程"
       onClick={onClick}
-      className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full border transition-colors ${
+      disabled={disabled}
+      className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full border transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
         active
           ? 'border-brand bg-brand/10 text-brand'
           : 'border-line text-ink-faint hover:bg-surface-2'
@@ -47,11 +51,13 @@ export function AnchorPanel({
   onClose,
   anchoredIds,
   onToggle,
+  disabled,
 }: {
   open: boolean;
   onClose: () => void;
   anchoredIds: number[];
   onToggle: (id: number) => void;
+  disabled?: boolean;
 }) {
   const { rows, loading, error, page, setPage, totalPages } = useAnchorPanel(open);
   if (!open) return null;
@@ -77,11 +83,12 @@ export function AnchorPanel({
           const checked = anchoredIds.includes(r.id);
           return (
             <li key={r.id}>
-              <label className="flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 hover:bg-surface-2">
+              <label className={`flex items-center gap-2 rounded-lg px-2 py-1.5 ${disabled ? 'cursor-not-allowed opacity-70' : 'cursor-pointer hover:bg-surface-2'}`}>
                 <input
                   type="checkbox"
                   checked={checked}
                   onChange={() => onToggle(r.id)}
+                  disabled={disabled}
                   className="h-4 w-4 accent-[var(--brand)]"
                 />
                 <span className="min-w-0 flex-1 truncate text-sm">{r.title}</span>
@@ -115,10 +122,12 @@ export function AnchorTags({
   briefs,
   ids,
   onRemove,
+  disabled,
 }: {
   briefs: Record<number, AnchorBrief>;
   ids: number[];
   onRemove: (id: number) => void;
+  disabled?: boolean;
 }) {
   if (ids.length === 0) return null;
   return (
@@ -136,7 +145,8 @@ export function AnchorTags({
               type="button"
               aria-label={`移除锚定 ${b?.title ?? id}`}
               onClick={() => onRemove(id)}
-              className="ml-0.5 hover:text-danger"
+              disabled={disabled}
+              className="ml-0.5 hover:text-danger disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:text-brand"
             >
               <X className="h-3 w-3" />
             </button>
