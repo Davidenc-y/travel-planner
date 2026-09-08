@@ -79,6 +79,19 @@ function MessageBubbleInner({ message, onRegenerate, onEditResend }: MessageBubb
   const [editing, setEditing] = useState(false);
   const [editText, setEditText] = useState(message.content);
 
+  // M28-15：系统提示消息（锚定切换等事件）——会话中央半透明小字，无气泡无操作
+  if (message.role === 'system') {
+    return (
+      <div className="flex items-center gap-3 py-1" aria-label="系统提示">
+        <span className="h-px flex-1 bg-line" />
+        <span className="max-w-[70%] truncate text-xs text-ink-faint/80" title={message.content}>
+          {message.content}
+        </span>
+        <span className="h-px flex-1 bg-line" />
+      </div>
+    );
+  }
+
   const startEdit = () => {
     setEditText(message.content);
     setEditing(true);

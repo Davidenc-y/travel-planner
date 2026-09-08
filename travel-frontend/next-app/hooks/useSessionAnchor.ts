@@ -28,6 +28,12 @@ export function useSessionAnchor(currentSessionId?: string | null) {
   const [anchors, setAnchors] = useState<Record<string, SessionAnchorState>>({});
   // M28-2：每会话 GET 代际——仅最新请求的响应可落状态
   const loadGenRef = useRef<Record<string, number>>({});
+  // M28-15：最新状态镜像（同步可读）——toggle/clear 在 setState 外读当前 ids，
+  // updater 保持纯函数。此前在 updater 内做副作用赋值（prevIds/next），dev 的
+  // React StrictMode 会双调用 updater：第二次把第一次刚勾入的项判为"已勾选"又
+  // 移除——勾选闪烁后被取消、PUT 永远发旧列表（"后续勾不上"根因）
+  const anchorsRef = useRef<Record<string, SessionAnchorState>>({});
+  anchorsRef.current = anchors;
 
   const stateOf = useCallback(
     (sid?: string | null): SessionAnchorState => (sid ? anchors[sid] ?? EMPTY : EMPTY),
@@ -56,17 +62,16 @@ export function useSessionAnchor(currentSessionId?: string | null) {
     }
   }, []);
 
-  /** 勾选/取消（多锚定 ≤3：勾选新项追加，再点同项=移除）。函数式读当前 ids，防陈旧闭包。 */
+  /** 勾选/取消（多锚定 ≤3：勾选新项追加，再点同项=移除）。M28-15：ref 读当前 ids。 */
   const toggle = useCallback(async (sid: string, id: number) => {
-    let prevIds: number[] = [];
-    let next: number[] = [];
-    setAnchors((prev) => {
-      prevIds = prev[sid]?.ids ?? [];
-      next = prevIds.includes(id)
-        ? prevIds.filter((x) => x !== id)
-        : [id, ...prevIds.filter((x) => x !== id)].slice(0, 3);
-      return { ...prev, [sid]: { ...(prev[sid] ?? EMPTY), ids: next } };
-    });
+    const prevIds = anchorsRef.current[sid]?.ids ?? [];
+    const next = prevIds.includes(id)
+      ? prevIds.filter((x) => x !== id)
+      : [id, ...prevIds.filter((x) => x !== id)].slice(0, 3);
+    setAnchors((prev) => ({
+      ...prev,
+      [sid]: { ...(prev[sid] ?? EMPTY), ids: next },
+    }));
     try {
       const res = await anchorApi.replaceAnchors(sid, next);
       const effective = res.data.data ?? next;
@@ -94,11 +99,11 @@ export function useSessionAnchor(currentSessionId?: string | null) {
 
   /** M27（S6）：清空会话锚定（偏好-锚定冲突卡"按偏好规划"动作；乐观更新失败回滚）。 */
   const clear = useCallback(async (sid: string) => {
-    let prevIds: number[] = [];
-    setAnchors((prev) => {
-      prevIds = prev[sid]?.ids ?? [];
-      return { ...prev, [sid]: { ...(prev[sid] ?? EMPTY), ids: [] } };
-    });
+    const prevIds = anchorsRef.current[sid]?.ids ?? [];
+    setAnchors((prev) => ({
+      ...prev,
+      [sid]: { ...(prev[sid] ?? EMPTY), ids: [] },
+    }));
     try {
       await anchorApi.replaceAnchors(sid, []);
       loadGenRef.current[sid] = (loadGenRef.current[sid] ?? 0) + 1;

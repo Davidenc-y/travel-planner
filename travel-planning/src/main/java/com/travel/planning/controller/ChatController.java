@@ -41,6 +41,8 @@ import java.util.Map;
 public class ChatController {
 
     private final ChatService chatService;
+    /** M28-15：系统提示消息落库（t_chat_message 唯一直连类） */
+    private final com.travel.planning.memory.sessionstore.SessionStoreServiceImpl sessionStoreService;
     private final ChatStreamService chatStreamService;
     private final SseStreamAdapter sseStreamAdapter;
     private final ChatStreamProperties chatStreamProps;
@@ -84,6 +86,30 @@ public class ChatController {
     /**
      * M5-1：更新会话标题（前端双击编辑保存；空/超长/越权由服务校验）
      */
+    /**
+     * M28-15：系统提示消息（锚定切换等前端事件落库——会话内永久可见的中央小字，
+     * 与用户/AI 消息同存于 history；归属校验同会话操作）。
+     */
+    @PostMapping("/sessions/{sessionId}/system-note")
+    public R<Void> appendSystemNote(@PathVariable String sessionId,
+                                    @RequestBody java.util.Map<String, String> body) {
+        Long userId = AuthUtils.resolveUserId();
+        var session = sessionStoreService.findBySessionId(sessionId);
+        if (session == null) {
+            throw new com.travel.common.exception.BusinessException(40402, "会话不存在");
+        }
+        if (!userId.equals(session.getUserId())) {
+            throw new com.travel.common.exception.BusinessException(40302, "无权访问该会话");
+        }
+        String content = body.get("content");
+        if (content == null || content.isBlank() || content.length() > 200) {
+            throw new com.travel.common.exception.BusinessException(40001, "提示内容为空或超长（≤200）");
+        }
+        sessionStoreService.appendMessage(sessionId,
+                com.travel.common.enums.ChatRole.SYSTEM, content.trim(), null);
+        return R.ok(null);
+    }
+
     @PutMapping("/sessions/{sessionId}/title")
     public R<Void> updateTitle(@PathVariable String sessionId,
                                @RequestBody Map<String, String> body) {

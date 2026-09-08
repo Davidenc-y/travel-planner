@@ -287,6 +287,9 @@ export const chatApi = {
       ...(preferences && Object.keys(preferences).length > 0 ? { preferences } : {}),
     }),
   /** M4-9：显式关闭会话（归档+收口摘要；禁止 beforeunload 触发） */
+  /** M28-15：系统提示消息落库（锚定切换等事件，会话内中央小字持久显示） */
+  appendSystemNote: (sessionId: string, content: string) =>
+    planningApi.post<R<void>>(`/api/v1/chat/sessions/${sessionId}/system-note`, { content }),
   closeSession: (sessionId: string) =>
     planningApi.post<R<{ archived: boolean; finalized: boolean }>>(`/api/v1/chat/sessions/${sessionId}/close`),
   /** M5-1：更新会话标题（双击编辑保存） */

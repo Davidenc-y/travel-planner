@@ -624,6 +624,9 @@ public class ChatService implements ChatStreamExecutor {
                                 || (ps.interests() != null && !ps.interests().isEmpty()))
                         .orElse(null);
             }
+            // M28-15：done 回写载荷取证（与"本轮偏好标签"日志成对——两行即可定位
+            // 断点在"前端未发"还是"回写未生成"还是"前端未消费"）
+            log.info("[ChatPreference] 回写载荷: {}", preferenceSync);
             return new ChatStreamExecutor.ChatStreamResult(
                     response, aiTokens, routed.fallback(),
                     assistantMessageId, prepared.sessionTitle(),

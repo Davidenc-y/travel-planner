@@ -46,6 +46,21 @@ export function useSessionPreference(currentSessionId?: string | null) {
     [update],
   );
 
+  /**
+   * M28-15：基于最新存储值的合并写入（供异步回调使用——闭包里的旧 tags 再展开
+   * 会覆盖并发写入；patch 收到的是最新值）。
+   */
+  const mergeTags = useCallback(
+    (sid: string, patch: (prev: PreferenceTags) => PreferenceTags) => {
+      setPrefs((prev) => {
+        const next = { ...prev, [sid]: patch(prev[sid] ?? {}) };
+        persist(next);
+        return next;
+      });
+    },
+    [persist],
+  );
+
   const clear = useCallback(
     (sid: string) => {
       update(sid, {});
@@ -58,5 +73,5 @@ export function useSessionPreference(currentSessionId?: string | null) {
     [prefs],
   );
 
-  return { tagsOf, setTags, clear };
+  return { tagsOf, setTags, mergeTags, clear };
 }

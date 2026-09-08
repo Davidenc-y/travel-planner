@@ -201,12 +201,10 @@ function ChatContent() {
   const effectiveAnchorBriefs = currentSessionId
     ? anchorState.briefs : draftAnchorBriefs as never;
 
-  // M28-14：锚定基准变化中央提示（半透明小字，5s 自动淡出）——
-  // 单锚替换显示"已从行程X切换到行程Y"；增/删显示锚定/取消；自动锚定（done 后
-  // 回读）同样可见。首帧与服务话切换不提示。
-  const [anchorNotice, setAnchorNotice] = useState<string | null>(null);
+  // M28-15：锚定基准变化 → 会话内系统提示消息（落库 t_chat_message role=system，
+  // 像一条消息永久显示在会话中央，半透明小字——替代 M28-14 的悬浮条）。
+  // 单锚替换="已从行程X切换到行程Y"；增/删=锚定/取消；自动锚定同样落一条。
   const prevAnchorIdsRef = useRef<number[] | null>(null);
-  const anchorNoticeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
     const prev = prevAnchorIdsRef.current;
     prevAnchorIdsRef.current = effectiveAnchorIds;
@@ -214,6 +212,8 @@ function ChatContent() {
     const added = effectiveAnchorIds.filter((x) => !prev.includes(x));
     const removed = prev.filter((x) => !effectiveAnchorIds.includes(x));
     if (added.length === 0 && removed.length === 0) return;
+    const sid = currentSessionRef.current;
+    if (!sid) return; // 草稿态暂不落库（首条消息后自然有自动锚定提示）
     const titleOf = (id: number) =>
       (effectiveAnchorBriefs as Record<number, { id: number; title?: string }>)?.[id]?.title
       ?? (anchorState.briefs as Record<number, { title?: string }>)?.[id]?.title
@@ -228,15 +228,22 @@ function ChatContent() {
     } else {
       text = `锚定基准已更新（新增 ${added.length}、取消 ${removed.length}）`;
     }
-    setAnchorNotice(text);
-    if (anchorNoticeTimerRef.current) clearTimeout(anchorNoticeTimerRef.current);
-    anchorNoticeTimerRef.current = setTimeout(() => setAnchorNotice(null), 5000);
+    // 本地即时插入 + 后端落库（历史接口返回后刷新仍在）
+    setMessages((prev) => [...prev, {
+      sessionId: sid,
+      role: 'system',
+      content: text,
+      createdAt: new Date().toISOString(),
+      localKey: `sys-${crypto.randomUUID()}`,
+    } as ChatMessage]);
+    chatApi.appendSystemNote(sid, text).catch(() => { /* 落库失败不阻断（本地仍可见） */ });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [effectiveAnchorIds]);
 
   /**
-   * M28-13：勾选锚定行程 → 拉行程详情自动填充本轮偏好标签（空值保留用户已设项；
-   * "锚定=基准"心智：基准行程的约束直接成为本轮起点）。新会话草稿与已建会话统一。
+   * M28-13/M28-15：勾选锚定行程 → 拉行程详情自动填充本轮偏好标签（空值保留用户
+   * 已设项）。异步回调用 currentSessionRef 取当下键 + mergeTags 基于最新值合并
+   * （闭包里的 prefDraftKey/prefTags 在等待期间可能已过期——会话创建/其他写入）。
    */
   const fillPreferenceFromItinerary = (id: number, checked: boolean) => {
     if (!checked) return;
@@ -244,18 +251,19 @@ function ChatContent() {
       .then((res) => {
         const d = res.data.data;
         if (!d) return;
-        preference.setTags(prefDraftKey, {
-          ...prefTags,
-          destination: d.destination ?? prefTags.destination,
-          days: d.days ?? prefTags.days,
-          budget: d.budget ?? prefTags.budget,
+        const key = currentSessionRef.current ?? '__new__';
+        preference.mergeTags(key, (prev) => ({
+          ...prev,
+          destination: d.destination ?? prev.destination,
+          days: d.days ?? prev.days,
+          budget: d.budget ?? prev.budget,
           // 后端词表与 PARTY_OPTIONS/INTEREST_OPTIONS 同源（parseParty/parseInterests）
-          party: (d.party as typeof prefTags.party) ?? prefTags.party,
-          interests: (d.interests as typeof prefTags.interests)?.length
-            ? (d.interests as typeof prefTags.interests)
-            : prefTags.interests,
-          startDate: d.startDate ?? prefTags.startDate,
-        });
+          party: (d.party as typeof prev.party) ?? prev.party,
+          interests: (d.interests as typeof prev.interests)?.length
+            ? (d.interests as typeof prev.interests)
+            : prev.interests,
+          startDate: d.startDate ?? prev.startDate,
+        }));
         setDraftAnchorBriefs((prev) => ({ ...prev, [id]: { id, title: d.title } }));
       })
       .catch(() => { /* 填充失败不影响勾选本身 */ });
@@ -843,12 +851,6 @@ function ChatContent() {
         />
 
         <div className="relative flex-1 overflow-hidden">
-          {/* M28-14：锚定基准变化提示（中央半透明小字，5s 自动消失） */}
-          {anchorNotice && (
-            <div className="pointer-events-none absolute left-1/2 top-3 z-20 -translate-x-1/2 truncate rounded-full bg-surface/80 px-3 py-1 text-xs text-ink-faint shadow-1 backdrop-blur-sm animate-rise">
-              {anchorNotice}
-            </div>
-          )}
           <div
             ref={scrollRef}
             onScroll={updateNearBottom}
