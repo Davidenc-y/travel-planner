@@ -174,11 +174,28 @@ public class ChatService implements ChatStreamExecutor {
         return prepareStream(userId, sessionId, message, clientMessageId, model, java.util.List.of());
     }
 
-    /** M23（E1）：六参实现——消息内锚定快照经 prepared 贯穿 runStream（per-turn truth）。 */
+    /** M23（E1）：六参实现委托七参（无偏好）——既有调用点零破坏。 */
     @Override
     public ChatStreamExecutor.ChatStreamPrepared prepareStream(
             Long userId, String sessionId, String message, String clientMessageId, String model,
             java.util.List<Long> anchorIds) {
+        return prepareStream(userId, sessionId, message, clientMessageId, model, anchorIds, null);
+    }
+
+    /**
+     * M23b/M28-17：七参实现——偏好标签经 prepared 贯穿 runStream。
+     *
+     * <p>M28-17 定案：此前 ChatService 只实现六参，接口的七参 default 方法
+     * 委托六参时<b>静默丢弃 preferences</b>，prepared.preferences() 恒 null——
+     * 两端控制器（MVC/webflux，M28-12）的透传全部白接，图流输入永远没有
+     * 【本轮偏好约束】段（2026-09-08 浏览器抓包 body 携带 preferences 而
+     * 日志"(未携带)"的实证断点）。</p>
+     */
+    @Override
+    public ChatStreamExecutor.ChatStreamPrepared prepareStream(
+            Long userId, String sessionId, String message, String clientMessageId, String model,
+            java.util.List<Long> anchorIds,
+            com.travel.common.dto.PreferenceTagsDTO preferences) {
         if (anchorIds == null) {
             anchorIds = java.util.List.of();
         }
@@ -237,7 +254,8 @@ public class ChatService implements ChatStreamExecutor {
             }
         }
         return new ChatStreamExecutor.ChatStreamPrepared(
-                sessionId, message, userId, clientMessageId, gate, updatedSessionTitle, model, anchorIds);
+                sessionId, message, userId, clientMessageId, gate, updatedSessionTitle, model,
+                anchorIds, preferences);
     }
 
     /** M7 D6：未知/禁用/不可选模型 → 40005，不静默回退。 */

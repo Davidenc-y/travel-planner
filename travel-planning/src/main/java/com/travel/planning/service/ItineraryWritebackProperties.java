@@ -22,11 +22,11 @@ public class ItineraryWritebackProperties {
     private String daysDigit = "(\\d{1,2})\\s*(?:日游|天)";
 
     /** 天数（中文数字） */
-    private String daysCn = "(?<![第])([一二三四五六七八九十]+)\\s*(?:日游|天)";
+    private String daysCn = "(?<![第])([一二两三四五六七八九十]+)\\s*(?:日游|天)";
 
     /** 目的地：规划式（规划/安排/推荐/设计…N日游） */
     private String destPlan = "(?:规划|安排|推荐|设计)(?:一下|一个|一次)?\\s*([\\u4e00-\\u9fa5]{2,10}?)"
-            + "\\s*(?:的)?(?:\\d{1,2}|[一二三四五六七八九十]+)\\s*(?:日游|天)";
+            + "\\s*(?:的)?(?:\\d{1,2}|[一二两三四五六七八九十]+)\\s*(?:日游|天)";
 
     /** 目的地：去向式（去/到…玩/旅游…） */
     private String destGo = "(?:去|到)([\\u4e00-\\u9fa5]{2,10}?)"
@@ -34,7 +34,7 @@ public class ItineraryWritebackProperties {
 
     /** 目的地：句首式（成都3日游） */
     private String destLeading = "^([\\u4e00-\\u9fa5]{2,10}?)\\s*(?:的)?"
-            + "(?:\\d{1,2}|[一二三四五六七八九十]+)\\s*(?:日游|天)";
+            + "(?:\\d{1,2}|[一二两三四五六七八九十]+)\\s*(?:日游|天)";
 
     /** 预算 */
     private String budget = "预算\\s*(?:约)?\\s*(\\d+(?:\\.\\d+)?)";
@@ -172,7 +172,7 @@ public class ItineraryWritebackProperties {
         for (char ch : chars) {
             int v = switch (ch) {
                 case '一' -> 1;
-                case '二' -> 2;
+                case '二', '两' -> 2;
                 case '三' -> 3;
                 case '四' -> 4;
                 case '五' -> 5;
