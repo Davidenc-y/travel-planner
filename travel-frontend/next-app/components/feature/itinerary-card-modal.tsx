@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import { MapPin, Calendar, DollarSign, Clock } from 'lucide-react';
+import { MapPin, Calendar, DollarSign, Clock , Users, Heart} from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
 import { encodeItineraryId } from '@/lib/url-guard';
@@ -171,6 +171,20 @@ export function ItineraryCardModal({ itineraryId, onClose, originRect }: Props) 
                 <p className="text-xs text-slate-400">天数</p>
                 <p className="font-medium">{data.days} 天</p>
               </div>
+              {data.party && (
+                <div className="rounded-lg bg-slate-50 dark:bg-slate-800/50 p-3">
+                  <Users className="h-4 w-4 text-brand-500 mb-1" />
+                  <p className="text-xs text-slate-400">同行人</p>
+                  <p className="font-medium">{data.party}</p>
+                </div>
+              )}
+              {data.interests && data.interests.length > 0 && (
+                <div className="rounded-lg bg-slate-50 dark:bg-slate-800/50 p-3">
+                  <Heart className="h-4 w-4 text-brand-500 mb-1" />
+                  <p className="text-xs text-slate-400">兴趣</p>
+                  <p className="font-medium truncate" title={data.interests.join('、')}>{data.interests.join('、')}</p>
+                </div>
+              )}
               <div className="rounded-lg bg-slate-50 dark:bg-slate-800/50 p-3">
                 <DollarSign className="h-4 w-4 text-brand-500 mb-1" />
                 <p className="text-xs text-slate-400">预算</p>

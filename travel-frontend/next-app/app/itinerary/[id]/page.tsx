@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
-import { Share2 } from 'lucide-react';
+import { Share2 , Users, Heart} from 'lucide-react';
 import { toast } from 'sonner';
 import { ArrowLeft, MapPin, Calendar, DollarSign, Clock, Maximize2, Copy, History } from 'lucide-react';
 import { decodeItineraryId } from '@/lib/url-guard';
@@ -206,8 +206,8 @@ function ItineraryDetailContent() {
         </div>
       </div>
 
-      {/* 基本信息（print 友好：grid 保持） */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
+      {/* 基本信息（print 友好：grid 保持；M28-12 增同行人/兴趣） */}
+      <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3 mb-6">
         <div className="card p-3">
           <MapPin className="h-4 w-4 text-brand-500 mb-1" />
           <p className="text-xs text-ink-faint">目的地</p>
@@ -218,6 +218,20 @@ function ItineraryDetailContent() {
           <p className="text-xs text-ink-faint">天数</p>
           <p className="font-medium">{data.days} 天</p>
         </div>
+        {data.party && (
+          <div className="card p-3">
+            <Users className="h-4 w-4 text-brand-500 mb-1" />
+            <p className="text-xs text-ink-faint">同行人</p>
+            <p className="font-medium">{data.party}</p>
+          </div>
+        )}
+        {data.interests && data.interests.length > 0 && (
+          <div className="card p-3">
+            <Heart className="h-4 w-4 text-brand-500 mb-1" />
+            <p className="text-xs text-ink-faint">兴趣</p>
+            <p className="font-medium">{data.interests.join('、')}</p>
+          </div>
+        )}
         <div className="card p-3">
           <DollarSign className="h-4 w-4 text-brand-500 mb-1" />
           <p className="text-xs text-ink-faint">估算费用</p>

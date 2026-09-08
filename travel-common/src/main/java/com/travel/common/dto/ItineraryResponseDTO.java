@@ -27,6 +27,9 @@ public class ItineraryResponseDTO {
     /** M28-6：出发日期（yyyy-MM-dd；约束列） */
     private String startDate;
     private String destination;
+    /** M28-12：同行人（t_itinerary.party）与兴趣（interests JSON 数组解析），详情页展示。 */
+    private String party;
+    private java.util.List<String> interests;
     private Integer days;
     /** M15-4：当前启用的版本号（版本切换不再递增；供前端高亮“当前使用”） */
     private Integer version;

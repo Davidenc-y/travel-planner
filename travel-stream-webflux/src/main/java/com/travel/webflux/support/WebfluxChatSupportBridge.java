@@ -67,6 +67,14 @@ public class WebfluxChatSupportBridge implements ItineraryBriefPort, ChatWeather
                     attractions.add(name);
                 }
             });
+            // M28-12：interests（chat-brief 载荷新增字段；旧 planning 未返回时为空列表）
+            java.util.ArrayList<String> interests = new java.util.ArrayList<>();
+            data.path("interests").forEach(n -> {
+                String i = n.asText(null);
+                if (i != null && !i.isBlank()) {
+                    interests.add(i);
+                }
+            });
             return Optional.of(new ItineraryBrief(
                     data.path("id").asLong(),
                     data.path("title").asText(null),
@@ -75,6 +83,7 @@ public class WebfluxChatSupportBridge implements ItineraryBriefPort, ChatWeather
                     data.path("startDate").isTextual() ? data.path("startDate").asText(null) : null,
                     data.path("budget").isTextual() ? data.path("budget").asText(null) : null,
                     data.path("party").isTextual() ? data.path("party").asText(null) : null,
+                    interests,
                     data.path("version").isNumber() ? data.path("version").asInt() : null,
                     attractions));
         } catch (Exception e) {

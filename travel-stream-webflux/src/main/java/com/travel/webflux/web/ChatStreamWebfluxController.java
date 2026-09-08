@@ -61,10 +61,20 @@ public class ChatStreamWebfluxController {
         String message = body.getMessage();
         String clientMessageId = body.getClientMessageId();
         String model = body.getModel();
+        // M28-12：偏好标签/锚定快照透传（与 MVC ChatController.streamMessage 对齐——
+        // 此前 webflux 桥只放 model，前端 NEXT_PUBLIC_STREAM_BASE=8083 时面板设置静默失效）
+        Map<String, Object> attrs = new java.util.HashMap<>();
+        if (model != null && !model.isBlank()) {
+            attrs.put("model", model);
+        }
+        if (body.getAnchoredItineraryIds() != null && !body.getAnchoredItineraryIds().isEmpty()) {
+            attrs.put("anchorIds", body.getAnchoredItineraryIds());
+        }
+        if (body.getPreferences() != null) {
+            attrs.put("preferences", body.getPreferences());
+        }
         StreamRequest request = new StreamRequest("chat", userId, sessionId,
-                message, clientMessageId,
-                model != null && !model.isBlank() ? Map.of("model", model) : Map.of(),
-                lastEventId);
+                message, clientMessageId, attrs, lastEventId);
         StreamPreflight preflight = chatStreamService.preflight(request);
         if (!preflight.ok()) {
             throw new BusinessException(preflight.code(), preflight.message());

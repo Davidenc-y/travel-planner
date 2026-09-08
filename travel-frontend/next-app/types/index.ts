@@ -63,6 +63,8 @@ export interface ItineraryResponse {
   estimatedCost?: number;
   mindmap?: MindmapData;
   generatedAt?: string;
+  /** M28-12：兴趣（后端 interests JSON 数组解析；party 字段上方已有） */
+  interests?: string[];
   /** M4-9：行程状态（GENERATING/FAILED/GENERATED…） */
   status?: string;
   /** M6-52：是否可继续生成（FAILED 或僵尸 GENERATING） */

@@ -8,7 +8,9 @@ import java.util.List;
  * <p>由 planning 侧 {@code ItineraryBriefPortImpl} 从 t_itinerary 装配；
  * 渲染硬预算：attractions 名单截断 {@code travel.chat.anchor.brief-max-attractions=12}。
  * M28-3：新增 startDate（出发日期，取 t_itinerary.start_date——聊天创建/改签时
- * 从 routePlan 首日日期提取），供 preferenceSync 同步偏好标签"出发日期"。</p>
+ * 从 routePlan 首日日期提取），供 preferenceSync 同步偏好标签"出发日期"。
+ * M28-12：新增 interests（兴趣，取 t_itinerary.interests JSON 数组文本），供
+ * preferenceSync 同步偏好标签"兴趣"。</p>
  */
 public record ItineraryBrief(
         Long id,
@@ -18,6 +20,7 @@ public record ItineraryBrief(
         String startDate,
         String budget,
         String party,
+        List<String> interests,
         Integer version,
         List<String> attractionNames) {
 }

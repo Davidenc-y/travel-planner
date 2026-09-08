@@ -150,7 +150,9 @@ public class ItineraryVersionPortImpl implements ItineraryVersionPort {
         // M26-F1：用本轮确定性解析更新约束列（预算改成 5000 → t_itinerary.budget=5000；
         // 天数变更同理；未提及的字段保持原值）——行程详情页预算展示与偏好回写的数据源
         // M28-3：出发日期改从 routePlan 首日提取（"从9月20日开始"→LLM 输出首日 2026-09-20）
-        applyRefinedConstraints(current, refineBudget, refineDays, refineStart, refineParty);
+        // M28-12：兴趣确定性解析（"多安排美食和亲子项目"→["美食","亲子"]；未提及 null 不覆盖）
+        applyRefinedConstraints(current, refineBudget, refineDays, refineStart, refineParty,
+                parseInterests(userInput));
         sliceWriter.writeAfterGenerated(sessionId, current.getId(), merged.content());
         log.info("[ItineraryWriteback] REFINE 回写完成: itineraryId={}, sessionId={}",
                 current.getId(), sessionId);
@@ -172,6 +174,11 @@ public class ItineraryVersionPortImpl implements ItineraryVersionPort {
         entity.setDestination(destination);
         entity.setDays(days);
         entity.setBudget(parseBudget(userInput));
+        // M28-12：首版建程解析兴趣（JSON 数组文本，与 /plan 表单路径同格式）
+        List<String> interests = parseInterests(userInput);
+        if (interests != null) {
+            entity.setInterests(JsonUtils.toJson(interests));
+        }
         // M28-9：同行人同确定性解析（"和家人去成都"→家庭；未提及 null）
         entity.setParty(parseParty(userInput));
         // M28-3：出发日期取 routePlan 首日（与 /plan 表单路径对齐，start_date 列不再恒空）
@@ -205,12 +212,20 @@ public class ItineraryVersionPortImpl implements ItineraryVersionPort {
      */
     private void applyRefinedConstraints(Itinerary current, String userInput, String routePlanJson) {
         applyRefinedConstraints(current, parseBudget(userInput), parseDays(userInput),
-                extractStartDate(routePlanJson), parseParty(userInput));
+                extractStartDate(routePlanJson), parseParty(userInput),
+                parseInterests(userInput));
     }
 
     /** M28-7：约束值由调用方解析传入（refine 复用同一份解析结果）。 */
     private void applyRefinedConstraints(Itinerary current,
             java.math.BigDecimal newBudget, Integer newDays, String newStart, String newParty) {
+        applyRefinedConstraints(current, newBudget, newDays, newStart, newParty, null);
+    }
+
+    /** M28-12：增加 interests 约束列（与 budget/days/start/party 同款定向更新）。 */
+    private void applyRefinedConstraints(Itinerary current,
+            java.math.BigDecimal newBudget, Integer newDays, String newStart, String newParty,
+            List<String> newInterests) {
         try {
             boolean partyChanged = newParty != null && !newParty.isBlank()
                     && !newParty.equals(current.getParty());
@@ -219,7 +234,11 @@ public class ItineraryVersionPortImpl implements ItineraryVersionPort {
             boolean daysChanged = newDays != null && newDays > 0
                     && !newDays.equals(current.getDays());
             boolean startChanged = newStart != null && !newStart.equals(current.getStartDate());
-            if (!budgetChanged && !daysChanged && !startChanged && !partyChanged) {
+            String newInterestsJson = newInterests == null || newInterests.isEmpty()
+                    ? null : JsonUtils.toJson(newInterests);
+            boolean interestsChanged = newInterestsJson != null
+                    && !newInterestsJson.equals(current.getInterests());
+            if (!budgetChanged && !daysChanged && !startChanged && !partyChanged && !interestsChanged) {
                 return;
             }
             com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper<Itinerary> uw =
@@ -241,13 +260,18 @@ public class ItineraryVersionPortImpl implements ItineraryVersionPort {
                 uw.set("party", newParty);
                 current.setParty(newParty);
             }
+            if (interestsChanged) {
+                uw.set("interests", newInterestsJson);
+                current.setInterests(newInterestsJson);
+            }
             itineraryMapper.update(null, uw);
-            log.info("[ItineraryWriteback] 约束列已更新: itineraryId={}, budget={}, days={}, startDate={}, party={}",
+            log.info("[ItineraryWriteback] 约束列已更新: itineraryId={}, budget={}, days={}, startDate={}, party={}, interests={}",
                     current.getId(),
                     budgetChanged ? newBudget.toPlainString() : "(unchanged)",
                     daysChanged ? newDays : "(unchanged)",
                     startChanged ? newStart : "(unchanged)",
-                    partyChanged ? newParty : "(unchanged)");
+                    partyChanged ? newParty : "(unchanged)",
+                    interestsChanged ? newInterestsJson : "(unchanged)");
         } catch (Exception e) {
             log.warn("[ItineraryWriteback] 约束列更新失败（不阻断回写）: id={}, error={}",
                     current.getId(), e.getMessage());
@@ -325,6 +349,23 @@ public class ItineraryVersionPortImpl implements ItineraryVersionPort {
             java.util.Map.entry("朋友", "朋友"), java.util.Map.entry("闺蜜", "朋友"),
             java.util.Map.entry("同事", "朋友"),
             java.util.Map.entry("独行", "独行"), java.util.Map.entry("一个人", "独行"));
+
+    /**
+     * M28-12：从用户显式输入解析兴趣（词表与前端 INTEREST_OPTIONS 同款：文化/自然/
+     * 美食/购物/亲子/休闲；"历史/爬山"等画像词不在此列，不臆造映射）。未提及返回 null。
+     */
+    static List<String> parseInterests(String input) {
+        if (input == null || input.isBlank()) {
+            return null;
+        }
+        List<String> hits = new java.util.ArrayList<>();
+        for (String interest : new String[]{"文化", "自然", "美食", "购物", "亲子", "休闲"}) {
+            if (input.contains(interest) && !hits.contains(interest)) {
+                hits.add(interest);
+            }
+        }
+        return hits.isEmpty() ? null : hits;
+    }
 
     /**
      * M28-3：从 routePlan JSON 提取首日出发日期（yyyy-MM-dd）。

@@ -63,12 +63,15 @@ public class ItineraryDtoAssembler {
                 .version(entity.getVersion())
                 .sessionId(entity.getSessionId())
                 .startDate(entity.getStartDate())
+                // M28-12：同行人/兴趣（详情页基本信息展示；interests 列为 JSON 数组文本）
+                .party(entity.getParty())
+                .interests(parseInterestsColumn(entity.getInterests()))
                 .generatedAt(entity.getCreatedAt() != null ? entity.getCreatedAt().toString() : null)
                 .status(entity.getStatus())
                 .resumable(resumable)
                 .build();
 
-        // 解析 content JSON → dayPlans + budgetBreakdown
+    // 解析 content JSON → dayPlans + budgetBreakdown
         if (entity.getContent() != null && !entity.getContent().isBlank()) {
             try {
                 Map<String, Object> content = JsonUtils.fromJson(entity.getContent(), Map.class);
@@ -100,6 +103,22 @@ public class ItineraryDtoAssembler {
         }
 
         return dto;
+    }
+
+    /** M28-12：interests 列（JSON 数组文本）容错解析；空/损坏返回 null。 */
+    private java.util.List<String> parseInterestsColumn(String interestsJson) {
+        if (interestsJson == null || interestsJson.isBlank()) {
+            return null;
+        }
+        try {
+            java.util.List<?> list = JsonUtils.fromJson(interestsJson, java.util.List.class);
+            if (list == null) {
+                return null;
+            }
+            return list.stream().map(String::valueOf).filter(s -> !s.isBlank()).toList();
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     /** 将 content.budgetEstimate（Map）解析为 BudgetBreakdown；异常按 null 容错。 */

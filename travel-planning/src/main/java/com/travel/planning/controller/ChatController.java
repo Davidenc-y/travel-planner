@@ -126,10 +126,21 @@ public class ChatController {
         String message = body.getMessage();
         String clientMessageId = body.getClientMessageId();
         String model = body.getModel();
+        // M28-12：偏好标签/锚定快照透传——此前流式链路只放 model，body 的
+        // preferences/anchoredItineraryIds 被丢弃（ChatStreamService 读不到，
+        // 面板设置与消息内锚定在流式路径静默失效）
+        Map<String, Object> attrs = new java.util.HashMap<>();
+        if (model != null && !model.isBlank()) {
+            attrs.put("model", model);
+        }
+        if (body.getAnchoredItineraryIds() != null && !body.getAnchoredItineraryIds().isEmpty()) {
+            attrs.put("anchorIds", body.getAnchoredItineraryIds());
+        }
+        if (body.getPreferences() != null) {
+            attrs.put("preferences", body.getPreferences());
+        }
         StreamRequest request = new StreamRequest("chat", userId, sessionId,
-                message, clientMessageId,
-                model != null && !model.isBlank() ? Map.of("model", model) : Map.of(),
-                lastEventId);
+                message, clientMessageId, attrs, lastEventId);
         StreamPreflight preflight = chatStreamService.preflight(request);
         if (!preflight.ok()) {
             return ResponseEntity.status(StreamErrorMapper.httpStatus(preflight.code()))

@@ -61,10 +61,15 @@ public class ChatStreamService extends AbstractStreamingPipeline {
         }
     }
 
-    /** M23b（E4）：从 StreamRequest.attributes 读取偏好标签（Map→DTO， Jackson 容错）。 */
+    /** M23b（E4）：从 StreamRequest.attributes 读取偏好标签（DTO 直传或 Map→DTO， Jackson 容错）。 */
     @SuppressWarnings("unchecked")
     private static com.travel.common.dto.PreferenceTagsDTO preferencesOf(StreamRequest request) {
         Object prefs = request.attributes().get("preferences");
+        // M28-12：控制器直传 body 反序列化产物（PreferenceTagsDTO）——此前两端流式
+        // 控制器均只放 model，preferences/anchorIds 无生产方，面板设置静默失效
+        if (prefs instanceof com.travel.common.dto.PreferenceTagsDTO dto) {
+            return dto;
+        }
         if (prefs instanceof Map<?, ?> map) {
             try {
                 return new com.fasterxml.jackson.databind.ObjectMapper()

@@ -48,8 +48,32 @@ public class ItineraryBriefPortImpl implements ItineraryBriefPort {
                 entity.getStartDate(),
                 entity.getBudget() == null ? null : entity.getBudget().toPlainString(),
                 entity.getParty(),
+                parseInterestsColumn(entity.getInterests()),
                 entity.getVersion(),
                 extractAttractionNames(entity.getContent())));
+    }
+
+    /** M28-12：interests 列（JSON 数组文本，如 ["文化","自然"]）容错解析为列表。 */
+    private List<String> parseInterestsColumn(String interestsJson) {
+        if (interestsJson == null || interestsJson.isBlank()) {
+            return List.of();
+        }
+        try {
+            JsonNode arr = objectMapper.readTree(interestsJson);
+            if (arr.isArray()) {
+                List<String> result = new ArrayList<>();
+                arr.forEach(n -> {
+                    String t = n.asText(null);
+                    if (t != null && !t.isBlank()) {
+                        result.add(t);
+                    }
+                });
+                return result;
+            }
+        } catch (Exception e) {
+            // 旧格式/损坏内容降级为空列表（brief 其余字段照常）
+        }
+        return List.of();
     }
 
     @Override
