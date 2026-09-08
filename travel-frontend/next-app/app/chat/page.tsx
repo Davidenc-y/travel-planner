@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
 import { ArrowDown, MessagesSquare } from 'lucide-react';
-import { chatApi, getErrorMessage, httpErrorCode, isAbortError } from '@/lib/api';
+import { chatApi, getErrorMessage, httpErrorCode, isAbortError, itineraryApi } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 import type { ChatMessage, ChatResponse } from '@/types';
 import { generateUUID } from '@/lib/utils';
@@ -184,10 +184,69 @@ function ChatContent() {
     return () => window.removeEventListener('focus', onFocus);
   }, [currentSessionId, anchor.load]);
   // M23c（E4）：本轮偏好标签（按会话隔离 + localStorage 持久化；不自动写长期画像）
+  // M28-13：新会话（后端会话未创建，M6-50 首条消息才建）用 '__new__' 草稿键——
+  // 发送前即可设定偏好；首条消息发送成功后迁移到真实 sid（可拓展："另开关联会话"
+  // 复用同一草稿机制：新会话+预选锚定+预填偏好）
   const preference = useSessionPreference(currentSessionId);
+  const prefDraftKey = currentSessionId ?? '__new__';
   const [prefPanelOpen, setPrefPanelOpen] = useState(false);
-  const prefTags = preference.tagsOf(currentSessionId);
+  const prefTags = preference.tagsOf(prefDraftKey);
   const prefTagTexts = Object.keys(prefTags).length;
+  // M28-13：新会话锚定草稿——发送前预选基准行程（历史行程列表勾选）；
+  // 首条消息携带 anchoredItineraryIds 发送，后端持久化为服务端锚定（ChatService
+  // 消息携带锚定 replaceAnchors；自动锚定在用户显式预选时让位）
+  const [draftAnchorIds, setDraftAnchorIds] = useState<number[]>([]);
+  const [draftAnchorBriefs, setDraftAnchorBriefs] = useState<Record<number, { id: number; title: string }>>({});
+  const effectiveAnchorIds = currentSessionId ? anchorState.ids : draftAnchorIds;
+  const effectiveAnchorBriefs = currentSessionId
+    ? anchorState.briefs : draftAnchorBriefs as never;
+
+  /**
+   * M28-13：勾选锚定行程 → 拉行程详情自动填充本轮偏好标签（空值保留用户已设项；
+   * "锚定=基准"心智：基准行程的约束直接成为本轮起点）。新会话草稿与已建会话统一。
+   */
+  const fillPreferenceFromItinerary = (id: number, checked: boolean) => {
+    if (!checked) return;
+    itineraryApi.getById(id)
+      .then((res) => {
+        const d = res.data.data;
+        if (!d) return;
+        preference.setTags(prefDraftKey, {
+          ...prefTags,
+          destination: d.destination ?? prefTags.destination,
+          days: d.days ?? prefTags.days,
+          budget: d.budget ?? prefTags.budget,
+          // 后端词表与 PARTY_OPTIONS/INTEREST_OPTIONS 同源（parseParty/parseInterests）
+          party: (d.party as typeof prefTags.party) ?? prefTags.party,
+          interests: (d.interests as typeof prefTags.interests)?.length
+            ? (d.interests as typeof prefTags.interests)
+            : prefTags.interests,
+          startDate: d.startDate ?? prefTags.startDate,
+        });
+        setDraftAnchorBriefs((prev) => ({ ...prev, [id]: { id, title: d.title } }));
+      })
+      .catch(() => { /* 填充失败不影响勾选本身 */ });
+  };
+
+  /**
+   * M28-13：偏好面板"完成"——party/interests 持久化到（首个）锚定行程约束列
+   * （用户显式确定性意图；days/budget/startDate 不直接写列，仍作为下一轮约束传
+   * 给 AI，避免"天数变了但 dayPlans 未重排"的内容不一致）。
+   */
+  const handlePrefPanelClose = () => {
+    setPrefPanelOpen(false);
+    const targetId = currentSessionId ? anchorState.ids[0] : draftAnchorIds[0];
+    if (!targetId || (!prefTags.party && !prefTags.interests?.length)) return;
+    itineraryApi.updateConstraints(targetId, {
+      party: prefTags.party,
+      interests: prefTags.interests?.length ? prefTags.interests : undefined,
+    })
+      .then(() => {
+        toast.success('同行人与兴趣已同步到锚定行程');
+        if (currentSessionId) void anchor.load(currentSessionId);
+      })
+      .catch((err) => toast.error('偏好同步失败: ' + getErrorMessage(err)));
+  };
 
   const activeDraftKey = currentSessionId ?? '__new__';
   const input = drafts[activeDraftKey] ?? '';
@@ -252,7 +311,7 @@ function ChatContent() {
       sessionList.loadSessions();
       void anchor.load(currentSessionId);
       if (away.preferenceSync) {
-        preference.setTags(currentSessionId,
+        preference.setTags(currentSessionId ?? prefDraftKey,
           mergePreferenceSync(preference.tagsOf(currentSessionId), away.preferenceSync));
       }
       if (away.suggestion?.type === 'ANCHOR_NEW_ITINERARY') {
@@ -511,7 +570,7 @@ function ChatContent() {
     try {
       // M6：优先 SSE 流式；失败自动回退 JSON 端点
       const streamed = await chatStream.sendStreamWithRetry(
-        sid!, text, clientMessageId, modelPref.model, anchorState.ids,
+        sid!, text, clientMessageId, modelPref.model, effectiveAnchorIds,
         Object.keys(prefTags).length > 0 ? prefTags : undefined);
       // M23（P-D）：AI 生成新规划且会话无可选规划 → 询问是否加入（done.suggestion）
       if (streamed.suggestion && streamed.suggestion.type === 'ANCHOR_NEW_ITINERARY') {
@@ -529,6 +588,14 @@ function ChatContent() {
         setConflictNotice(streamed.preferenceConflict);
       }
       // M28-4：done 后回读锚定——会话首个行程已服务端自动锚定，标签行/面板勾选即时可见
+      // M28-13：新会话首条消息成功——草稿偏好迁移到真实 sid；预选锚定已随后端
+      // 消息携带持久化（ChatService replaceAnchors），回读即得
+      if (hadNoSession) {
+        preference.setTags(sid!, prefTags);
+        preference.clear('__new__');
+        setDraftAnchorIds([]);
+        setDraftAnchorBriefs({});
+      }
       void anchor.load(sid!);
       if (streamed.handled) return; // M10-1b：40303 已在 hook 内完成提示与气泡
       const stages = chatStream.getThinkingLines(sid!);
@@ -845,17 +912,27 @@ function ChatContent() {
           anchorSlot={
             <div className="relative flex items-center gap-1">
               <AnchorDotButton
-                count={anchorState.ids.length}
-                active={anchorState.ids.length > 0}
+                count={effectiveAnchorIds.length}
+                active={effectiveAnchorIds.length > 0}
                 onClick={() => setAnchorPanelOpen((v) => !v)}
                 disabled={sending}
               />
               <AnchorPanel
                 open={anchorPanelOpen}
                 onClose={() => setAnchorPanelOpen(false)}
-                anchoredIds={anchorState.ids}
+                anchoredIds={effectiveAnchorIds}
                 onToggle={(id) => {
-                  if (currentSessionId) void anchor.toggle(currentSessionId, id);
+                  // M28-13：新会话（草稿）本地勾选 + 勾选时拉详情填充偏好；
+                  // 已建会话走服务端 toggle（per-turn truth 不变）
+                  if (currentSessionId) {
+                    void anchor.toggle(currentSessionId, id);
+                  } else {
+                    const checked = !draftAnchorIds.includes(id);
+                    setDraftAnchorIds((prev) => checked
+                      ? [id, ...prev.filter((x) => x !== id)].slice(0, 3)
+                      : prev.filter((x) => x !== id));
+                    fillPreferenceFromItinerary(id, checked);
+                  }
                 }}
                 disabled={sending}
               />
@@ -867,19 +944,21 @@ function ChatContent() {
               <PreferencePanel
                 open={prefPanelOpen}
                 tags={prefTags}
-                onChange={(t) => {
-                  if (currentSessionId) preference.setTags(currentSessionId, t);
-                }}
-                onClose={() => setPrefPanelOpen(false)}
+                onChange={(t) => preference.setTags(prefDraftKey, t)}
+                onClose={handlePrefPanelClose}
               />
             </div>
           }
           anchorTags={
             <AnchorTags
-              briefs={anchorState.briefs}
-              ids={anchorState.ids}
+              briefs={effectiveAnchorBriefs}
+              ids={effectiveAnchorIds}
               onRemove={(id) => {
-                if (currentSessionId) void anchor.toggle(currentSessionId, id);
+                if (currentSessionId) {
+                  void anchor.toggle(currentSessionId, id);
+                } else {
+                  setDraftAnchorIds((prev) => prev.filter((x) => x !== id));
+                }
               }}
               disabled={sending}
             />
@@ -891,7 +970,7 @@ function ChatContent() {
                 if (currentSessionId) {
                   const next = { ...prefTags } as Record<string, unknown>;
                   delete next[key];
-                  preference.setTags(currentSessionId, next as typeof prefTags);
+                  preference.setTags(currentSessionId ?? prefDraftKey, next as typeof prefTags);
                 }
               }}
               disabled={sending}

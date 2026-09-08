@@ -479,6 +479,11 @@ public class ChatService implements ChatStreamExecutor {
                     traceHolder.focusKind = focus.name();
                 }
                 // M23（E1）：锚定段渲染（空集→空段不注入）；切片过滤在 BudgetStep 内按 anchorIds 执行
+                // M28-13：消息携带锚定（含新会话首条消息的预选草稿）→ 持久化为服务端锚定
+                // （用户显式选择=持续意图；幂等——与现值一致时无额外写放大）
+                if (!anchorIds.isEmpty()) {
+                    sessionAnchorStore.replaceAnchors(userId, sessionId, anchorIds);
+                }
                 String anchorSection = sessionAnchorStore.renderSection(userId, anchorIds);
                 // M23b（E4）：偏好段渲染（含与锚定目的地的冲突提示行）+ 检索 query 偏好拼接
                 com.travel.common.dto.PreferenceTagsDTO preferences = prepared.preferences();
@@ -589,6 +594,7 @@ public class ChatService implements ChatStreamExecutor {
             Long routedItineraryId = routed == null ? null : routed.writtenItineraryId();
             com.travel.planning.service.ChatStreamExecutor.ChatStreamResult.AnchorSuggestion suggestion = null;
             if (routedItineraryId != null
+                    && anchorIds.isEmpty() // M28-13：用户已显式携带锚定（含新会话预选）时不被新行程覆盖
                     && sessionAnchorStore.getAnchors(prepared.sessionId()).isEmpty()
                     && isSessionFirstItinerary(routedItineraryId,
                             itineraryBriefPort.findSessionItineraryIds(prepared.sessionId()))) {

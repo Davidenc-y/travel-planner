@@ -45,6 +45,8 @@ public class ItineraryController {
     private final ItineraryMapRouteService itineraryMapRouteService;
     private final com.travel.planning.service.export.ItineraryIcsService itineraryIcsService;
     private final com.travel.planning.service.ItineraryRenameService itineraryRenameService;
+    /** M28-13：偏好元数据（party/interests）显式持久化 */
+    private final com.travel.planning.service.ItineraryPreferenceConstraintsService itineraryPreferenceConstraintsService;
 
     /**
      * 生成行程
@@ -146,6 +148,22 @@ public class ItineraryController {
     public R<String> renameTitle(@PathVariable Long id,
                                  @RequestBody java.util.Map<String, String> body) {
         return R.ok(itineraryRenameService.rename(AuthUtils.resolveUserId(), id, body.get("title")));
+    }
+
+    /**
+     * M28-13：用户显式修改偏好元数据（同行人/兴趣）→ 行程约束列持久化。
+     * body: { party?, interests? }——null/缺省字段不更新；同值幂等。
+     */
+    @PatchMapping("/{id}/constraints")
+    public R<com.travel.common.dto.ItineraryResponseDTO> updateConstraints(
+            @PathVariable Long id,
+            @RequestBody java.util.Map<String, Object> body) {
+        String party = body.get("party") == null ? null : String.valueOf(body.get("party"));
+        @SuppressWarnings("unchecked")
+        java.util.List<String> interests = body.get("interests") == null
+                ? null : (java.util.List<String>) body.get("interests");
+        return R.ok(itineraryPreferenceConstraintsService.update(
+                AuthUtils.resolveUserId(), id, party, interests));
     }
 
     /** M11-1：行程历史版本列表（本人行程，按版本倒序）。 */

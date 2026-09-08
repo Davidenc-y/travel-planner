@@ -243,6 +243,10 @@ export const itineraryApi = {
   /** M28-6：标题重命名（同值前端已拦截；后端幂等兜底） */
   renameItinerary: (id: number, title: string) =>
     planningApi.patch<R<string>>(`/api/v1/itineraries/${id}/title`, { title }),
+  /** M28-13：用户显式修改偏好元数据（同行人/兴趣）→ 行程约束列持久化 */
+  updateConstraints: (id: number, payload: { party?: string; interests?: string[] }) =>
+    planningApi.patch<R<import('@/types').ItineraryResponse>>(
+      `/api/v1/itineraries/${id}/constraints`, payload),
   /** M4-9：断点续跑（仅 FAILED/僵尸 GENERATING 可续；同步等待同 generate） */
   resume: (id: number) =>
     planningApi.post<R<import('@/types').ItineraryResponse>>(`/api/v1/itineraries/${id}/resume`),
