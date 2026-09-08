@@ -201,6 +201,39 @@ function ChatContent() {
   const effectiveAnchorBriefs = currentSessionId
     ? anchorState.briefs : draftAnchorBriefs as never;
 
+  // M28-14：锚定基准变化中央提示（半透明小字，5s 自动淡出）——
+  // 单锚替换显示"已从行程X切换到行程Y"；增/删显示锚定/取消；自动锚定（done 后
+  // 回读）同样可见。首帧与服务话切换不提示。
+  const [anchorNotice, setAnchorNotice] = useState<string | null>(null);
+  const prevAnchorIdsRef = useRef<number[] | null>(null);
+  const anchorNoticeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    const prev = prevAnchorIdsRef.current;
+    prevAnchorIdsRef.current = effectiveAnchorIds;
+    if (prev == null) return; // 首帧只记录基线
+    const added = effectiveAnchorIds.filter((x) => !prev.includes(x));
+    const removed = prev.filter((x) => !effectiveAnchorIds.includes(x));
+    if (added.length === 0 && removed.length === 0) return;
+    const titleOf = (id: number) =>
+      (effectiveAnchorBriefs as Record<number, { id: number; title?: string }>)?.[id]?.title
+      ?? (anchorState.briefs as Record<number, { title?: string }>)?.[id]?.title
+      ?? `行程 #${id}`;
+    let text: string;
+    if (added.length === 1 && removed.length === 1) {
+      text = `已从行程「${titleOf(removed[0])}」切换到行程「${titleOf(added[0])}」`;
+    } else if (added.length === 1) {
+      text = `已锚定行程「${titleOf(added[0])}」`;
+    } else if (removed.length === 1) {
+      text = `已取消锚定行程「${titleOf(removed[0])}」`;
+    } else {
+      text = `锚定基准已更新（新增 ${added.length}、取消 ${removed.length}）`;
+    }
+    setAnchorNotice(text);
+    if (anchorNoticeTimerRef.current) clearTimeout(anchorNoticeTimerRef.current);
+    anchorNoticeTimerRef.current = setTimeout(() => setAnchorNotice(null), 5000);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [effectiveAnchorIds]);
+
   /**
    * M28-13：勾选锚定行程 → 拉行程详情自动填充本轮偏好标签（空值保留用户已设项；
    * "锚定=基准"心智：基准行程的约束直接成为本轮起点）。新会话草稿与已建会话统一。
@@ -810,6 +843,12 @@ function ChatContent() {
         />
 
         <div className="relative flex-1 overflow-hidden">
+          {/* M28-14：锚定基准变化提示（中央半透明小字，5s 自动消失） */}
+          {anchorNotice && (
+            <div className="pointer-events-none absolute left-1/2 top-3 z-20 -translate-x-1/2 truncate rounded-full bg-surface/80 px-3 py-1 text-xs text-ink-faint shadow-1 backdrop-blur-sm animate-rise">
+              {anchorNotice}
+            </div>
+          )}
           <div
             ref={scrollRef}
             onScroll={updateNearBottom}
@@ -922,16 +961,19 @@ function ChatContent() {
                 onClose={() => setAnchorPanelOpen(false)}
                 anchoredIds={effectiveAnchorIds}
                 onToggle={(id) => {
-                  // M28-13：新会话（草稿）本地勾选 + 勾选时拉详情填充偏好；
-                  // 已建会话走服务端 toggle（per-turn truth 不变）
+                  // M28-13/M28-14：勾选时拉详情填充偏好（草稿与已建会话统一——
+                  // "锚定=基准"心智；已建会话此前漏调填充）；已建会话服务端 toggle
+                  // （per-turn truth 不变），新会话草稿本地勾选
+                  const checked = currentSessionId
+                    ? !anchorState.ids.includes(id)
+                    : !draftAnchorIds.includes(id);
+                  fillPreferenceFromItinerary(id, checked);
                   if (currentSessionId) {
                     void anchor.toggle(currentSessionId, id);
                   } else {
-                    const checked = !draftAnchorIds.includes(id);
                     setDraftAnchorIds((prev) => checked
                       ? [id, ...prev.filter((x) => x !== id)].slice(0, 3)
                       : prev.filter((x) => x !== id));
-                    fillPreferenceFromItinerary(id, checked);
                   }
                 }}
                 disabled={sending}
