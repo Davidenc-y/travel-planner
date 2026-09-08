@@ -112,7 +112,7 @@ export function AnchorPanel({
           </Button>
         </div>
       )}
-      <p className="mt-2 text-xs text-ink-faint">勾选后作为本轮对话的基准规划；只读，不可在此编辑行程。</p>
+      <p className="mt-2 text-xs text-ink-faint">勾选后作为本轮对话的基准规划（仅可锚定一个行程，点其他行程即切换）；只读，不可在此编辑行程。</p>
     </div>
   );
 }

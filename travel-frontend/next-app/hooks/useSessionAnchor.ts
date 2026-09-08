@@ -62,12 +62,14 @@ export function useSessionAnchor(currentSessionId?: string | null) {
     }
   }, []);
 
-  /** 勾选/取消（多锚定 ≤3：勾选新项追加，再点同项=移除）。M28-15：ref 读当前 ids。 */
+  /**
+   * 勾选/取消（M28-16：单选语义——勾选新行程自动替换旧锚定，再点已勾选=取消。
+   * E1 锚定设计即单基准：REFINE 目标=锚定行程、目的地冲突比对依赖唯一基准）。
+   * M28-15：从 ref 读当前 ids，updater 纯函数（StrictMode 安全）。
+   */
   const toggle = useCallback(async (sid: string, id: number) => {
     const prevIds = anchorsRef.current[sid]?.ids ?? [];
-    const next = prevIds.includes(id)
-      ? prevIds.filter((x) => x !== id)
-      : [id, ...prevIds.filter((x) => x !== id)].slice(0, 3);
+    const next = prevIds.includes(id) ? [] : [id];
     setAnchors((prev) => ({
       ...prev,
       [sid]: { ...(prev[sid] ?? EMPTY), ids: next },

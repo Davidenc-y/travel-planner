@@ -620,7 +620,20 @@ function ChatContent() {
           title: streamed.suggestion.title,
         });
       }
-      // M26-F3：本轮有效约束回写 → 偏好标签动态同步（合并语义见 mergePreferenceSync）
+      // M28-4/M28-13/M28-16：新会话首条消息成功——草稿偏好迁移到真实 sid（仅当
+      // 草稿非空；此前无条件 setTags(sid, 空草稿) 排在回填之后，把 preferenceSync
+      // 刚写入的标签覆盖为空——"首轮后标签全部没回填"根因）；预选锚定已随后端
+      // 消息携带持久化（ChatService replaceAnchors），回读即得
+      if (hadNoSession) {
+        if (Object.keys(prefTags).length > 0) {
+          preference.setTags(sid!, prefTags);
+        }
+        preference.clear('__new__');
+        setDraftAnchorIds([]);
+        setDraftAnchorBriefs({});
+      }
+      // M26-F3：本轮有效约束回写 → 偏好标签动态同步（置于草稿迁移之后——
+      // 行程约束列权威值覆盖草稿残留；合并语义见 mergePreferenceSync）
       if (streamed.preferenceSync) {
         preference.setTags(sid!, mergePreferenceSync(preference.tagsOf(sid!), streamed.preferenceSync));
       }
@@ -629,14 +642,6 @@ function ChatContent() {
         setConflictNotice(streamed.preferenceConflict);
       }
       // M28-4：done 后回读锚定——会话首个行程已服务端自动锚定，标签行/面板勾选即时可见
-      // M28-13：新会话首条消息成功——草稿偏好迁移到真实 sid；预选锚定已随后端
-      // 消息携带持久化（ChatService replaceAnchors），回读即得
-      if (hadNoSession) {
-        preference.setTags(sid!, prefTags);
-        preference.clear('__new__');
-        setDraftAnchorIds([]);
-        setDraftAnchorBriefs({});
-      }
       void anchor.load(sid!);
       if (streamed.handled) return; // M10-1b：40303 已在 hook 内完成提示与气泡
       const stages = chatStream.getThinkingLines(sid!);
@@ -973,9 +978,8 @@ function ChatContent() {
                   if (currentSessionId) {
                     void anchor.toggle(currentSessionId, id);
                   } else {
-                    setDraftAnchorIds((prev) => checked
-                      ? [id, ...prev.filter((x) => x !== id)].slice(0, 3)
-                      : prev.filter((x) => x !== id));
+                    // M28-16：草稿锚定同样单选（勾新=替换）
+                    setDraftAnchorIds(checked ? [id] : []);
                   }
                 }}
                 disabled={sending}
