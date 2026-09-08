@@ -32,6 +32,13 @@ public final class Markers {
     /** 会话滚动摘要段。 */
     public static final String SESSION_SUMMARY = "【会话摘要】";
 
+    /**
+     * 当前日期行（ChatRoutingStep 生产，拼在【当前问题】段之后）。
+     * M28-11：ItineraryVersionPortImpl 消费——从【当前问题】尾段截取用户原始
+     * 输入时以此为右边界（用户消息本身不含此行）。
+     */
+    public static final String CURRENT_DATE = "【当前日期】";
+
     /** 会话知识参考段。 */
     public static final String SESSION_KNOWLEDGE = "【会话知识参考】";
     /** M23（E1）：锚定行程段——生产方 SessionAnchorStore.renderSection，消费方各 Agent prompt。 */

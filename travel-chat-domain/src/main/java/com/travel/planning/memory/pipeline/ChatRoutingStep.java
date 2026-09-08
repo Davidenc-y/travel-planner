@@ -298,10 +298,11 @@ public class ChatRoutingStep {
             return composed;
         }
         // M26-F4：注入当前日期上下文（确定性；用户未指定出发日期时禁止编造过去日期）
+        // M28-11：标记常量化（ItineraryVersionPortImpl 以此为右边界截取用户原始输入）
         java.time.LocalDate today = java.time.LocalDate.now();
         String dow = today.getDayOfWeek().getDisplayName(
                 java.time.format.TextStyle.FULL, java.util.Locale.CHINESE);
-        String dateLine = "\n【当前日期】" + today + "（" + dow + "）。用户未指定出发日期时，"
+        String dateLine = "\n" + com.travel.planning.prompt.Markers.CURRENT_DATE + today + "（" + dow + "）。用户未指定出发日期时，"
                 + "行程日期从今天之后合理选择或用『第N天』相对表述，禁止编造已过去的日期。\n";
         composed = composed + dateLine;
         if (chatWeatherContextPort == null) {

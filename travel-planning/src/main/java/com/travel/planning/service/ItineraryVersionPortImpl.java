@@ -91,6 +91,13 @@ public class ItineraryVersionPortImpl implements ItineraryVersionPort {
             return Optional.empty();
         }
         try {
+            // M28-11：解析输入纯净化——writeback 的确定性解析（party/budget/days/目的地）
+            // 必须基于"用户显式输入"（【本轮偏好约束】段 + 【当前问题】尾段），不得基于
+            // 含画像/行为特征/历史对话的完整组装文本。实证（2026-09-08 09:36）：
+            // 画像"常见同行：家庭"混入 parseParty → 未提同行人的新会话凭空写入
+            // party=家庭；REFINE"同行人改成情侣"时"家庭"词又抢先命中 → 列不更新，
+            // preferenceSync 回写前端偏好标签恒为"家庭"（与聊天回答口径分裂）。
+            String explicitInput = extractExplicitInput(userInput);
             Itinerary existing = findLatestBySession(sessionId,
                     sessionAnchorStore.getAnchors(sessionId));
             if (existing != null) {
@@ -98,14 +105,14 @@ public class ItineraryVersionPortImpl implements ItineraryVersionPort {
                     log.warn("[ItineraryWriteback] 会话行程归属不符，跳过回写: sessionId={}", sessionId);
                     return Optional.empty();
                 }
-                Optional<Long> refined = refine(existing, sessionId, userInput, routePlanJson, budgetJson);
+                Optional<Long> refined = refine(existing, sessionId, explicitInput, routePlanJson, budgetJson);
                 refined.ifPresent(id -> triggerBehaviorRecompute(userId));
                 return refined;
             }
             if (!createOnChat) {
                 return Optional.empty();
             }
-            Optional<Long> created = createFromChat(userId, sessionId, userInput, routePlanJson, budgetJson);
+            Optional<Long> created = createFromChat(userId, sessionId, explicitInput, routePlanJson, budgetJson);
             created.ifPresent(id -> triggerBehaviorRecompute(userId));
             return created;
         } catch (Exception e) {
@@ -248,28 +255,76 @@ public class ItineraryVersionPortImpl implements ItineraryVersionPort {
     }
 
     /**
+     * M28-11：从 composed 组装文本提取"用户显式输入"（供确定性解析）。
+     *
+     * <p>取两段：①【本轮偏好约束】段（用户显式标签，如"- 同行人:家庭"——显式
+     * 设置应被行程列记录）；②【当前问题】尾段（用户原始消息，右边界为
+     * 【当前日期】行——与 PlanningHeuristics 同一契约）。两段均无标记时
+     * 回退全文（保守，兼容非组装调用方如单测直传短文本）。</p>
+     */
+    static String extractExplicitInput(String composed) {
+        if (composed == null) {
+            return null;
+        }
+        StringBuilder sb = new StringBuilder();
+        int prefIdx = composed.indexOf(Markers.PREFERENCE_TAGS);
+        if (prefIdx >= 0) {
+            sb.append(composed, prefIdx, nextMarkerEnd(composed, prefIdx)).append('\n');
+        }
+        int qIdx = composed.lastIndexOf(Markers.CURRENT_QUESTION);
+        if (qIdx >= 0) {
+            String tail = composed.substring(qIdx + Markers.CURRENT_QUESTION.length());
+            int dateIdx = tail.indexOf(Markers.CURRENT_DATE);
+            if (dateIdx >= 0) {
+                tail = tail.substring(0, dateIdx);
+            }
+            sb.append(tail.trim());
+        }
+        String extracted = sb.toString().trim();
+        return extracted.isEmpty() ? composed : extracted;
+    }
+
+    /** 偏好约束段的右边界：下一个行首"【"标记或文本末尾。 */
+    private static int nextMarkerEnd(String composed, int from) {
+        int idx = composed.indexOf("\n【", from);
+        return idx < 0 ? composed.length() : idx;
+    }
+
+    /**
      * M28-9：从用户输入解析同行人（与 chat-domain party-patterns 同语义词表，
      * 本地独立实现避免 planning→chat-domain 反向依赖）。未提及返回 null（不臆造）。
+     * M28-11：多词命中取<b>位置最靠后</b>者=最新口径（同 budgetNumberOf 思路，
+     * "之前是家庭，现在改成情侣"→情侣；旧实现按词表顺序家庭恒先命中）。
      */
     static String parseParty(String input) {
         if (input == null || input.isBlank()) {
             return null;
         }
-        if (input.contains("带小孩") || input.contains("带娃") || input.contains("亲子")
-                || input.contains("家庭") || input.contains("家人")) {
-            return "家庭";
+        String best = null;
+        int bestEnd = -1;
+        for (Map.Entry<String, String> e : PARTY_CANONICAL_WORDS.entrySet()) {
+            int idx = input.indexOf(e.getKey());
+            if (idx >= 0) {
+                int end = idx + e.getKey().length();
+                if (end > bestEnd) {
+                    bestEnd = end;
+                    best = e.getValue();
+                }
+            }
         }
-        if (input.contains("情侣") || input.contains("夫妻") || input.contains("两个人")) {
-            return "情侣";
-        }
-        if (input.contains("朋友") || input.contains("闺蜜") || input.contains("同事")) {
-            return "朋友";
-        }
-        if (input.contains("独行") || input.contains("一个人")) {
-            return "独行";
-        }
-        return null;
+        return best;
     }
+
+    /** M28-11：party 词→规范值（与 SessionFactConsolidator.PARTY_CANONICAL 同口径）。 */
+    private static final Map<String, String> PARTY_CANONICAL_WORDS = java.util.Map.ofEntries(
+            java.util.Map.entry("带小孩", "家庭"), java.util.Map.entry("带娃", "家庭"),
+            java.util.Map.entry("亲子", "家庭"), java.util.Map.entry("家庭", "家庭"),
+            java.util.Map.entry("家人", "家庭"),
+            java.util.Map.entry("情侣", "情侣"), java.util.Map.entry("夫妻", "情侣"),
+            java.util.Map.entry("两个人", "情侣"),
+            java.util.Map.entry("朋友", "朋友"), java.util.Map.entry("闺蜜", "朋友"),
+            java.util.Map.entry("同事", "朋友"),
+            java.util.Map.entry("独行", "独行"), java.util.Map.entry("一个人", "独行"));
 
     /**
      * M28-3：从 routePlan JSON 提取首日出发日期（yyyy-MM-dd）。
