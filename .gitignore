@@ -99,3 +99,6 @@ travel-frontend/next-app/vitest.config.ts
 /docker-compose.yml
 /license.txt
 /notice.txt
+
+__pycache__/
+scripts/regression/*.log

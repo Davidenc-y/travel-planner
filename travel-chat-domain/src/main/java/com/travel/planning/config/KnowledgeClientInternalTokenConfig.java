@@ -1,5 +1,7 @@
 package com.travel.planning.config;
 
+import com.travel.common.config.GrayFlags;
+
 import feign.RequestInterceptor;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
@@ -25,7 +27,7 @@ public class KnowledgeClientInternalTokenConfig {
                     && template.url() != null
                     && (template.url().contains("/api/v1/memory/")
                         || template.url().contains("/api/v1/rag/"))) {
-                template.header("X-Internal-Token", internalToken);
+                template.header(GrayFlags.HEADER_INTERNAL_TOKEN, internalToken);
             }
         };
     }

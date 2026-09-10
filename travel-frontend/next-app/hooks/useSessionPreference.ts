@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { isPreferenceEmpty, type PreferenceTags } from '@/lib/schemas';
+import { mergeTagsAtKey } from '@/lib/preference-merge';
 
 /** M28-6：导出供跨页面（版本弹窗）直写偏好标签用（挂载时恢复即生效） */
 export const PREFS_STORAGE_KEY = 'travel.chat.prefs';
@@ -53,7 +54,7 @@ export function useSessionPreference(currentSessionId?: string | null) {
   const mergeTags = useCallback(
     (sid: string, patch: (prev: PreferenceTags) => PreferenceTags) => {
       setPrefs((prev) => {
-        const next = { ...prev, [sid]: patch(prev[sid] ?? {}) };
+        const next = mergeTagsAtKey(prev, sid, patch);
         persist(next);
         return next;
       });

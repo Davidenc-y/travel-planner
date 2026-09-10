@@ -2,6 +2,7 @@ package com.travel.webflux.support;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.travel.common.config.GrayFlags;
 import com.travel.planning.agent.support.ItineraryVersionPort;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -54,7 +55,7 @@ public class WebfluxItineraryVersionPort implements ItineraryVersionPort {
                     .headers(h -> {
                         // M21-2（SEC-02-02）：进程间共享内部令牌（与 planning 侧 travel.internal.token 同源）
                         if (internalToken != null && !internalToken.isBlank()) {
-                            h.set("X-Internal-Token", internalToken);
+                            h.set(GrayFlags.HEADER_INTERNAL_TOKEN, internalToken);
                         }
                     })
                     .bodyValue(payload)

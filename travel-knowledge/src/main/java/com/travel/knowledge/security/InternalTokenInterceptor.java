@@ -1,5 +1,6 @@
 package com.travel.knowledge.security;
 
+import com.travel.common.config.GrayFlags;
 import com.travel.common.exception.BusinessException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
@@ -31,7 +32,7 @@ public class InternalTokenInterceptor implements HandlerInterceptor {
 
     @Override
     public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler) {
-        String header = request.getHeader("X-Internal-Token");
+        String header = request.getHeader(GrayFlags.HEADER_INTERNAL_TOKEN);
         if (internalToken == null || internalToken.isBlank()
                 || header == null || !internalToken.equals(header)) {
             log.warn("[InternalAuth] 拒绝管理面调用: uri={}, tokenPresent={}",

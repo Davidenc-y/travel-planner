@@ -11,7 +11,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
-import { ArrowDown, MessagesSquare } from 'lucide-react';
+import { ArrowDown } from 'lucide-react';
 import { chatApi, getErrorMessage, httpErrorCode, isAbortError, itineraryApi } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 import type { ChatMessage, ChatResponse } from '@/types';
@@ -23,57 +23,20 @@ import { SessionList } from '@/components/chat/SessionList';
 import { TurnScrollbar } from '@/components/chat/TurnScrollbar';
 import { Button } from '@/components/ui/button';
 import { Composer } from '@/components/chat/Composer';
-import { AnchorDotButton, AnchorPanel, AnchorTags } from '@/components/chat/composer/anchor-panel';
+import { AnchorTags } from '@/components/chat/composer/anchor-panel';
+import { AnchorPanelWrapper } from '@/components/chat/panels/anchor-panel-wrapper';
+import { MessageStreamWrapper, type InterruptedTurn } from '@/components/chat/panels/message-stream-wrapper';
 import { useSessionAnchor } from '@/hooks/useSessionAnchor';
 import { useSessionPreference } from '@/hooks/useSessionPreference';
 import { mergePreferenceSync } from '@/lib/schemas';
-import { PreferenceDotButton, PreferencePanel, PreferenceTagsRow } from '@/components/chat/composer/preference-panel';
+import { mergePreferenceFromItinerary } from '@/lib/preference-merge';
+import { PreferenceTagsRow } from '@/components/chat/composer/preference-panel';
+import { PreferencePanelWrapper } from '@/components/chat/panels/preference-panel-wrapper';
 import { ChatHeader } from '@/components/chat/ChatHeader';
-import {
-  InterruptedBubble,
-  MessageBubble,
-  StreamingBubble,
-  ThinkingTimeline,
-} from '@/components/chat/MessageBubble';
 import { useChatStream } from '@/hooks/useChatStream';
 import { useSessionList } from '@/hooks/useSessionList';
 import { useModelPreference } from '@/hooks/useModelPreference';
 import { ModelSelector } from '@/components/model/ModelSelector';
-import { SUGGESTED_PROMPTS } from '@/lib/suggested-prompts';
-
-interface InterruptedTurn {
-  clientMessageId: string;
-  text: string;
-}
-
-// B3/09 C-12：日期分隔（本地日期粒度）
-function sameDay(a?: string, b?: string): boolean {
-  if (!a || !b) return false;
-  const da = new Date(a);
-  const db = new Date(b);
-  if (Number.isNaN(da.getTime()) || Number.isNaN(db.getTime())) return false;
-  return da.getFullYear() === db.getFullYear()
-    && da.getMonth() === db.getMonth()
-    && da.getDate() === db.getDate();
-}
-
-function DateSeparator({ iso }: { iso: string }) {
-  const d = new Date(iso);
-  const now = new Date();
-  const sameDayNow = d.getFullYear() === now.getFullYear()
-    && d.getMonth() === now.getMonth()
-    && d.getDate() === now.getDate();
-  const label = sameDayNow
-    ? '今天'
-    : `${d.getMonth() + 1} 月 ${d.getDate()} 日`;
-  return (
-    <div className="flex items-center gap-3 py-1" aria-hidden>
-      <span className="h-px flex-1 bg-line" />
-      <span className="text-[10px] text-ink-faint">{label}</span>
-      <span className="h-px flex-1 bg-line" />
-    </div>
-  );
-}
 
 /**
  * M6-58/T10 + B3（09）：聊天页布局编排。
@@ -209,45 +172,6 @@ function ChatContent() {
   const effectiveAnchorBriefs = currentSessionId
     ? anchorState.briefs : draftAnchorBriefs as never;
 
-  // M28-15：锚定基准变化 → 会话内系统提示消息（落库 t_chat_message role=system，
-  // 像一条消息永久显示在会话中央，半透明小字——替代 M28-14 的悬浮条）。
-  // 单锚替换="已从行程X切换到行程Y"；增/删=锚定/取消；自动锚定同样落一条。
-  const prevAnchorIdsRef = useRef<number[] | null>(null);
-  useEffect(() => {
-    const prev = prevAnchorIdsRef.current;
-    prevAnchorIdsRef.current = effectiveAnchorIds;
-    if (prev == null) return; // 首帧只记录基线
-    const added = effectiveAnchorIds.filter((x) => !prev.includes(x));
-    const removed = prev.filter((x) => !effectiveAnchorIds.includes(x));
-    if (added.length === 0 && removed.length === 0) return;
-    const sid = currentSessionRef.current;
-    if (!sid) return; // 草稿态暂不落库（首条消息后自然有自动锚定提示）
-    const titleOf = (id: number) =>
-      (effectiveAnchorBriefs as Record<number, { id: number; title?: string }>)?.[id]?.title
-      ?? (anchorState.briefs as Record<number, { title?: string }>)?.[id]?.title
-      ?? `行程 #${id}`;
-    let text: string;
-    if (added.length === 1 && removed.length === 1) {
-      text = `已从行程「${titleOf(removed[0])}」切换到行程「${titleOf(added[0])}」`;
-    } else if (added.length === 1) {
-      text = `已锚定行程「${titleOf(added[0])}」`;
-    } else if (removed.length === 1) {
-      text = `已取消锚定行程「${titleOf(removed[0])}」`;
-    } else {
-      text = `锚定基准已更新（新增 ${added.length}、取消 ${removed.length}）`;
-    }
-    // 本地即时插入 + 后端落库（历史接口返回后刷新仍在）
-    setMessages((prev) => [...prev, {
-      sessionId: sid,
-      role: 'system',
-      content: text,
-      createdAt: new Date().toISOString(),
-      localKey: `sys-${crypto.randomUUID()}`,
-    } as ChatMessage]);
-    chatApi.appendSystemNote(sid, text).catch(() => { /* 落库失败不阻断（本地仍可见） */ });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [effectiveAnchorIds]);
-
   /**
    * M28-13/M28-15：勾选锚定行程 → 拉行程详情自动填充本轮偏好标签（空值保留用户
    * 已设项）。异步回调用 currentSessionRef 取当下键 + mergeTags 基于最新值合并
@@ -260,41 +184,10 @@ function ChatContent() {
         const d = res.data.data;
         if (!d) return;
         const key = currentSessionRef.current ?? '__new__';
-        preference.mergeTags(key, (prev) => ({
-          ...prev,
-          destination: d.destination ?? prev.destination,
-          days: d.days ?? prev.days,
-          budget: d.budget ?? prev.budget,
-          // 后端词表与 PARTY_OPTIONS/INTEREST_OPTIONS 同源（parseParty/parseInterests）
-          party: (d.party as typeof prev.party) ?? prev.party,
-          interests: (d.interests as typeof prev.interests)?.length
-            ? (d.interests as typeof prev.interests)
-            : prev.interests,
-          startDate: d.startDate ?? prev.startDate,
-        }));
+        preference.mergeTags(key, (prev) => mergePreferenceFromItinerary(prev, d));
         setDraftAnchorBriefs((prev) => ({ ...prev, [id]: { id, title: d.title } }));
       })
       .catch(() => { /* 填充失败不影响勾选本身 */ });
-  };
-
-  /**
-   * M28-13：偏好面板"完成"——party/interests 持久化到（首个）锚定行程约束列
-   * （用户显式确定性意图；days/budget/startDate 不直接写列，仍作为下一轮约束传
-   * 给 AI，避免"天数变了但 dayPlans 未重排"的内容不一致）。
-   */
-  const handlePrefPanelClose = () => {
-    setPrefPanelOpen(false);
-    const targetId = currentSessionId ? anchorState.ids[0] : draftAnchorIds[0];
-    if (!targetId || (!prefTags.party && !prefTags.interests?.length)) return;
-    itineraryApi.updateConstraints(targetId, {
-      party: prefTags.party,
-      interests: prefTags.interests?.length ? prefTags.interests : undefined,
-    })
-      .then(() => {
-        toast.success('同行人与兴趣已同步到锚定行程');
-        if (currentSessionId) void anchor.load(currentSessionId);
-      })
-      .catch((err) => toast.error('偏好同步失败: ' + getErrorMessage(err)));
   };
 
   const activeDraftKey = currentSessionId ?? '__new__';
@@ -871,59 +764,16 @@ function ChatContent() {
             onScroll={updateNearBottom}
             className="relative h-full overflow-y-auto py-4 pl-9 pr-4 space-y-5"
           >
-            {messages.length === 0 && !currentStreamState ? (
-              /* B3/09 C-06：空态——能力说明 + 推荐提示词（点击填充草稿，不自动发送） */
-              <div className="flex flex-col items-center justify-center h-full px-4 text-ink-faint">
-                <MessagesSquare className="h-12 w-12 mb-3 opacity-50" />
-                <p className="text-sm">开始一段新的旅游规划对话</p>
-                <p className="mt-1 text-xs">我可以规划行程、检索景点，并记住你的旅行偏好</p>
-                <div className="mt-6 grid w-full max-w-md grid-cols-1 sm:grid-cols-2 gap-2">
-                  {SUGGESTED_PROMPTS.map((prompt) => (
-                    <button
-                      key={prompt}
-                      type="button"
-                      onClick={() => applySuggestion(prompt)}
-                      className="rounded-xl border border-line bg-surface px-3 py-2 text-left text-xs text-ink-secondary transition-colors hover:border-brand-400 hover:text-ink focus-ring"
-                    >
-                      {prompt}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            ) : (
-              messages.map((msg, idx) => {
-                const showSeparator = idx === 0 || !sameDay(messages[idx - 1].createdAt, msg.createdAt);
-                const isLastAssistant = !isLastMessageUser(messages)
-                  && idx === messages.length - 1 && msg.role === 'assistant';
-                const key = msg.id ?? msg.localKey ?? `i-${idx}`;
-                return (
-                  <div
-                    key={key}
-                    data-user-turn={msg.role === 'user' ? key : undefined}
-                    className="space-y-4"
-                  >
-                    {showSeparator && msg.createdAt && <DateSeparator iso={msg.createdAt} />}
-                    <MessageBubble
-                      message={msg}
-                      onRegenerate={isLastAssistant ? () => handleRegenerate(currentSessionId!) : undefined}
-                      onEditResend={msg.role === 'user' ? handleEditResend : undefined}
-                    />
-                  </div>
-                );
-              })
-            )}
-            {/* M6：执行过程时间线（C-03，替代原 ThinkingBubble） */}
-            {currentStreamState?.phase === 'thinking' && (
-              <ThinkingTimeline lines={currentStreamState.thinkingLines} />
-            )}
-            {/* M6：流式输出（思考完成后替换时间线；C-02 Markdown 增量渲染） */}
-            {currentStreamState?.phase === 'streaming' && (
-              <StreamingBubble text={currentStreamState.streamingText} />
-            )}
-            {/* M6-36：执行已中断 + 重试（每会话最多一个断点） */}
-            {interruptedTurns[currentSessionId ?? ''] && (
-              <InterruptedBubble onRetry={() => handleRetry(currentSessionId!)} />
-            )}
+            <MessageStreamWrapper
+              messages={messages}
+              currentSessionId={currentSessionId}
+              currentStreamState={currentStreamState}
+              interruptedTurns={interruptedTurns}
+              applySuggestion={applySuggestion}
+              handleRegenerate={handleRegenerate}
+              handleEditResend={handleEditResend}
+              handleRetry={handleRetry}
+            />
             <div ref={messagesEndRef} />
           </div>
 
@@ -967,43 +817,34 @@ function ChatContent() {
           }
           anchorSlot={
             <div className="relative flex items-center gap-1">
-              <AnchorDotButton
-                count={effectiveAnchorIds.length}
-                active={effectiveAnchorIds.length > 0}
-                onClick={() => setAnchorPanelOpen((v) => !v)}
-                disabled={sending}
-              />
-              <AnchorPanel
+              <AnchorPanelWrapper
                 open={anchorPanelOpen}
-                onClose={() => setAnchorPanelOpen(false)}
-                anchoredIds={effectiveAnchorIds}
-                onToggle={(id) => {
-                  // M28-13/M28-14：勾选时拉详情填充偏好（草稿与已建会话统一——
-                  // "锚定=基准"心智；已建会话此前漏调填充）；已建会话服务端 toggle
-                  // （per-turn truth 不变），新会话草稿本地勾选
-                  const checked = currentSessionId
-                    ? !anchorState.ids.includes(id)
-                    : !draftAnchorIds.includes(id);
-                  fillPreferenceFromItinerary(id, checked);
-                  if (currentSessionId) {
-                    void anchor.toggle(currentSessionId, id);
-                  } else {
-                    // M28-16：草稿锚定同样单选（勾新=替换）
-                    setDraftAnchorIds(checked ? [id] : []);
-                  }
-                }}
                 disabled={sending}
+                effectiveAnchorIds={effectiveAnchorIds}
+                effectiveAnchorBriefs={effectiveAnchorBriefs}
+                anchorState={anchorState}
+                draftAnchorIds={draftAnchorIds}
+                setDraftAnchorIds={setDraftAnchorIds}
+                currentSessionId={currentSessionId}
+                currentSessionRef={currentSessionRef}
+                setMessages={setMessages}
+                fillPreferenceFromItinerary={fillPreferenceFromItinerary}
+                anchor={anchor}
+                onToggle={() => setAnchorPanelOpen((v) => !v)}
+                onRequestClose={() => setAnchorPanelOpen(false)}
               />
-              <PreferenceDotButton
-                active={prefTagTexts > 0}
-                onClick={() => setPrefPanelOpen((v) => !v)}
-                disabled={sending}
-              />
-              <PreferencePanel
+              <PreferencePanelWrapper
                 open={prefPanelOpen}
+                active={prefTagTexts > 0}
+                disabled={sending}
                 tags={prefTags}
+                firstAnchorId={currentSessionId ? anchorState.ids[0] : draftAnchorIds[0]}
+                onToggle={() => setPrefPanelOpen((v) => !v)}
                 onChange={(t) => preference.setTags(prefDraftKey, t)}
-                onClose={handlePrefPanelClose}
+                onRequestClose={() => setPrefPanelOpen(false)}
+                onAnchorsSynced={() => {
+                  if (currentSessionId) void anchor.load(currentSessionId);
+                }}
               />
             </div>
           }
@@ -1125,11 +966,6 @@ function ChatContent() {
       </Dialog>
     </div>
   );
-}
-
-/** B3：消息列表是否以 user 消息结尾（用于判断最后一条 assistant） */
-function isLastMessageUser(list: ChatMessage[]): boolean {
-  return list.length > 0 && list[list.length - 1].role === 'user';
 }
 
 export default function ChatPage() {

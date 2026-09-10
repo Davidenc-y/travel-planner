@@ -94,6 +94,10 @@ public class ChatService implements ChatStreamExecutor {
     private final com.travel.planning.memory.focus.DetourWordMatcher detourWordMatcher;
     /** M24（E3）：三闸门隔离配置（默认关；D-V8-4 观测期达标后开启）。 */
     private final com.travel.planning.config.DetourIsolationProperties detourIsolationProperties;
+    /** R4.1：偏好观测日志摘要（preferenceSummary 方法体原样迁出至 ChatPreferenceLogSupport，文案零变更；行内初始化保持既有直构签名不变）。 */
+    private final ChatPreferenceLogSupport chatPreferenceLogSupport = new ChatPreferenceLogSupport();
+    /** R4.2：锚定策略（自动锚定判定+锚定持久化薄封装迁出至 ChatAnchorPolicy；行内初始化保持既有直构签名不变）。 */
+    private final ChatAnchorPolicy chatAnchorPolicy = new ChatAnchorPolicy();
 
     /**
      * 创建会话
@@ -500,14 +504,14 @@ public class ChatService implements ChatStreamExecutor {
                 // M28-13：消息携带锚定（含新会话首条消息的预选草稿）→ 持久化为服务端锚定
                 // （用户显式选择=持续意图；幂等——与现值一致时无额外写放大）
                 if (!anchorIds.isEmpty()) {
-                    sessionAnchorStore.replaceAnchors(userId, sessionId, anchorIds);
+                    chatAnchorPolicy.persistAnchors(sessionAnchorStore, userId, sessionId, anchorIds);
                 }
                 String anchorSection = sessionAnchorStore.renderSection(userId, anchorIds);
                 // M23b（E4）：偏好段渲染（含与锚定目的地的冲突提示行）+ 检索 query 偏好拼接
                 com.travel.common.dto.PreferenceTagsDTO preferences = prepared.preferences();
                 // M28-14：偏好标签到达性观测（一条 INFO 即可判定前端是否携带——
                 // 2026-09-08 19:49/19:52 实测"无偏好段"取证曾需反复排查）
-                log.info("[ChatPreference] 本轮偏好标签: {}", preferenceSummary(preferences));
+                log.info("[ChatPreference] 本轮偏好标签: {}", chatPreferenceLogSupport.preferenceSummary(preferences));
                 String preferenceSection = preferenceSectionRenderer.render(
                         preferences,
                         anchorBriefsDestination(anchorSection));
@@ -615,11 +619,11 @@ public class ChatService implements ChatStreamExecutor {
             Long routedItineraryId = routed == null ? null : routed.writtenItineraryId();
             com.travel.planning.service.ChatStreamExecutor.ChatStreamResult.AnchorSuggestion suggestion = null;
             if (routedItineraryId != null
-                    && anchorIds.isEmpty() // M28-13：用户已显式携带锚定（含新会话预选）时不被新行程覆盖
+                    && chatAnchorPolicy.shouldAutoAnchor(anchorIds) // M28-13：用户已显式携带锚定（含新会话预选）时不被新行程覆盖
                     && sessionAnchorStore.getAnchors(prepared.sessionId()).isEmpty()
                     && isSessionFirstItinerary(routedItineraryId,
                             itineraryBriefPort.findSessionItineraryIds(prepared.sessionId()))) {
-                sessionAnchorStore.replaceAnchors(userId, prepared.sessionId(),
+                chatAnchorPolicy.persistAnchors(sessionAnchorStore, userId, prepared.sessionId(),
                         java.util.List.of(routedItineraryId));
                 log.info("[SessionAnchor] 会话首个行程已自动锚定: sessionId={}, itineraryId={}",
                         prepared.sessionId(), routedItineraryId);
@@ -766,22 +770,6 @@ public class ChatService implements ChatStreamExecutor {
      * 本轮按偏好目的地处理（受限原因与依据可见），并指引用户可通过输入框下方的
      * 冲突卡片选择「保留锚定」回到锚定行程。静态纯函数便于单测。</p>
      */
-    /** M28-14：偏好标签非空字段摘要（观测日志用；null/全空返回"(未携带)"）。 */
-    static String preferenceSummary(com.travel.common.dto.PreferenceTagsDTO p) {
-        if (p == null) {
-            return "(未携带)";
-        }
-        StringBuilder sb = new StringBuilder();
-        if (p.getDestination() != null) sb.append("destination=").append(p.getDestination()).append(',');
-        if (p.getDays() != null) sb.append("days=").append(p.getDays()).append(',');
-        if (p.getBudget() != null) sb.append("budget=").append(p.getBudget().toPlainString()).append(',');
-        if (p.getParty() != null) sb.append("party=").append(p.getParty()).append(',');
-        if (p.getInterests() != null && !p.getInterests().isEmpty()) sb.append("interests=").append(p.getInterests()).append(',');
-        if (p.getStartDate() != null) sb.append("startDate=").append(p.getStartDate()).append(',');
-        if (Boolean.TRUE.equals(p.getRemember())) sb.append("remember=true").append(',');
-        return sb.isEmpty() ? "(空标签)" : sb.substring(0, sb.length() - 1);
-    }
-
     static String conflictAnswerGuidance(String preferred, String anchored) {
         return "【本轮口径说明（回答要求）】检测到用户当前锚定行程的目的地为「" + anchored
                 + "」，与用户偏好目的地「" + preferred + "」不一致。本轮行程已按偏好目的地「"

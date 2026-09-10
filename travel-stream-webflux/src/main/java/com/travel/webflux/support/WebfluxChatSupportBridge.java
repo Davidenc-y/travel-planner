@@ -2,6 +2,7 @@ package com.travel.webflux.support;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.travel.common.config.GrayFlags;
 import com.travel.planning.agent.support.ChatWeatherContextPort;
 import com.travel.planning.memory.anchor.ItineraryBrief;
 import com.travel.planning.memory.anchor.ItineraryBriefPort;
@@ -146,7 +147,7 @@ public class WebfluxChatSupportBridge implements ItineraryBriefPort, ChatWeather
 
     private void auth(org.springframework.http.HttpHeaders h) {
         if (internalToken != null && !internalToken.isBlank()) {
-            h.set("X-Internal-Token", internalToken);
+            h.set(GrayFlags.HEADER_INTERNAL_TOKEN, internalToken);
         }
     }
 }

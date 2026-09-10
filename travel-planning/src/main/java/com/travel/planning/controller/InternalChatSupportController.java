@@ -1,5 +1,6 @@
 package com.travel.planning.controller;
 
+import com.travel.common.config.GrayFlags;
 import com.travel.common.exception.BusinessException;
 import com.travel.common.result.R;
 import com.travel.planning.agent.support.ChatWeatherContextPort;
@@ -67,7 +68,7 @@ public class InternalChatSupportController {
     @GetMapping("/chat-brief")
     public R<ItineraryBrief> brief(@RequestParam Long itineraryId,
                                    @RequestParam Long userId,
-                                   @RequestHeader(value = "X-Internal-Token", required = false) String headerToken) {
+                                   @RequestHeader(value = GrayFlags.HEADER_INTERNAL_TOKEN, required = false) String headerToken) {
         requireInternalToken(headerToken);
         return R.ok(itineraryBriefPort.briefOf(userId, itineraryId).orElse(null));
     }
@@ -75,7 +76,7 @@ public class InternalChatSupportController {
     /** 会话关联行程 id（suggestion 资格：无关联才询问）。 */
     @GetMapping("/chat-session-itineraries")
     public R<List<Long>> sessionItineraries(@RequestParam String sessionId,
-                                            @RequestHeader(value = "X-Internal-Token", required = false) String headerToken) {
+                                            @RequestHeader(value = GrayFlags.HEADER_INTERNAL_TOKEN, required = false) String headerToken) {
         requireInternalToken(headerToken);
         return R.ok(itineraryService.findSessionItineraryIds(sessionId));
     }
@@ -83,7 +84,7 @@ public class InternalChatSupportController {
     /** composed → 天气参考段（所有开关/配额/缓存逻辑留在 planning 单源实现内）。 */
     @PostMapping("/chat-weather")
     public R<String> weather(@RequestBody Map<String, String> body,
-                             @RequestHeader(value = "X-Internal-Token", required = false) String headerToken) {
+                             @RequestHeader(value = GrayFlags.HEADER_INTERNAL_TOKEN, required = false) String headerToken) {
         requireInternalToken(headerToken);
         return R.ok(chatWeatherContextPort.build(body.get("composed")));
     }

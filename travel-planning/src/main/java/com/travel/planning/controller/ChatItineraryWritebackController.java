@@ -1,5 +1,6 @@
 package com.travel.planning.controller;
 
+import com.travel.common.config.GrayFlags;
 import com.travel.common.exception.BusinessException;
 import com.travel.common.result.R;
 import com.travel.planning.agent.support.ItineraryVersionPort;
@@ -36,7 +37,7 @@ public class ChatItineraryWritebackController {
     }
 
     @PostMapping("/chat-writeback")
-    public R<Long> chatWriteback(@RequestHeader(value = "X-Internal-Token", required = false) String headerToken,
+    public R<Long> chatWriteback(@RequestHeader(value = GrayFlags.HEADER_INTERNAL_TOKEN, required = false) String headerToken,
                                  @RequestBody Map<String, Object> body) {
         // M21-2（SEC-02-02）：桥端点仅接受携带共享内部令牌的进程间调用（fail-closed：
         // 服务端未配置或请求头缺失/不匹配一律拒绝），不再对任意登录用户开放、不再信任 body.userId 身份。

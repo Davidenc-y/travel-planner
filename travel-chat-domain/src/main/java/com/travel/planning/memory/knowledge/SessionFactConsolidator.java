@@ -1,5 +1,6 @@
 package com.travel.planning.memory.knowledge;
 
+import com.travel.common.dto.PreferenceVocabulary;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
@@ -44,15 +45,10 @@ public class SessionFactConsolidator {
     }
 
     /**
-     * M28-10：同行人规范值映射（与 travel-planning ItineraryVersionPortImpl#parseParty 同口径）。
-     * 词表未覆盖的写法（如"2人/3人"）返回命中词本身，保守不臆造。
+     * M28-10：同行人规范值映射（与 PreferenceVocabulary 同口径）。
+     * 词表未覆盖的写法（如“2人/3人”）返回命中词本身，保守不臆造。
      */
-    private static final Map<String, String> PARTY_CANONICAL = Map.ofEntries(
-            Map.entry("带小孩", "家庭"), Map.entry("带娃", "家庭"), Map.entry("亲子", "家庭"),
-            Map.entry("家庭", "家庭"), Map.entry("家人", "家庭"),
-            Map.entry("情侣", "情侣"), Map.entry("夫妻", "情侣"), Map.entry("两个人", "情侣"),
-            Map.entry("朋友", "朋友"), Map.entry("闺蜜", "朋友"), Map.entry("同事", "朋友"),
-            Map.entry("独行", "独行"), Map.entry("一个人", "独行"));
+    private static final Map<String, String> PARTY_CANONICAL = PreferenceVocabulary.PARTY_CANONICAL;
 
     // 兼容："预算3000元" / "预算3000" / "改成3000" / "预算是3000" / "3000元"
     // 数字部分兼容千分位（3,000）：[0-9]+(?:,[0-9]{3})*(?:\.[0-9]+)?

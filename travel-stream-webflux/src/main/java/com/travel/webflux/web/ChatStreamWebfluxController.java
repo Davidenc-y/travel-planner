@@ -8,6 +8,7 @@ import com.travel.core.stream.StreamMeta;
 import com.travel.core.stream.StreamPreflight;
 import com.travel.core.stream.StreamRequest;
 import com.travel.planning.service.ChatStreamService;
+import com.travel.planning.service.ChatTransportAttrs;
 import com.travel.planning.stream.ChatStreamProperties;
 import com.travel.planning.stream.StreamPayloadMapper;
 import com.travel.webflux.security.ReactiveJwtAuthFilter;
@@ -67,12 +68,7 @@ public class ChatStreamWebfluxController {
         if (model != null && !model.isBlank()) {
             attrs.put("model", model);
         }
-        if (body.getAnchoredItineraryIds() != null && !body.getAnchoredItineraryIds().isEmpty()) {
-            attrs.put("anchorIds", body.getAnchoredItineraryIds());
-        }
-        if (body.getPreferences() != null) {
-            attrs.put("preferences", body.getPreferences());
-        }
+        ChatTransportAttrs.put(attrs, body.getPreferences(), body.getAnchoredItineraryIds());
         StreamRequest request = new StreamRequest("chat", userId, sessionId,
                 message, clientMessageId, attrs, lastEventId);
         StreamPreflight preflight = chatStreamService.preflight(request);
