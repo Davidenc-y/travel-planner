@@ -25,6 +25,13 @@ import java.util.Optional;
  *
  * <p>桥接端点（planning 8081，InternalChatSupportController）：
  * GET /api/v1/itineraries/chat-brief、GET .../chat-session-itineraries、POST .../chat-weather。</p>
+ *
+ * <p><b>B2.4 现状标注（2026-09-11）</b>：brief 半边已由 Redis 旁路承接（B2.1/B2.2），
+ * {@link #briefOf} 仅作回退（已 @Deprecated + [BriefBridge] 观测日志）；
+ * {@link #findSessionItineraryIds} 仍是 RedisItineraryBriefPort 的 id→session 映射来源
+ * （活跃元数据通道，不标注）；天气（{@link #build}）尚无旁路、本桥仍是唯一实现
+ * （不标注，天气旁路化登记为候选批次）。整个桥的退役以：天气旁路落地 + [BriefBridge]
+ * 日志趋零 + chat-session-itineraries 元数据通道替代方案三者齐备为前置。</p>
  */
 @Slf4j
 @Component
@@ -43,11 +50,19 @@ public class WebfluxChatSupportBridge implements ItineraryBriefPort, ChatWeather
 
     // ---------------- ItineraryBriefPort ----------------
 
+    /**
+     * @deprecated B2.4 观察期（2026-09-11 起）：brief 读取已由 RedisItineraryBriefPort（@Primary）
+     *         承接，本方法仅为回退通道（冷启动 miss / TTL 过期 / Redis 故障自愈——经本方法走
+     *         8081 端点时会顺带补写 Redis 快照形成自愈闭环）。每次回退打 [BriefBridge] INFO 一行，
+     *         作为观察期内桥使用频次的量化依据；删除决策以该日志趋零为前置。
+     */
+    @Deprecated
     @Override
     public Optional<ItineraryBrief> briefOf(Long userId, Long itineraryId) {
         if (userId == null || itineraryId == null) {
             return Optional.empty();
         }
+        log.info("[BriefBridge] brief 回退经 HTTP 桥: id={}, userId={}", itineraryId, userId);
         try {
             String raw = webClient.get()
                     .uri(uri -> uri.path("/api/v1/itineraries/chat-brief")

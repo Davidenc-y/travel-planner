@@ -26,11 +26,16 @@ import java.util.Map;
  *
  * <ul>
  *   <li>GET  /api/v1/itineraries/chat-brief?itineraryId=&amp;userId= —— 锚定 brief
- *       （归属校验；修复 webflux 下锚定建议卡与【锚定行程】段注入）</li>
+ *       （归属校验；修复 webflux 下锚定建议卡与【锚定行程】段注入）。
+ *       <b>B2.4（2026-09-11）：brief 已由 Redis 旁路承接（B2.1 快照 + B2.2 @Primary 读取），
+ *       本端点仅作回退（冷启动 miss / TTL 过期 / Redis 故障自愈），已标 @Deprecated 进入观察期；
+ *       删除决策以 webflux 侧 [BriefBridge] 回退日志频次趋零为准。</b></li>
  *   <li>GET  /api/v1/itineraries/chat-session-itineraries?sessionId= —— 会话关联行程 id
- *       （suggestion 资格判定）</li>
+ *       （suggestion 资格判定；<b>同时是 RedisItineraryBriefPort 的 id→session 映射来源，
+ *       属 Redis 路径的活跃元数据通道，不随 brief 一起标注</b>）</li>
  *   <li>POST /api/v1/itineraries/chat-weather —— composed 上下文 → 天气参考段
- *       （enabled/配额/缓存逻辑全部留在 planning 单源）</li>
+ *       （enabled/配额/缓存逻辑全部留在 planning 单源；<b>天气尚无旁路，本端点仍是主路径，
+ *       不标注；天气旁路化登记为候选批次</b>）</li>
  * </ul>
  */
 @Slf4j
@@ -64,7 +69,13 @@ public class InternalChatSupportController {
      * 锚定 brief——委托 {@link ItineraryBriefPort} 单源实现（归属校验自愈 +
      * budget/party/version/景点名单全字段，供 preferenceSync 与【锚定行程】段）。
      * 非本人/不存在 → 空数据。
+     *
+     * @deprecated B2.4 观察期（2026-09-11 起）：webflux 侧 brief 读取已由 RedisItineraryBriefPort
+     *         （B2.1 快照 + B2.2 @Primary）承接，本端点仅在冷启动 miss / TTL 过期 / Redis 故障时
+     *         作为回退与快照自愈写入通道。观察期内保留（删除须以 [BriefBridge] 回退日志频次趋零
+     *         为前置），端点路径与响应契约不变。
      */
+    @Deprecated
     @GetMapping("/chat-brief")
     public R<ItineraryBrief> brief(@RequestParam Long itineraryId,
                                    @RequestParam Long userId,
