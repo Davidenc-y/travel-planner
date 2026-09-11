@@ -12,7 +12,15 @@ import org.springframework.stereotype.Component;
  */
 @Component
 @RequiredArgsConstructor
-public class ChatIntentStep {
+public class ChatIntentStep implements ChatPipelineStep {
+
+    /** B3.2：步骤顺序——M3-14 步骤 5「意图」（依据 R7-pipeline-mapping 现发送链步骤序 5，ChatService :480）。 */
+    static final int STEP_ORDER = 5;
+
+    @Override
+    public int order() {
+        return STEP_ORDER;
+    }
 
     private final ChatIntentClassifier chatIntentClassifier;
 

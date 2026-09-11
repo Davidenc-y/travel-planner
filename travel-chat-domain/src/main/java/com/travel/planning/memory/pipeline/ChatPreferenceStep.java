@@ -13,7 +13,16 @@ import org.springframework.stereotype.Component;
  */
 @Component
 @RequiredArgsConstructor
-public class ChatPreferenceStep {
+public class ChatPreferenceStep implements ChatPipelineStep {
+
+    /** B3.2：步骤顺序——M3-12 步骤 3「偏好」（依据 R7-pipeline-mapping 现发送链步骤序 3，ChatService saveIfPreference :471）。
+     * saveStructuredTags 为条件触发（M25，:520），不参与定序。 */
+    static final int STEP_ORDER = 3;
+
+    @Override
+    public int order() {
+        return STEP_ORDER;
+    }
 
     private final PreferenceSaveService preferenceSaveService;
 

@@ -34,7 +34,15 @@ import java.util.function.Consumer;
 @Slf4j
 @Component
 @RequiredArgsConstructor
-public class ChatRoutingStep {
+public class ChatRoutingStep implements ChatPipelineStep {
+
+    /** B3.2：步骤顺序——M3-17 步骤 8「路由」（依据 R7-pipeline-mapping 现发送链步骤序 8，终步序号最大，ChatService :583/:588）。 */
+    static final int STEP_ORDER = 8;
+
+    @Override
+    public int order() {
+        return STEP_ORDER;
+    }
 
     /**
      * 路由结果：应答文本与本次全部 LLM 调用的真实 token 总量（F27 口径）。

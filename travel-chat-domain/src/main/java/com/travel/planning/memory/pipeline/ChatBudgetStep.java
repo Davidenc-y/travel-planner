@@ -31,7 +31,15 @@ import java.util.Set;
  */
 @Component
 @RequiredArgsConstructor
-public class ChatBudgetStep {
+public class ChatBudgetStep implements ChatPipelineStep {
+
+    /** B3.2：步骤顺序——步骤 7「预算」（依据 R7-pipeline-mapping 现发送链步骤序 7，ChatService :534）。 */
+    static final int STEP_ORDER = 7;
+
+    @Override
+    public int order() {
+        return STEP_ORDER;
+    }
 
     /**
      * 组装结果：注入文本、token 数、画像/历史段（可能被预算兜底收紧）、候选与会话命中

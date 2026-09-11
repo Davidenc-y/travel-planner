@@ -9,6 +9,7 @@ import com.travel.planning.memory.anchor.ItineraryBriefPort;
 import com.travel.planning.repository.ItineraryMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
@@ -31,6 +32,10 @@ public class ItineraryBriefPortImpl implements ItineraryBriefPort {
     private final ItineraryMapper itineraryMapper;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
+    /** B2.1：brief 快照旁路写入器（required=false——测试直构/无 Redis 场景为 null 静默跳过；字段注入保持 @RequiredArgsConstructor 生成构造器签名不变，R4.1 先例） */
+    @Autowired(required = false)
+    private BriefRedisSnapshotWriter snapshotWriter;
+
     @Override
     public Optional<ItineraryBrief> briefOf(Long userId, Long itineraryId) {
         if (itineraryId == null) {
@@ -40,7 +45,7 @@ public class ItineraryBriefPortImpl implements ItineraryBriefPort {
         if (entity == null || !userId.equals(entity.getUserId())) {
             return Optional.empty(); // 不存在或非本人：锚定自愈剔除
         }
-        return Optional.of(new ItineraryBrief(
+        ItineraryBrief brief = new ItineraryBrief(
                 entity.getId(),
                 entity.getTitle(),
                 entity.getDestination(),
@@ -50,7 +55,12 @@ public class ItineraryBriefPortImpl implements ItineraryBriefPort {
                 entity.getParty(),
                 parseInterestsColumn(entity.getInterests()),
                 entity.getVersion(),
-                extractAttractionNames(entity.getContent())));
+                extractAttractionNames(entity.getContent()));
+        if (snapshotWriter != null) {
+            // B2.1：组装成功后旁路写 Redis 快照（writer 内部 try-catch，失败仅 log.warn 不影响主流程）
+            snapshotWriter.writeSnapshot(entity.getSessionId(), brief);
+        }
+        return Optional.of(brief);
     }
 
     /** M28-12：interests 列（JSON 数组文本，如 ["文化","自然"]）容错解析为列表。 */

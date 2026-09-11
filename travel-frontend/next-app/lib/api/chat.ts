@@ -2,9 +2,10 @@ import type { R } from '@/types';
 import { consumeSseStream, type SseStreamHandlers } from '../sse';
 import { PLANNING_BASE, isAbortError, planningApi } from './http';
 
-// M6-34：聊天 SSE 灰度切换——NEXT_PUBLIC_STREAM_BASE 指向 WebFlux(8083) 时聊天流走
-// 响应式传输层，其余会话/消息 JSON API 仍走 planning(8081)；未配置时回退 PLANNING_BASE
-const STREAM_BASE = process.env.NEXT_PUBLIC_STREAM_BASE || PLANNING_BASE;
+// M6-34：聊天 SSE 基址——NEXT_PUBLIC_STREAM_BASE 未配置时默认 WebFlux(8083)
+// （B2.3 灰度转正；显式设置仍可覆盖）；其余会话/消息 JSON API 仍走 planning(8081)；
+// 8083 网络级失败自动降级 8081（sseFallbackToLocal 会话级记忆，下方逻辑原样保留）
+const STREAM_BASE = process.env.NEXT_PUBLIC_STREAM_BASE || 'http://localhost:8083';
 // R3（02-11 §10.2-R7）：灰度目标网络级失败后的降级记忆（会话级，刷新后重试灰度）
 let sseFallbackToLocal = false;
 

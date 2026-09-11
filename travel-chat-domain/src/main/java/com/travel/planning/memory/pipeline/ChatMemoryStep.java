@@ -17,7 +17,15 @@ import org.springframework.stereotype.Component;
  */
 @Component
 @RequiredArgsConstructor
-public class ChatMemoryStep {
+public class ChatMemoryStep implements ChatPipelineStep {
+
+    /** B3.2：步骤顺序——M3-15 步骤 6「记忆」（依据 R7-pipeline-mapping 现发送链步骤序 6，ChatService :484）。 */
+    static final int STEP_ORDER = 6;
+
+    @Override
+    public int order() {
+        return STEP_ORDER;
+    }
 
     /**
      * 记忆组装结果：画像段、历史/摘要段、摘要标记与触发依据（供日志与后续步骤使用）。

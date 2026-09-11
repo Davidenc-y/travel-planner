@@ -164,6 +164,10 @@ travel:
     default-type: hybrid
     # P3：auto 复杂查询首选路由（supervisor / agent / heuristic），用于 A/B 对比
     auto-router: supervisor
+    # B1.2：RAG 查询级进程内 TTL 缓存（默认开可关；hit 直接返回，miss 走原逻辑后写入）
+    query-cache:
+      enabled: true
+      ttl-ms: 60000
     # P3：查询理解配置（LLM 抽取开关 / 意图缓存 / 城市与类型清单）
     query-understanding:
       enabled: true

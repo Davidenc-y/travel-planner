@@ -18,10 +18,13 @@ import java.util.Map;
  *
  * <p>配置：travel.knowledge.base-url（application.yml，默认 http://localhost:8082）</p>
  *
+ * <p>超时与重试：{@link KnowledgeClientConfig}（B1.1；默认连接 2s/读取 8s、重试 1 次，KNOWLEDGE_FEIGN_* 环境变量可覆盖）</p>
+ *
  * @author david_ency
  * @since 1.0-SNAPSHOT
  */
-@FeignClient(name = "travel-knowledge", url = "${travel.knowledge.base-url:http://localhost:8082}")
+@FeignClient(name = "travel-knowledge", url = "${travel.knowledge.base-url:http://localhost:8082}",
+        configuration = KnowledgeClientConfig.class)
 public interface KnowledgeClient {
 
     /**

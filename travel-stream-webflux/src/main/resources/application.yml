@@ -42,3 +42,11 @@ travel:
 logging:
   level:
     com.travel: INFO
+
+# B2.2：webflux 侧 brief Redis 读取灰度开关（true=RedisItineraryBriefPort @Primary 装配，
+# miss/异常/id 守卫不等一律回退 HTTP 桥；false=不装配本 bean=全桥现状）
+gray:
+  brief:
+    redis:
+      enabled: true
+

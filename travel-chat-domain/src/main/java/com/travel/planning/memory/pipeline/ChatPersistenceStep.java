@@ -44,7 +44,16 @@ import java.util.List;
 @Slf4j
 @Component
 @RequiredArgsConstructor
-public class ChatPersistenceStep {
+public class ChatPersistenceStep implements ChatPipelineStep {
+
+    /** B3.2：步骤顺序——M3-11 步骤 2「持久化」（依据 R7-pipeline-mapping 现发送链步骤序 2，ChatService beginTurn :217）。
+     * 生命周期事件型：映射表标注单一 order() 语义不成立（14 调用点多相位），此序号仅表发送链首相位（beginTurn）。 */
+    static final int STEP_ORDER = 2;
+
+    @Override
+    public int order() {
+        return STEP_ORDER;
+    }
 
     private final SessionStorePort sessionStorePort;
     private final ChatMessageIdemMapper idemMapper;

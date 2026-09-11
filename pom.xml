@@ -28,7 +28,6 @@
         <module>travel-chat-stream</module>
         <module>travel-chat-domain</module>
         <module>travel-ai-gateway</module>
-        <module>travel-web-mvc</module>
         <module>travel-stream-webflux</module>
         <module>travel-planning</module>
         <module>travel-knowledge</module>
@@ -166,11 +165,6 @@
             <dependency>
                 <groupId>com.travel.aigateway</groupId>
                 <artifactId>travel-ai-gateway</artifactId>
-                <version>${project.version}</version>
-            </dependency>
-            <dependency>
-                <groupId>com.travel.webmvc</groupId>
-                <artifactId>travel-web-mvc</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>

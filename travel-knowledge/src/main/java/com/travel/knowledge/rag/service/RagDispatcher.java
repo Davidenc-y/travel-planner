@@ -7,6 +7,7 @@ import com.travel.knowledge.rag.model.SearchResult;
 import com.travel.knowledge.rag.router.AutoRagRouterAgent;
 import com.travel.knowledge.rag.router.RagSupervisorAgent;
 import com.travel.knowledge.rag.strategy.RagStrategy;
+import com.travel.knowledge.rag.support.QueryTtlCache;
 import com.travel.knowledge.rag.support.RagRoutingMetrics;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -42,6 +43,7 @@ public class RagDispatcher {
     private final AutoRagRouterAgent autoRagRouterAgent;
     private final RagSupervisorAgent ragSupervisorAgent;
     private final RagRoutingMetrics metrics;
+    private final QueryTtlCache queryTtlCache;
 
     @Value("${travel.rag.default-type:hybrid}")
     private String defaultType;
@@ -59,11 +61,13 @@ public class RagDispatcher {
     public RagDispatcher(Map<String, RagStrategy> strategies,
                          AutoRagRouterAgent autoRagRouterAgent,
                          RagSupervisorAgent ragSupervisorAgent,
-                         RagRoutingMetrics metrics) {
+                         RagRoutingMetrics metrics,
+                         QueryTtlCache queryTtlCache) {
         this.strategies = strategies;
         this.autoRagRouterAgent = autoRagRouterAgent;
         this.ragSupervisorAgent = ragSupervisorAgent;
         this.metrics = metrics;
+        this.queryTtlCache = queryTtlCache;
         log.info("RagDispatcher 初始化, 已注册策略: {}", strategies.keySet());
     }
 
@@ -77,6 +81,20 @@ public class RagDispatcher {
      * @return 检索结果列表
      */
     public List<SearchResult> dispatch(String ragType, QueryIntent intent, int topK) {
+        // B1.2：查询级 TTL 缓存——命中且未过期直接返回，miss 走原逻辑后写入；
+        // 开关关闭时 get/put 双直通（行为回到无缓存现状）。
+        String cacheKey = QueryTtlCache.buildKey(ragType, intent, topK);
+        List<SearchResult> cached = queryTtlCache.get(cacheKey);
+        if (cached != null) {
+            log.debug("[RagCache] hit key={}", cacheKey);
+            return cached;
+        }
+        List<SearchResult> result = doDispatch(ragType, intent, topK);
+        queryTtlCache.put(cacheKey, result);
+        return result;
+    }
+
+    private List<SearchResult> doDispatch(String ragType, QueryIntent intent, int topK) {
         long start = System.currentTimeMillis();
         String type = normalizeType(ragType);
         String router = "explicit";
