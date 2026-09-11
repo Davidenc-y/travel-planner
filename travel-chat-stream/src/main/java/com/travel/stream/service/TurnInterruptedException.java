@@ -1,4 +1,4 @@
-package com.travel.planning.service;
+package com.travel.stream.service;
 
 /**
  * M6-36：轮次被用户中断（执行已中断）。

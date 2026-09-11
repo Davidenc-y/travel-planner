@@ -1,4 +1,4 @@
-package com.travel.planning.stream;
+package com.travel.stream;
 
 import com.travel.common.exception.ErrorCode;
 

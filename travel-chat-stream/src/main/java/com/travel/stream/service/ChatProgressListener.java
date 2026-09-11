@@ -1,4 +1,4 @@
-package com.travel.planning.service;
+package com.travel.stream.service;
 
 /**
  * M6：聊天流水线进度回调（思考阶段提示 + 最终回答就绪）。

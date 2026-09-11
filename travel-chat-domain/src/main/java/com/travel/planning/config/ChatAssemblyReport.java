@@ -4,7 +4,7 @@ import com.travel.planning.agent.support.ChatWeatherContextPort;
 import com.travel.planning.agent.support.ItineraryConflictPort;
 import com.travel.planning.agent.support.ItineraryVersionPort;
 import com.travel.planning.guard.GuardProperties;
-import com.travel.planning.stream.ChatStreamProperties;
+import com.travel.stream.ChatStreamProperties;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.context.event.ApplicationReadyEvent;

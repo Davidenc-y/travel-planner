@@ -3,7 +3,7 @@ package com.travel.webflux.config;
 import com.travel.common.auth.TokenAuthService;
 import com.travel.core.stream.NoopStreamMetrics;
 import com.travel.core.stream.StreamMetrics;
-import com.travel.planning.service.ChatStreamExecutor;
+import com.travel.stream.service.ChatStreamExecutor;
 import com.travel.webflux.pilot.PilotChatStreamExecutor;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.beans.factory.annotation.Value;

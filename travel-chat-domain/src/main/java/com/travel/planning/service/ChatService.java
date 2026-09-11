@@ -12,6 +12,11 @@ import com.travel.aigateway.core.GatewayException;
 import com.travel.aigateway.core.ModelRegistry;
 import com.travel.aigateway.route.ModelRoutingContext;
 import com.travel.planning.cancellation.TurnCancellationBroadcaster;
+import com.travel.stream.service.ChatProgressListener;
+import com.travel.stream.service.TurnCancellation;
+import com.travel.stream.service.TurnInterruptedException;
+import com.travel.stream.service.ChatStreamExecutor;
+import com.travel.stream.service.TurnCancellationRegistry;
 import com.travel.planning.memory.chat.ChatIntent;
 import com.travel.planning.memory.sessionstore.SessionStorePort;
 import com.travel.planning.memory.pipeline.ChatBreakpointStore;
@@ -408,7 +413,7 @@ public class ChatService implements ChatStreamExecutor {
         java.util.List<Long> anchorIds = prepared.anchorIds() == null
                 ? java.util.List.of() : prepared.anchorIds();
         // M25（E4 收尾）：偏好冲突信号（gate 块内赋值；方法级声明供 Result 组装）
-        com.travel.planning.service.ChatStreamExecutor.ChatStreamResult.PreferenceConflict preferenceConflict = null;
+        com.travel.stream.service.ChatStreamExecutor.ChatStreamResult.PreferenceConflict preferenceConflict = null;
         String sessionId = prepared.sessionId();
         String message = prepared.message();
         Long userId = prepared.userId();
@@ -617,7 +622,7 @@ public class ChatService implements ChatStreamExecutor {
             // 原"询问卡"在该场景冗余——已默认锚定，后续轮 getAnchors 非空不再触发。
             // 询问卡载荷/前端卡片保留为兼容死代码，不再发送）
             Long routedItineraryId = routed == null ? null : routed.writtenItineraryId();
-            com.travel.planning.service.ChatStreamExecutor.ChatStreamResult.AnchorSuggestion suggestion = null;
+            com.travel.stream.service.ChatStreamExecutor.ChatStreamResult.AnchorSuggestion suggestion = null;
             if (routedItineraryId != null
                     && chatAnchorPolicy.shouldAutoAnchor(anchorIds) // M28-13：用户已显式携带锚定（含新会话预选）时不被新行程覆盖
                     && sessionAnchorStore.getAnchors(prepared.sessionId()).isEmpty()
@@ -632,10 +637,10 @@ public class ChatService implements ChatStreamExecutor {
             // M28-3：含 start_date——聊天建行程/改签时从 routePlan 首日提取）
             // M28-12：含 interests（行程 interests 列）；filter 补 party/interests——
             // 此前仅有 party 时整个 sync 被过滤为 null（同行人单独回写场景标签不同步）
-            com.travel.planning.service.ChatStreamExecutor.ChatStreamResult.PreferenceSync preferenceSync = null;
+            com.travel.stream.service.ChatStreamExecutor.ChatStreamResult.PreferenceSync preferenceSync = null;
             if (routedItineraryId != null) {
                 preferenceSync = itineraryBriefPort.briefOf(userId, routedItineraryId)
-                        .map(b -> new com.travel.planning.service.ChatStreamExecutor.ChatStreamResult.PreferenceSync(
+                        .map(b -> new com.travel.stream.service.ChatStreamExecutor.ChatStreamResult.PreferenceSync(
                                 b.destination(), b.days(), b.budget(), b.party(),
                                 b.interests() == null || b.interests().isEmpty()
                                         ? null : b.interests(),
@@ -702,7 +707,7 @@ public class ChatService implements ChatStreamExecutor {
     }
 
     /** M25（E4 收尾）：偏好目的地 vs 锚定目的地冲突（确定性；无冲突/无偏好 → null）。 */
-    private com.travel.planning.service.ChatStreamExecutor.ChatStreamResult.PreferenceConflict preferenceConflictOf(
+    private com.travel.stream.service.ChatStreamExecutor.ChatStreamResult.PreferenceConflict preferenceConflictOf(
             com.travel.common.dto.PreferenceTagsDTO preferences, String anchorSection) {
         if (preferences == null || preferences.getDestination() == null || preferences.getDestination().isBlank()) {
             return null;
@@ -711,7 +716,7 @@ public class ChatService implements ChatStreamExecutor {
         if (anchored == null || anchored.equals(preferences.getDestination())) {
             return null;
         }
-        return new com.travel.planning.service.ChatStreamExecutor.ChatStreamResult.PreferenceConflict(
+        return new com.travel.stream.service.ChatStreamExecutor.ChatStreamResult.PreferenceConflict(
                 preferences.getDestination(), anchored, "anchor");
     }
 
@@ -719,7 +724,7 @@ public class ChatService implements ChatStreamExecutor {
      * M28-4：无锚定会话的回退冲突比对——偏好目的地 vs 会话最新行程目的地。
      * 降级语义：任一失败返回 null（可见性信号不阻断主链路）。source=itinerary。
      */
-    private com.travel.planning.service.ChatStreamExecutor.ChatStreamResult.PreferenceConflict
+    private com.travel.stream.service.ChatStreamExecutor.ChatStreamResult.PreferenceConflict
     conflictAgainstSessionItinerary(Long userId, String sessionId, String preferred) {
         try {
             java.util.List<Long> ids = itineraryBriefPort.findSessionItineraryIds(sessionId);
@@ -729,7 +734,7 @@ public class ChatService implements ChatStreamExecutor {
             return itineraryBriefPort.briefOf(userId, ids.get(0))
                     .map(b -> b.destination())
                     .filter(d -> d != null && !d.isBlank() && !d.equals(preferred))
-                    .map(d -> new com.travel.planning.service.ChatStreamExecutor
+                    .map(d -> new com.travel.stream.service.ChatStreamExecutor
                             .ChatStreamResult.PreferenceConflict(preferred, d, "itinerary"))
                     .orElse(null);
         } catch (Exception e) {

@@ -1,7 +1,7 @@
 package com.travel.planning;
 
 import com.travel.common.CommonMarker;
-import com.travel.planning.stream.ChatStreamMarker;
+import com.travel.stream.ChatStreamMarker;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.context.annotation.Import;
@@ -29,7 +29,7 @@ import org.springframework.scheduling.annotation.EnableScheduling;
 @SpringBootApplication(scanBasePackageClasses = {
         PlanningMarker.class,       // travel-planning 本模块
         ChatDomainMarker.class,     // travel-chat-domain（同根包 com.travel.planning，跨 jar）
-        ChatStreamMarker.class,     // travel-chat-stream（com.travel.planning.stream）
+        ChatStreamMarker.class,     // travel-chat-stream（com.travel.stream）
         CommonMarker.class})        // travel-common（TokenAuthService/MybatisPlusConfig/FileStorageProperties）
 @EnableFeignClients(basePackages = "com.travel.planning.client")
 @EnableScheduling

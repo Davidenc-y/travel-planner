@@ -11,7 +11,7 @@ import com.travel.planning.agent.budget.BudgetEstimationAgent;
 import com.travel.planning.agent.preference.PreferenceAnalysisAgent;
 import com.travel.planning.agent.route.RouteArrangementAgent;
 import com.travel.planning.prompt.PromptTemplates;
-import com.travel.planning.service.TurnCancellation;
+import com.travel.stream.service.TurnCancellation;
 import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.model.ChatModel;

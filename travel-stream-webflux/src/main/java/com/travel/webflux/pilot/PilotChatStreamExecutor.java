@@ -2,8 +2,8 @@ package com.travel.webflux.pilot;
 
 import com.travel.common.exception.BusinessException;
 import com.travel.core.stream.TurnGate;
-import com.travel.planning.service.ChatProgressListener;
-import com.travel.planning.service.ChatStreamExecutor;
+import com.travel.stream.service.ChatProgressListener;
+import com.travel.stream.service.ChatStreamExecutor;
 
 /**
  * M6-30：WebFlux 试点演示执行器。

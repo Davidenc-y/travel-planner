@@ -74,7 +74,7 @@ public class TraceAspect {
         } catch (Throwable e) {
             // M7-8：轮次中断（TurnInterruptedException）不记 FAILED trace——
             // 与“中断不落库”语义一致；成功/其他异常照常记录
-            if (!(e instanceof com.travel.planning.service.TurnInterruptedException)) {
+            if (!(e instanceof com.travel.stream.service.TurnInterruptedException)) {
                 collector.end(holder, statusOf(e), e.getMessage() == null
                         ? e.getClass().getSimpleName() : e.getMessage().substring(0,
                         Math.min(500, e.getMessage().length())));

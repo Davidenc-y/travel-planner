@@ -1,4 +1,4 @@
-package com.travel.planning.service;
+package com.travel.stream.service;
 
 import com.travel.core.stream.TurnGate;
 

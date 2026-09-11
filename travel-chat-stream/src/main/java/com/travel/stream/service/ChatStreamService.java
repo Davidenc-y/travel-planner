@@ -1,4 +1,4 @@
-package com.travel.planning.service;
+package com.travel.stream.service;
 
 import com.travel.common.exception.BusinessException;
 import com.travel.core.stream.AbstractStreamingPipeline;
@@ -8,8 +8,8 @@ import com.travel.core.stream.StreamMetrics;
 import com.travel.core.stream.StreamPreflight;
 import com.travel.core.stream.StreamRequest;
 import com.travel.core.stream.StreamingChunker;
-import com.travel.planning.stream.ChatStreamProperties;
-import com.travel.planning.stream.StreamErrorMapper;
+import com.travel.stream.ChatStreamProperties;
+import com.travel.stream.StreamErrorMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 import reactor.core.publisher.Flux;

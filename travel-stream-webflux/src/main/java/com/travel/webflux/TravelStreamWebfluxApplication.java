@@ -1,7 +1,7 @@
 package com.travel.webflux;
 
 import com.travel.planning.ChatDomainMarker;
-import com.travel.planning.stream.ChatStreamMarker;
+import com.travel.stream.ChatStreamMarker;
 import org.mybatis.spring.annotation.MapperScan;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
@@ -24,7 +24,7 @@ import org.springframework.context.annotation.Import;
 @SpringBootApplication(scanBasePackageClasses = {
         WebfluxModuleMarker.class,  // travel-stream-webflux 本模块
         ChatDomainMarker.class,     // travel-chat-domain（com.travel.planning，跨 jar）
-        ChatStreamMarker.class})    // travel-chat-stream（com.travel.planning.stream）
+        ChatStreamMarker.class})    // travel-chat-stream（com.travel.stream）
 @MapperScan("com.travel.planning.repository")
 @EnableFeignClients(basePackages = "com.travel.planning.client")
 // M6-33：MyBatis-Plus 分页 + createdAt/updatedAt 自动填充（planning 经

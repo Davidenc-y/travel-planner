@@ -1,4 +1,4 @@
-package com.travel.planning.stream;
+package com.travel.stream;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;

@@ -1,8 +1,8 @@
-package com.travel.planning.stream;
+package com.travel.stream;
 
 import com.travel.core.stream.StreamEvent;
 import com.travel.core.stream.StreamMeta;
-import com.travel.planning.stream.StreamPayloadMapper;
+import com.travel.stream.StreamPayloadMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;

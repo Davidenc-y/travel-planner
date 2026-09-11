@@ -2,7 +2,7 @@ package com.travel.webflux.web;
 
 import com.travel.common.exception.BusinessException;
 import com.travel.common.result.R;
-import com.travel.planning.stream.StreamErrorMapper;
+import com.travel.stream.StreamErrorMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.ExceptionHandler;

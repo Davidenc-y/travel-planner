@@ -1,7 +1,7 @@
 package com.travel.planning.cancellation;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.travel.planning.service.TurnCancellationRegistry;
+import com.travel.stream.service.TurnCancellationRegistry;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.connection.Message;

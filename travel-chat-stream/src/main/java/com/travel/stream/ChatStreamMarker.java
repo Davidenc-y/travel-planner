@@ -1,4 +1,4 @@
-package com.travel.planning.stream;
+package com.travel.stream;
 
 /**
  * travel-chat-stream 模块包锚点（M16-4；本包为该模块独占）。

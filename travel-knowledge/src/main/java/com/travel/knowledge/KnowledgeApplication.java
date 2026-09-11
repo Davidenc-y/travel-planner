@@ -16,12 +16,17 @@ import org.springframework.scheduling.annotation.EnableScheduling;
  * @version 1.0-SNAPSHOT
  * @since 2026-07-28
  */
+// B3.4：chat-stream 包名归位后，旧扫描串 "com.travel.planning.stream" 仅覆盖适配包；
+// 新根包 com.travel.stream 递归含 service 契约子包（ChatStreamService 依赖 chat-domain 实现，knowledge 无此上下文），
+// 故改为显式 @Import 三个适配 bean，与旧装配语义严格等价（旧串实际装配的正是这三个 @Component）。
 @SpringBootApplication(scanBasePackages = {
-        "com.travel.knowledge", "com.travel.common",
-        "com.travel.planning.stream"})
+        "com.travel.knowledge", "com.travel.common"})
 @EnableScheduling
 // M7 Batch 4：模型网关装配（travel.ai.model-registry.enabled=true 时提供 chatModel/lightModel）
-@Import(com.travel.aigateway.config.GatewayAutoConfig.class)
+@Import({com.travel.aigateway.config.GatewayAutoConfig.class,
+        com.travel.stream.SseStreamAdapter.class,
+        com.travel.stream.StreamPayloadMapper.class,
+        com.travel.stream.ChatStreamProperties.class})
 public class KnowledgeApplication {
 
     public static void main(String[] args) {
