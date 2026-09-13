@@ -1,8 +1,10 @@
 package com.travel.planning.memory;
 
 import com.travel.common.entity.TravelProfile;
+import com.travel.planning.memory.knowledge.SessionFactConsolidator;
 
 import java.util.List;
+import java.util.Map;
 
 /**
  * 记忆体系统一门面（R7.2 阶段一仅定义 + 映射表，阶段二经人工确认后迁移行为）。
@@ -36,4 +38,18 @@ public interface MemoryFacade {
      * <p>委托 longterm 级实现类 service.TravelProfileService#getOrCreate（经 ProfilePort 同源逻辑）。</p>
      */
     TravelProfile getOrCreateProfile(Long userId);
+
+    /**
+     * 会话摘要读取（shortterm 级读入口；R7-memory-mapping 门面名 getSummary）——MI-3 增补。
+     *
+     * <p>委托 shortterm 级实现类 SessionMemoryServiceImpl#getSummaryOrEmpty（经 SessionMemoryPort 同源入口）。</p>
+     */
+    String getSummary(String sessionId);
+
+    /**
+     * 会话事实共识合并（knowledge 级 facts 触发入口；R7-memory-mapping 门面名 consolidateFacts）——MI-3 增补。
+     *
+     * <p>委托 knowledge 级实现类 SessionFactConsolidator#consolidate（ChatBudgetStep 同源入口）。</p>
+     */
+    List<SessionFactConsolidator.ConsensusEntry> consolidateFacts(List<Map<String, Object>> hits);
 }

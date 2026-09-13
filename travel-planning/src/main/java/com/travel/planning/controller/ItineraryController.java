@@ -47,6 +47,9 @@ public class ItineraryController {
     private final com.travel.planning.service.ItineraryRenameService itineraryRenameService;
     /** M28-13：偏好元数据（party/interests）显式持久化 */
     private final com.travel.planning.service.ItineraryPreferenceConstraintsService itineraryPreferenceConstraintsService;
+    /** HC-3：详情读缓存失效挂钩（可选注入；缺省/停用时为 null，直接跳过） */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.travel.planning.service.ItineraryDetailCache itineraryDetailCache;
 
     /**
      * 生成行程
@@ -147,7 +150,12 @@ public class ItineraryController {
     @org.springframework.web.bind.annotation.PatchMapping("/{id}/title")
     public R<String> renameTitle(@PathVariable Long id,
                                  @RequestBody java.util.Map<String, String> body) {
-        return R.ok(itineraryRenameService.rename(AuthUtils.resolveUserId(), id, body.get("title")));
+        String result = itineraryRenameService.rename(AuthUtils.resolveUserId(), id, body.get("title"));
+        // HC-3：标题写点主动失效详情缓存（TTL 10min 兜底）
+        if (itineraryDetailCache != null) {
+            itineraryDetailCache.evict(id);
+        }
+        return R.ok(result);
     }
 
     /**
@@ -162,8 +170,13 @@ public class ItineraryController {
         @SuppressWarnings("unchecked")
         java.util.List<String> interests = body.get("interests") == null
                 ? null : (java.util.List<String>) body.get("interests");
-        return R.ok(itineraryPreferenceConstraintsService.update(
-                AuthUtils.resolveUserId(), id, party, interests));
+        ItineraryResponseDTO result = itineraryPreferenceConstraintsService.update(
+                AuthUtils.resolveUserId(), id, party, interests);
+        // HC-3：约束写点主动失效详情缓存（TTL 10min 兜底）
+        if (itineraryDetailCache != null) {
+            itineraryDetailCache.evict(id);
+        }
+        return R.ok(result);
     }
 
     /** M11-1：行程历史版本列表（本人行程，按版本倒序）。 */
@@ -189,6 +202,10 @@ public class ItineraryController {
             @PathVariable Integer version) {
         Integer activeVersion = itineraryVersionService.switchTo(
                 AuthUtils.resolveUserId(), id, version);
+        // HC-3：版本切换写点主动失效详情缓存（TTL 10min 兜底）
+        if (itineraryDetailCache != null) {
+            itineraryDetailCache.evict(id);
+        }
         return R.ok(java.util.Map.of(
                 "itineraryId", id, "version", activeVersion, "activeVersion", activeVersion));
     }
@@ -199,6 +216,10 @@ public class ItineraryController {
             @PathVariable Integer version) {
         Integer activeVersion = itineraryVersionService.rollbackTo(
                 AuthUtils.resolveUserId(), id, version);
+        // HC-3：版本回退写点主动失效详情缓存（TTL 10min 兜底）
+        if (itineraryDetailCache != null) {
+            itineraryDetailCache.evict(id);
+        }
         return R.ok(java.util.Map.of(
                 "itineraryId", id, "version", activeVersion, "activeVersion", activeVersion));
     }

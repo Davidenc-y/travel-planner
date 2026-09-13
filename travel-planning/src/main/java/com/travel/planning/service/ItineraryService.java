@@ -49,6 +49,9 @@ public class ItineraryService {
     private final SessionContextChunker sessionContextChunker;
     private final SessionKnowledgeWriter sessionKnowledgeWriter;
     private final GuardService guardService;
+    /** HC-3：详情读缓存（可选注入；未注入/停用时全部降级为原库读路径） */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private ItineraryDetailCache detailCache;
     private final PromptTemplates promptTemplates;
     private final ItineraryPersistenceService persistenceService;
     private final ItineraryTaskSnapshotPort snapshotPort;
@@ -85,6 +88,12 @@ public class ItineraryService {
      * 与 ItineraryVersionService.requireOwner 同语义）。
      */
     public ItineraryResponseDTO getById(Long id, Long userId) {
+        // HC-3：详情读缓存——命中且归属匹配时零 DB 直返；未命中走原路径并回写（TTL 10min）。
+        // 归属校验语义不变：命中但非本人 → 落回原库路径抛 40401/40302。
+        ItineraryDetailCache.CachedDetail cached = detailCache == null ? null : detailCache.get(id);
+        if (cached != null && userId.equals(cached.ownerId())) {
+            return cached.dto();
+        }
         Itinerary entity = itineraryMapper.selectById(id);
         if (entity == null) {
             // M22-3：缺失统一 40401（原 ItineraryGenerationException 被兜底为 50001，
@@ -98,6 +107,10 @@ public class ItineraryService {
         ItineraryResponseDTO dto = toResponseDTO(entity);
         // M12-5：坐标装饰只保留在详情/地图路径（列表页不再按城市回查坐标）
         coordinateDecorator.decorate(dto);
+        if (detailCache != null) {
+            // HC-3：回写缓存（写点主动失效见 ItineraryController 四写端点；TTL 10min 兜底）
+            detailCache.put(id, dto, entity.getUserId());
+        }
         return dto;
     }
 

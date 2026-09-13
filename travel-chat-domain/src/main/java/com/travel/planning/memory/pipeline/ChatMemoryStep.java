@@ -8,19 +8,39 @@ import com.travel.planning.memory.longterm.behavior.BehaviorProfileProperties;
 import com.travel.planning.memory.longterm.behavior.BehaviorSections;
 import com.travel.planning.memory.shortterm.SessionMemoryPort;
 import com.travel.planning.memory.shortterm.ShortTermMemoryProperties;
+import jakarta.annotation.PreDestroy;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
+
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 /**
  * M3-15：MessagePipeline 步骤 6「记忆」。
  * 画像 + 历史/摘要段组装从 ChatService 抽出为独立可测步骤。
+ *
+ * <p>HC-4（方案 §六 2026-09-13 修订版）：assemble 内两独立读段（画像段 / 短期记忆段）
+ * 以 {@link CompletableFuture#supplyAsync} 并行（专用 2 线程 Executor，禁用公共
+ * ForkJoinPool，守护线程随 Bean 关闭回收）；等待上限 2s，超时或任一段异常即
+ * <b>取消在飞任务并降级串行组装</b>（读段幂等，重取保行为零回归）。
+ * 开关 {@code perf.prepare-parallel.enabled}（默认 true，false 走原串行路径）。</p>
  */
+@Slf4j
 @Component
 @RequiredArgsConstructor
 public class ChatMemoryStep implements ChatPipelineStep {
 
     /** B3.2：步骤顺序——M3-15 步骤 6「记忆」（依据 R7-pipeline-mapping 现发送链步骤序 6，ChatService :484）。 */
     static final int STEP_ORDER = 6;
+
+    /** HC-4：并行等待上限（超时降级串行）。 */
+    private static final long PARALLEL_TIMEOUT_SECONDS = 2;
 
     @Override
     public int order() {
@@ -43,10 +63,65 @@ public class ChatMemoryStep implements ChatPipelineStep {
     private final BehaviorProfileService behaviorProfileService;
     private final BehaviorProfileProperties behaviorProps;
 
+    /** HC-4：并行开关（默认 true；false 走原串行路径）。 */
+    @Value("${perf.prepare-parallel.enabled:true}")
+    private boolean parallelEnabled = true;
+
+    /** HC-4：记忆两读段专用 Executor（2 线程对应两读段；禁用公共 ForkJoinPool；守护线程）。 */
+    private final ExecutorService parallelExecutor = Executors.newFixedThreadPool(2, r -> {
+        Thread t = new Thread(r, "chat-memory-parallel");
+        t.setDaemon(true);
+        return t;
+    });
+
+    /** Bean 关闭时回收专用 Executor（方案修订版：生命周期随 Bean）。 */
+    @PreDestroy
+    void shutdownParallelExecutor() {
+        parallelExecutor.shutdown();
+    }
+
     /**
      * 组装 画像 + (摘要+滑动窗口 | 原文历史)（F50/F55/F57/F60 语义不变）。
+     * HC-4：两读段并行（2s 超时/异常降级串行值，保行为）；开关关闭走纯串行。
      */
     public MemoryContext assemble(Long userId, String sessionId) {
+        if (!parallelEnabled) {
+            return assembleSerial(userId, sessionId);
+        }
+        CompletableFuture<ProfilePart> profileFuture = null;
+        CompletableFuture<HistoryPart> historyFuture = null;
+        try {
+            profileFuture = CompletableFuture.supplyAsync(() -> profilePart(userId), parallelExecutor);
+            historyFuture = CompletableFuture.supplyAsync(() -> historyPart(sessionId), parallelExecutor);
+            CompletableFuture.allOf(profileFuture, historyFuture).get(PARALLEL_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+            ProfilePart profile = profileFuture.join();
+            HistoryPart history = historyFuture.join();
+            return combine(profile, history);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            cancelQuietly(profileFuture, historyFuture);
+            log.warn("[ChatMemoryParallel] 并行等待被中断，降级串行组装: sessionId={}", sessionId);
+            return assembleSerial(userId, sessionId);
+        } catch (ExecutionException | TimeoutException e) {
+            cancelQuietly(profileFuture, historyFuture);
+            log.warn("[ChatMemoryParallel] 并行段异常/超时，降级串行组装: sessionId={}, error={}",
+                    sessionId, e.getMessage());
+            return assembleSerial(userId, sessionId);
+        }
+    }
+
+    /** 原串行路径（开关关闭/并行降级时使用；与并行段共用同一套读段实现，语义单源）。 */
+    private MemoryContext assembleSerial(Long userId, String sessionId) {
+        return combine(profilePart(userId), historyPart(sessionId));
+    }
+
+    private MemoryContext combine(ProfilePart profile, HistoryPart history) {
+        return new MemoryContext(profile.profileContext(), history.historySection(),
+                history.summaryUsed(), history.summaryTriggered(), history.turns(), history.totalHistoryTokens());
+    }
+
+    /** 读段①：行为段（条件注入）+ 画像段。 */
+    private ProfilePart profilePart(Long userId) {
         String behaviorSection = behaviorSectionOrNull(userId);
         String profileContext;
         if (behaviorSection == null) {
@@ -56,6 +131,11 @@ public class ChatMemoryStep implements ChatPipelineStep {
             profileContext = profileContextAssembler.assemble(
                     profilePort.getOrCreate(userId), behaviorSection);
         }
+        return new ProfilePart(profileContext);
+    }
+
+    /** 读段②：短期记忆段（原文历史/摘要触发/滑动窗口 + 轮数与全量 token 统计）。 */
+    private HistoryPart historyPart(String sessionId) {
         String rawHistory = sessionMemoryPort.composeHistoryContext(sessionId, memoryProps.getMaxTurns());
         int turns = sessionMemoryPort.countUserTurns(sessionId);
         // F57：以全量汇总 token 作为触发依据（截断前统计），配合轮数触发。
@@ -87,8 +167,22 @@ public class ChatMemoryStep implements ChatPipelineStep {
         } else {
             historySection = rawHistory;
         }
-        return new MemoryContext(profileContext, historySection, summaryUsed, summaryTriggered,
-                turns, totalHistoryTokens);
+        return new HistoryPart(historySection, summaryUsed, summaryTriggered, turns, totalHistoryTokens);
+    }
+
+    private static void cancelQuietly(CompletableFuture<?>... futures) {
+        for (CompletableFuture<?> f : futures) {
+            if (f != null) {
+                f.cancel(true);
+            }
+        }
+    }
+
+    private record ProfilePart(String profileContext) {
+    }
+
+    private record HistoryPart(String historySection, boolean summaryUsed,
+                               boolean summaryTriggered, int turns, int totalHistoryTokens) {
     }
 
     /**

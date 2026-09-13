@@ -21,11 +21,8 @@ import com.travel.planning.agent.support.AttractionGroundingChecker;
 import com.travel.planning.config.ItineraryConflictCheckProperties;
 import com.travel.planning.memory.knowledge.KnowledgeRetrievalService;
 import com.travel.planning.workflow.validation.ItineraryConflictValidator;
-import com.travel.planning.workflow.validation.BudgetJsonParser;
 import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.node.ObjectNode;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.SystemMessage;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.stereotype.Component;
@@ -48,7 +45,7 @@ import static com.alibaba.cloud.ai.graph.StateGraph.START;
  *   <li>修复 ClassCastException 真正根因：UserInputNode 的 {@code messages} 键放
  *       {@link UserMessage} 而非 String（AppendStrategy 期望 List&lt;Message&gt;，String 污染导致
  *       asNode 读取 messages 时强转失败）</li>
- *   <li>OptimizeNode / 条件边用 {@link #toText(Object)} 安全提取 outputKey
+ *   <li>OptimizeNode / 条件边用 {@link WorkflowPromptComposer#toText(Object)} 安全提取 outputKey
  *       （兼容 AssistantMessage / String）</li>
  *   <li>修复 RouteArrangementAgent / BudgetEstimationAgent 的 outputKey 命名
  *       （route_plan→routePlan，budget_estimate→budgetEstimate，与 state 键一致）</li>
@@ -269,8 +266,10 @@ public class TravelWorkflowBuilder {
                         "snapshot_budget",
                         AsyncEdgeAction.edge_async(state -> {
                             int retryCount = readRetryCount(state);
-                            double estimatedCost = extractTotalCost(toText(state.value("budgetEstimate")));
-                            double budget = parseBudgetFromPreference(toText(state.value("preference")));
+                            double estimatedCost = WorkflowPromptComposer.extractTotalCost(
+                                    WorkflowPromptComposer.toText(state.value("budgetEstimate")));
+                            double budget = WorkflowPromptComposer.parseBudgetFromPreference(
+                                    WorkflowPromptComposer.toText(state.value("preference")));
                             boolean overBudget = estimatedCost > budget * BUDGET_OVERRUN_RATIO;
                             boolean canRetry = retryCount < MAX_RETRY;
                             log.info("预算判定: estimated={}, budget={}, ratio={}, retry={}/{}, overBudget={}, canRetry={}",
@@ -315,7 +314,8 @@ public class TravelWorkflowBuilder {
             return "budget_estimation";
         }
         List<ItineraryConflictValidator.Violation> violations = safeViolations(conflictValidator.validate(
-                toText(state.value("routePlan")), toText(state.value("candidates"))));
+                WorkflowPromptComposer.toText(state.value("routePlan")),
+                WorkflowPromptComposer.toText(state.value("candidates"))));
         int routeRetry = readRouteRetryCount(state);
         int maxRetry = Math.max(0, conflictProperties.getMaxRouteRetry());
         boolean hasError = ItineraryConflictValidator.hasError(violations);
@@ -330,71 +330,6 @@ public class TravelWorkflowBuilder {
     }
 
     // ==================== 工具方法 ====================
-
-    /**
-     * 安全提取 outputKey 的文本内容。
-     *
-     * <p>asNode 执行后 outputKey 可能存 {@link Optional} 包装的
-     * {@link AssistantMessage}（框架内部行为，graph-core 的
-     * {@code OverAllState.value(String)} 返回 Optional）或 String。
-     * 本方法递归解包 Optional 并统一转为纯文本，避免下游强转崩溃或
-     * "Optional[...]" 字符串污染 JSON（F23 D1 修复）。</p>
-     */
-    private static String toText(Object value) {
-        if (value == null) return "";
-        if (value instanceof Optional<?> opt) {
-            return toText(opt.orElse(null));
-        }
-        if (value instanceof String s) return s;
-        if (value instanceof AssistantMessage am) return am.getText();
-        return value.toString();
-    }
-
-    /**
-     * 将 Agent 输出文本转为可嵌入 JSON 的值：
-     * 有效 JSON 解析为节点（对象/数组），非法 JSON（含 Markdown 代码围栏）先剥离围栏，
-     * 仍失败则按 JSON 字符串转义保留，保证 itinerary 始终是合法 JSON（F23 D1 修复）。
-     */
-    private static Object toJsonValue(String text) {
-        if (text == null || text.isBlank()) return null;
-        String cleaned = stripCodeFence(text);
-        try {
-            return JsonUtils.getMapper().readTree(cleaned);
-        } catch (Exception e) {
-            return cleaned;
-        }
-    }
-
-    /**
-     * 剥离 LLM 常见输出的 ```json ... ``` Markdown 代码围栏。
-     */
-    private static String stripCodeFence(String text) {
-        String t = text.trim();
-        if (t.startsWith("```")) {
-            int firstNl = t.indexOf('\n');
-            int lastIdx = t.lastIndexOf("```");
-            if (firstNl > 0 && lastIdx > firstNl) {
-                t = t.substring(firstNl + 1, lastIdx).trim();
-            }
-        }
-        return t;
-    }
-
-    /**
-     * 从预算估算 JSON 中提取 totalCost 数值。
-     * M8-3：委托 {@link BudgetJsonParser}（JsonUtils readTree + 异常兜底，取代字符串手工解析）。
-     */
-    private static double extractTotalCost(String budgetJson) {
-        return BudgetJsonParser.extractTotalCost(budgetJson);
-    }
-
-    /**
-     * 从偏好 JSON 中提取 budget 数值（用户预算上限）。
-     * M8-3：委托 {@link BudgetJsonParser}。
-     */
-    private static double parseBudgetFromPreference(String preference) {
-        return BudgetJsonParser.parseBudget(preference);
-    }
 
     /**
      * 防御性读取 retryCount：兼容 Integer / Long / 其他 Number，避免类型污染导致
@@ -484,8 +419,8 @@ public class TravelWorkflowBuilder {
     class ConflictCheckNode implements NodeAction {
         @Override
         public Map<String, Object> apply(OverAllState state) {
-            String routePlan = toText(state.value("routePlan"));
-            String candidates = toText(state.value("candidates"));
+            String routePlan = WorkflowPromptComposer.toText(state.value("routePlan"));
+            String candidates = WorkflowPromptComposer.toText(state.value("candidates"));
             List<ItineraryConflictValidator.Violation> violations =
                     conflictValidator.validate(routePlan, candidates);
             log.info("[Node:conflict_check] 违规 {} 条: {}", violations.size(), violations);
@@ -551,7 +486,8 @@ public class TravelWorkflowBuilder {
             result.put("budgetEstimate", OverAllState.MARK_FOR_REMOVAL);
 
             List<ItineraryConflictValidator.Violation> violations = safeViolations(conflictValidator.validate(
-                    toText(state.value("routePlan")), toText(state.value("candidates"))));
+                    WorkflowPromptComposer.toText(state.value("routePlan")),
+                    WorkflowPromptComposer.toText(state.value("candidates"))));
             if (!violations.isEmpty()) {
                 StringBuilder feedback = new StringBuilder();
                 feedback.append("【行程冲突反馈】上一版路线存在 ").append(violations.size())
@@ -598,56 +534,37 @@ public class TravelWorkflowBuilder {
             // F24 补强：重试时必须让下游 Agent 感知“预算超支多少、需如何降低成本”，
             // 否则 attraction_filter 会用同样的偏好与上下文重新筛选出相同景点，
             // 导致重试轮次全部白跑（用户实测 estimated=7026 三连相同即此现象）。
-            double estimated = extractTotalCost(toText(state.value("budgetEstimate")));
-            double budget = parseBudgetFromPreference(toText(state.value("preference")));
+            double estimated = WorkflowPromptComposer.extractTotalCost(
+                    WorkflowPromptComposer.toText(state.value("budgetEstimate")));
+            double budget = WorkflowPromptComposer.parseBudgetFromPreference(
+                    WorkflowPromptComposer.toText(state.value("preference")));
             if (budget != Double.MAX_VALUE && estimated > 0) {
                 double overrun = estimated - budget;
                 String feedback = "【预算重试反馈】上一版行程预算超支：预估总费用 %s 元，预算上限 %s 元，"
                         + "超出 %s 元。请在本轮重新筛选景点与编排路线时优先选择免费/低门票景点，"
                         + "并压缩住宿与交通档次，使新的预估总费用不超过预算上限。"
-                        .formatted(formatMoney(estimated), formatMoney(budget), formatMoney(overrun));
-                log.info("[Node:budget_retry] 追加预算反馈: overrun={}", formatMoney(overrun));
+                        .formatted(WorkflowPromptComposer.formatMoney(estimated),
+                                WorkflowPromptComposer.formatMoney(budget),
+                                WorkflowPromptComposer.formatMoney(overrun));
+                log.info("[Node:budget_retry] 追加预算反馈: overrun={}", WorkflowPromptComposer.formatMoney(overrun));
                 result.put("messages", new SystemMessage(feedback));
             }
             return result;
         }
     }
 
-    private static String formatMoney(double v) {
-        return v == Math.floor(v) ? String.valueOf((long) v) : String.format("%.2f", v);
-    }
-
-    /** M14-1b：预算校验 WARNING 合并进 budgetEstimate.notes（非法 JSON 原样保留）。 */
-    private static Object appendBudgetWarnings(
-            String budgetJson, List<ItineraryConflictValidator.Violation> warnings) {
-        Object value = toJsonValue(budgetJson);
-        if (!(value instanceof ObjectNode obj) || warnings == null || warnings.isEmpty()) {
-            return value;
-        }
-        StringBuilder sb = new StringBuilder("【行程校验提示】");
-        for (int i = 0; i < warnings.size(); i++) {
-            if (i > 0) {
-                sb.append("；");
-            }
-            sb.append(warnings.get(i).message());
-        }
-        String oldNotes = obj.path("notes").asText("");
-        obj.put("notes", oldNotes.isBlank() ? sb.toString() : oldNotes + "。" + sb);
-        return obj;
-    }
-
     /**
      * 行程综合优化节点 —— 整合路线、预算、偏好为最终 itinerary。
      *
-     * <p>用 {@link #toText(Object)} 安全提取 outputKey，兼容 AssistantMessage/String。</p>
+     * <p>用 {@link WorkflowPromptComposer#toText(Object)} 安全提取 outputKey，兼容 AssistantMessage/String。</p>
      */
     class OptimizeNode implements NodeAction {
         @Override
         public Map<String, Object> apply(OverAllState state) throws Exception {
-            String routePlan = toText(state.value("routePlan"));
-            String budgetEstimate = toText(state.value("budgetEstimate"));
-            String preference = toText(state.value("preference"));
-            String candidates = toText(state.value("candidates"));
+            String routePlan = WorkflowPromptComposer.toText(state.value("routePlan"));
+            String budgetEstimate = WorkflowPromptComposer.toText(state.value("budgetEstimate"));
+            String preference = WorkflowPromptComposer.toText(state.value("preference"));
+            String candidates = WorkflowPromptComposer.toText(state.value("candidates"));
             log.info("[Node:itinerary_optimize] 整合路线+预算, routeLen={}, budgetLen={}",
                     routePlan.length(), budgetEstimate.length());
             List<ItineraryConflictValidator.Violation> budgetWarnings = new ArrayList<>();
@@ -659,16 +576,17 @@ public class TravelWorkflowBuilder {
             // M14-1b：消费水平餐费硬约束（确定性第五规则，WARNING 级不重试）
             budgetWarnings.addAll(conflictValidator.validateConsumeLevelBudget(
                     routePlan, budgetEstimate,
-                    toText(state.value("consumeLevel")), toText(state.value("party"))));
+                    WorkflowPromptComposer.toText(state.value("consumeLevel")),
+                    WorkflowPromptComposer.toText(state.value("party"))));
             if (!budgetWarnings.isEmpty()) {
                 log.warn("[Node:itinerary_optimize] 预算校验警告 {} 条: {}",
                         budgetWarnings.size(), budgetWarnings);
             }
             Map<String, Object> body = new LinkedHashMap<>();
-            body.put("routePlan", toJsonValue(routePlan));
+            body.put("routePlan", WorkflowPromptComposer.toJsonValue(routePlan));
             // M14-1b：WARNING 随 budgetEstimate.notes 携带（DTO 预算明细可透出）
-            body.put("budgetEstimate", appendBudgetWarnings(budgetEstimate, budgetWarnings));
-            body.put("preference", toJsonValue(preference));
+            body.put("budgetEstimate", WorkflowPromptComposer.appendBudgetWarnings(budgetEstimate, budgetWarnings));
+            body.put("preference", WorkflowPromptComposer.toJsonValue(preference));
             String itinerary = JsonUtils.getMapper().writeValueAsString(body);
             Map<String, Object> result = new HashMap<>();
             result.put("itinerary", itinerary);
@@ -682,7 +600,7 @@ public class TravelWorkflowBuilder {
     class MindmapNode implements NodeAction {
         @Override
         public Map<String, Object> apply(OverAllState state) throws Exception {
-            String itinerary = toText(state.value("itinerary"));
+            String itinerary = WorkflowPromptComposer.toText(state.value("itinerary"));
             log.info("[Node:mindmap_output] 生成思维导图, itineraryLen={}", itinerary.length());
             // M3-2/P0-6：不再输出与真实行程无关的静态 JSON；
             // 由 ItineraryService 基于 itineraryJson 调用 MindmapGenerator 动态生成。

@@ -1,5 +1,6 @@
 package com.travel.planning.controller;
 
+import com.travel.common.config.GrayReleaseManager;
 import com.travel.common.exception.BusinessException;
 import com.travel.common.result.R;
 import com.travel.planning.service.AdminAccessService;
@@ -25,6 +26,8 @@ public class AdminReliabilityController {
 
     private final ReliabilityStatsService reliabilityStatsService;
     private final AdminAccessService adminAccessService;
+    /** MI-6：灰度开关只读快照（GrayReleaseManager 聚合 Environment；不含动态写）。 */
+    private final GrayReleaseManager grayReleaseManager;
 
     @GetMapping("/stats")
     public R<Map<String, Object>> stats(@RequestParam(defaultValue = "7") Integer days) {
@@ -33,5 +36,15 @@ public class AdminReliabilityController {
             throw new BusinessException(40302, "无权访问可靠性看板");
         }
         return R.ok(reliabilityStatsService.stats(days == null ? 7 : days));
+    }
+
+    /** MI-6：灰度开关快照（只读，不含动态写——动态切换留人工批次）。 */
+    @GetMapping("/gray-release/snapshot")
+    public R<Map<String, Object>> grayReleaseSnapshot() {
+        Long userId = AuthUtils.resolveUserId();
+        if (!adminAccessService.isAdmin(userId)) {
+            throw new BusinessException(40302, "无权访问灰度快照");
+        }
+        return R.ok(grayReleaseManager.snapshot());
     }
 }

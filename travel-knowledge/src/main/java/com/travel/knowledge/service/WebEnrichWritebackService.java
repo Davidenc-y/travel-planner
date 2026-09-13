@@ -2,7 +2,11 @@ package com.travel.knowledge.service;
 
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.travel.common.entity.Attraction;
+import com.travel.core.data.SourceConfidence;
 import com.travel.knowledge.etl.AttractionEtlService;
+import com.travel.knowledge.etl.AttractionFieldNormalizer;
+import com.travel.knowledge.etl.EtlOutboxService;
+import com.travel.knowledge.etl.FieldMergePolicy;
 import com.travel.knowledge.rag.websearch.WebEnrichExtractor;
 import com.travel.knowledge.rag.websearch.WebSearchPort;
 import com.travel.knowledge.repository.AttractionMapper;
@@ -48,6 +52,8 @@ public class WebEnrichWritebackService {
 
     private final AttractionMapper attractionMapper;
     private final AttractionEtlService etlService;
+    /** DG-3b：变更事件 outbox 写入（兜底一致性通道） */
+    private final EtlOutboxService etlOutboxService;
 
     /** M9-2：后台异步补全任务端口（Spring 注入门面；测试可 setter 注入） */
     private WebSearchPort webSearchPort;
@@ -125,10 +131,17 @@ public class WebEnrichWritebackService {
         try {
             Attraction update = new Attraction();
             update.setId(attractionId);
-            if (openHours != null && !openHours.isBlank()) {
+            // DG-2：回填条件经 FieldMergePolicy 单点判定（新值非空才尝试写；
+            // 旧值空保护由下方 SQL WHERE isNull 兜底，7 天防抖为独立判定保留在下方）
+            if (FieldMergePolicy.shouldOverwrite("openHours", null, openHours,
+                    null, SourceConfidence.ofSource("web_enrich"))) {
                 update.setOpenHours(openHours.trim());
+                // DG-1b：回填处同样规范化（norm 列随源列写入；列 DDL 人工/审计执行——E-13）
+                update.setOpenHoursNorm(
+                        AttractionFieldNormalizer.normalizeOpenHours(openHours.trim()));
             }
-            if (ticketPrice != null) {
+            if (FieldMergePolicy.shouldOverwrite("ticketPrice", null, ticketPrice,
+                    null, SourceConfidence.ofSource("web_enrich"))) {
                 update.setTicketPrice(BigDecimal.valueOf(ticketPrice));
             }
             update.setEnrichSource("web_enrich");
@@ -148,6 +161,8 @@ public class WebEnrichWritebackService {
             }
             log.info("[WebEnrichWriteback] 回写成功: id={}, openHours={}, ticketPrice={}",
                     attractionId, update.getOpenHours(), update.getTicketPrice());
+            // DG-3b：同事务写 outbox 变更事件（enrich 更新点；XADD 接线随 DG-3c/审计裁决）
+            etlOutboxService.writeEvent(attractionId, "UPDATE");
             triggerIncrementalEtl(attractionId);
             return true;
         } catch (Exception e) {

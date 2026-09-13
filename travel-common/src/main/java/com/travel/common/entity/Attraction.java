@@ -84,4 +84,10 @@ public class Attraction extends BaseEntity {
     /** M8-5：补充来源更新时间（7 天防抖依据） */
     @TableField("enrich_updated_at")
     private LocalDateTime enrichUpdatedAt;
+
+    /** DG-1b：规范化营业时间（normalizeOpenHours 输出；列 open_hours_norm，DDL 由人工/审计执行） */
+    private String openHoursNorm;
+
+    /** DG-1b：规范化推荐游玩时长分钟数（normalizeDuration 输出；列 recommended_duration_min） */
+    private Integer recommendedDurationMin;
 }

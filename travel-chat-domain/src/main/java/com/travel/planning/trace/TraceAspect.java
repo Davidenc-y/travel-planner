@@ -23,7 +23,7 @@ import java.util.UUID;
 @RequiredArgsConstructor
 public class TraceAspect {
 
-    private final AgentTraceCollector collector;
+    private final TraceGateway traceGateway;
     private final TraceProperties properties;
     /** M3-9：请求内消息快照生命周期（与 TraceContext 同生命周期，finally 必清理） */
     private final SessionMemoryPort sessionMemoryPort;
@@ -66,16 +66,16 @@ public class TraceAspect {
             // M8-2：检索链路降级（如预检索失败返回 "[]"）时，成功响应标注 DEGRADED，
             // 让“知识库不可用但回答正常”的事件可观测（FAILED 会误伤用户面成功率）
             if (holder.degradedReason != null) {
-                collector.end(holder, "DEGRADED", "DEGRADED:" + holder.degradedReason);
+                traceGateway.end(holder, "DEGRADED", "DEGRADED:" + holder.degradedReason);
             } else {
-                collector.end(holder, "SUCCESS", null);
+                traceGateway.end(holder, "SUCCESS", null);
             }
             return result;
         } catch (Throwable e) {
             // M7-8：轮次中断（TurnInterruptedException）不记 FAILED trace——
             // 与“中断不落库”语义一致；成功/其他异常照常记录
             if (!(e instanceof com.travel.stream.service.TurnInterruptedException)) {
-                collector.end(holder, statusOf(e), e.getMessage() == null
+                traceGateway.end(holder, statusOf(e), e.getMessage() == null
                         ? e.getClass().getSimpleName() : e.getMessage().substring(0,
                         Math.min(500, e.getMessage().length())));
             }

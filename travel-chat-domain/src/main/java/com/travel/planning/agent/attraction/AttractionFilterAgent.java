@@ -5,7 +5,7 @@ import com.travel.planning.agent.AbstractReactSubAgent;
 import com.travel.planning.agent.supervisor.TokenUsageInterceptor;
 import com.travel.planning.agent.supervisor.ModelRouteInterceptor;
 import com.travel.planning.agent.supervisor.QuotaShortCircuitInterceptor;
-import com.travel.planning.client.KnowledgeClient;
+import com.travel.planning.client.KnowledgeSearchPort;
 import com.travel.planning.memory.longterm.ProfileToolProvider;
 import com.travel.planning.prompt.PromptTemplates;
 import lombok.extern.slf4j.Slf4j;
@@ -30,7 +30,7 @@ public class AttractionFilterAgent extends AbstractReactSubAgent {
     private final TokenUsageInterceptor tokenUsageInterceptor;
     private final ModelRouteInterceptor modelRouteInterceptor;
     private final QuotaShortCircuitInterceptor quotaShortCircuitInterceptor;
-    private final KnowledgeClient knowledgeClient;
+    private final KnowledgeSearchPort knowledgeClient;
     private final ProfileToolProvider profileToolProvider;
     private final PromptTemplates promptTemplates;
 
@@ -38,7 +38,7 @@ public class AttractionFilterAgent extends AbstractReactSubAgent {
                                  TokenUsageInterceptor tokenUsageInterceptor,
                                  ModelRouteInterceptor modelRouteInterceptor,
                                  QuotaShortCircuitInterceptor quotaShortCircuitInterceptor,
-                                 KnowledgeClient knowledgeClient,
+                                 KnowledgeSearchPort knowledgeClient,
                                  ProfileToolProvider profileToolProvider,
                                  PromptTemplates promptTemplates) {
         this.chatModel = chatModel;

@@ -18,25 +18,20 @@ import type { ChatMessage, ChatResponse } from '@/types';
 import { generateUUID } from '@/lib/utils';
 import { ERROR_CODE } from '@/lib/constants';
 import { Skeleton } from '@/components/ui/skeleton';
-import { Dialog } from '@/components/ui/dialog';
-import { SessionList } from '@/components/chat/SessionList';
 import { TurnScrollbar } from '@/components/chat/TurnScrollbar';
 import { Button } from '@/components/ui/button';
-import { Composer } from '@/components/chat/Composer';
-import { AnchorTags } from '@/components/chat/composer/anchor-panel';
-import { AnchorPanelWrapper } from '@/components/chat/panels/anchor-panel-wrapper';
 import { MessageStreamWrapper, type InterruptedTurn } from '@/components/chat/panels/message-stream-wrapper';
 import { useSessionAnchor } from '@/hooks/useSessionAnchor';
 import { useSessionPreference } from '@/hooks/useSessionPreference';
 import { mergePreferenceSync } from '@/lib/schemas';
 import { mergePreferenceFromItinerary } from '@/lib/preference-merge';
-import { PreferenceTagsRow } from '@/components/chat/composer/preference-panel';
 import { PreferencePanelWrapper } from '@/components/chat/panels/preference-panel-wrapper';
 import { ChatHeader } from '@/components/chat/ChatHeader';
 import { useChatStream } from '@/hooks/useChatStream';
 import { useSessionList } from '@/hooks/useSessionList';
 import { useModelPreference } from '@/hooks/useModelPreference';
-import { ModelSelector } from '@/components/model/ModelSelector';
+import { ComposerAreaWrapper } from '@/components/chat/panels/composer-area-wrapper';
+import { SessionListSidebar } from '@/components/chat/panels/session-list-sidebar';
 
 /**
  * M6-58/T10 + B3（09）：聊天页布局编排。
@@ -726,28 +721,20 @@ function ChatContent() {
 
   return (
     <div className="flex h-[calc(100vh-8rem)] gap-4">
-      {/* 会话列表（窄屏收进抽屉，C-05） */}
-      <div className="hidden md:flex flex-shrink-0">
-        <SessionList
-          sessions={sessionList.sessions}
-          currentSessionId={currentSessionId}
-          creatingSession={creatingSession}
-          streamStates={chatStream.streamStates}
-          completedTurns={completedTurns}
-          editingSessionId={sessionList.editingSessionId}
-          editingTitle={sessionList.editingTitle}
-          pinnedIds={sessionList.pinnedIds}
-          onTogglePin={sessionList.togglePin}
-          onNewSession={handleNewSession}
-          onSelect={handleSelectSession}
-          onEnterSelect={(sid) => setCurrentSessionId(sid)}
-          onStartEdit={sessionList.startEdit}
-          onTitleChange={sessionList.changeEditingTitle}
-          onSaveTitle={sessionList.saveTitle}
-          onCancelEdit={sessionList.cancelEdit}
-          onCloseSession={handleCloseSession}
-        />
-      </div>
+      {/* 会话列表侧栏（MI-7b：桌面侧栏+窄屏抽屉双形态抽出，状态留容器） */}
+      <SessionListSidebar
+        sessionList={sessionList}
+        streamStates={chatStream.streamStates}
+        currentSessionId={currentSessionId}
+        creatingSession={creatingSession}
+        completedTurns={completedTurns}
+        onNewSession={handleNewSession}
+        onSelect={handleSelectSession}
+        onEnterSelect={(sid) => setCurrentSessionId(sid)}
+        onCloseSession={handleCloseSession}
+        drawerOpen={drawerOpen}
+        onCloseDrawer={() => setDrawerOpen(false)}
+      />
 
       {/* 消息区（C1 参考稿对齐：去卡片化，平铺在页面背景上） */}
       <div className="flex-1 flex flex-col overflow-hidden">
@@ -799,11 +786,11 @@ function ChatContent() {
           )}
         </div>
 
-        {/* 输入区（R2/C-2：Composer 纯展示组件；模型选择槽由 page 注入——
+        {/* 输入区（MI-7：装配块抽为 composer-area-wrapper——状态留容器、props 下传，沿用一轮拆分模式；
             模型选择语义不变：localStorage travel.model / dropUp / 40005 拦截，R11） */}
-        <Composer
-          value={input}
-          onChange={(v) => setDrafts((prev) => ({ ...prev, [activeDraftKey]: v }))}
+        <ComposerAreaWrapper
+          input={input}
+          onInputChange={(v) => setDrafts((prev) => ({ ...prev, [activeDraftKey]: v }))}
           onSend={() => handleSend()}
           onStop={handleStop}
           showStop={
@@ -812,69 +799,34 @@ function ChatContent() {
             && currentStreamState?.phase === 'thinking'
           }
           canSend={!!input.trim() && !sending && !creatingSession}
-          modelSlot={
-            <ModelSelector value={modelPref.model} onChange={modelPref.select} dropUp compact />
-          }
-          anchorSlot={
-            <div className="relative flex items-center gap-1">
-              <AnchorPanelWrapper
-                open={anchorPanelOpen}
-                disabled={sending}
-                effectiveAnchorIds={effectiveAnchorIds}
-                effectiveAnchorBriefs={effectiveAnchorBriefs}
-                anchorState={anchorState}
-                draftAnchorIds={draftAnchorIds}
-                setDraftAnchorIds={setDraftAnchorIds}
-                currentSessionId={currentSessionId}
-                currentSessionRef={currentSessionRef}
-                setMessages={setMessages}
-                fillPreferenceFromItinerary={fillPreferenceFromItinerary}
-                anchor={anchor}
-                onToggle={() => setAnchorPanelOpen((v) => !v)}
-                onRequestClose={() => setAnchorPanelOpen(false)}
-              />
-              <PreferencePanelWrapper
-                open={prefPanelOpen}
-                active={prefTagTexts > 0}
-                disabled={sending}
-                tags={prefTags}
-                firstAnchorId={currentSessionId ? anchorState.ids[0] : draftAnchorIds[0]}
-                onToggle={() => setPrefPanelOpen((v) => !v)}
-                onChange={(t) => preference.setTags(prefDraftKey, t)}
-                onRequestClose={() => setPrefPanelOpen(false)}
-                onAnchorsSynced={() => {
-                  if (currentSessionId) void anchor.load(currentSessionId);
-                }}
-              />
-            </div>
-          }
-          anchorTags={
-            <AnchorTags
-              briefs={effectiveAnchorBriefs}
-              ids={effectiveAnchorIds}
-              onRemove={(id) => {
-                if (currentSessionId) {
-                  void anchor.toggle(currentSessionId, id);
-                } else {
-                  setDraftAnchorIds((prev) => prev.filter((x) => x !== id));
-                }
-              }}
-              disabled={sending}
-            />
-          }
-          preferenceTags={
-            <PreferenceTagsRow
-              tags={prefTags}
-              onRemoveField={(key) => {
-                if (currentSessionId) {
-                  const next = { ...prefTags } as Record<string, unknown>;
-                  delete next[key];
-                  preference.setTags(currentSessionId ?? prefDraftKey, next as typeof prefTags);
-                }
-              }}
-              disabled={sending}
-            />
-          }
+          sending={sending}
+          currentSessionId={currentSessionId}
+          modelPref={modelPref}
+          anchorPanelOpen={anchorPanelOpen}
+          onToggleAnchorPanel={() => setAnchorPanelOpen((v) => !v)}
+          onRequestCloseAnchorPanel={() => setAnchorPanelOpen(false)}
+          effectiveAnchorIds={effectiveAnchorIds}
+          effectiveAnchorBriefs={effectiveAnchorBriefs}
+          anchorState={anchorState}
+          draftAnchorIds={draftAnchorIds}
+          setDraftAnchorIds={setDraftAnchorIds}
+          currentSessionRef={currentSessionRef}
+          setMessages={setMessages}
+          fillPreferenceFromItinerary={fillPreferenceFromItinerary}
+          anchor={anchor}
+          prefPanelOpen={prefPanelOpen}
+          onTogglePrefPanel={() => setPrefPanelOpen((v) => !v)}
+          onRequestClosePrefPanel={() => setPrefPanelOpen(false)}
+          prefTags={prefTags}
+          prefDraftKey={prefDraftKey}
+          onPreferenceTagsChange={(t) => preference.setTags(prefDraftKey, t)}
+          onRemovePreferenceTag={(key) => {
+            if (currentSessionId) {
+              const next = { ...prefTags } as Record<string, unknown>;
+              delete next[key];
+              preference.setTags(currentSessionId ?? prefDraftKey, next as typeof prefTags);
+            }
+          }}
           textareaRef={textareaRef}
         />
         {/* M27（S6）：偏好-锚定冲突处理卡（M25 提示条升级：按偏好=解除锚定 / 保留=按锚定继续） */}
@@ -938,32 +890,6 @@ function ChatContent() {
           </div>
         )}
       </div>
-
-      {/* 窄屏会话抽屉（C-05） */}
-      <Dialog open={drawerOpen} onClose={() => setDrawerOpen(false)} className="max-w-xs p-3" ariaLabel="会话列表">
-        <SessionList
-          sessions={sessionList.sessions}
-          currentSessionId={currentSessionId}
-          creatingSession={creatingSession}
-          streamStates={chatStream.streamStates}
-          completedTurns={completedTurns}
-          editingSessionId={sessionList.editingSessionId}
-          editingTitle={sessionList.editingTitle}
-          pinnedIds={sessionList.pinnedIds}
-          onTogglePin={sessionList.togglePin}
-          onNewSession={handleNewSession}
-          onSelect={handleSelectSession}
-          onEnterSelect={(sid) => setCurrentSessionId(sid)}
-          onStartEdit={sessionList.startEdit}
-          onTitleChange={sessionList.changeEditingTitle}
-          onSaveTitle={(sid) => {
-            sessionList.saveTitle(sid);
-            setDrawerOpen(false);
-          }}
-          onCancelEdit={sessionList.cancelEdit}
-          onCloseSession={handleCloseSession}
-        />
-      </Dialog>
     </div>
   );
 }

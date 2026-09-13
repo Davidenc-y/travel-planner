@@ -8,10 +8,11 @@ import com.travel.common.exception.BusinessException;
 import com.travel.common.exception.ErrorCode;
 import com.travel.common.enums.SessionStatus;
 import com.travel.core.stream.TurnGate;
-import com.travel.aigateway.core.GatewayException;
 import com.travel.aigateway.core.ModelRegistry;
 import com.travel.aigateway.route.ModelRoutingContext;
 import com.travel.planning.cancellation.TurnCancellationBroadcaster;
+import com.travel.planning.cancellation.TurnState;
+import com.travel.planning.cancellation.TurnStateMachine;
 import com.travel.stream.service.ChatProgressListener;
 import com.travel.stream.service.TurnCancellation;
 import com.travel.stream.service.TurnInterruptedException;
@@ -86,7 +87,7 @@ public class ChatService implements ChatStreamExecutor {
     private final TurnCancellationBroadcaster cancellationBroadcaster;
     // M7：模型注册表（D6：请求级 model 入口快速失败校验）
     private final ModelRegistry modelRegistry;
-    // M7：实际路由模型追溯记录（direct 路径由 runStream 包裹捕获）
+    // M7：实际路由模型追溯记录（direct 路径由 runStream 包裹捕获；HC-5 起为 TraceGateway 缺省时的降级直连）
     private final ModelRouteTracker modelRouteTracker;
     /** M23（E1）：锚定存储（brief 渲染 + 会话锚定集合）。 */
     private final com.travel.planning.memory.anchor.SessionAnchorStore sessionAnchorStore;
@@ -103,6 +104,16 @@ public class ChatService implements ChatStreamExecutor {
     private final ChatPreferenceLogSupport chatPreferenceLogSupport = new ChatPreferenceLogSupport();
     /** R4.2：锚定策略（自动锚定判定+锚定持久化薄封装迁出至 ChatAnchorPolicy；行内初始化保持既有直构签名不变）。 */
     private final ChatAnchorPolicy chatAnchorPolicy = new ChatAnchorPolicy();
+    /** MI-1：标题策略（首条消息标题联动+标题生成/更新迁出至 ChatTurnTitlePolicy；行内初始化保持既有直构签名不变）。 */
+    private final ChatTurnTitlePolicy chatTurnTitlePolicy = new ChatTurnTitlePolicy();
+    /** MI-1：门禁装配（ARCHIVED 拒写/追加决策/断点清理+在途终止/模型校验迁出至 ChatGateSupport；行内初始化保持既有直构签名不变）。 */
+    private final ChatGateSupport chatGateSupport = new ChatGateSupport();
+    /** MI-4：trace 门面（可选注入；缺省时 recordRoutedModel 降级为 modelRouteTracker 直连——观测通道不阻断业务）。 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.travel.planning.trace.TraceGateway traceGateway;
+    /** MI-4：轮次取消链状态机（可选注入；缺省时跳过接线断言）。 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.travel.planning.cancellation.TurnStateMachine stateMachine;
 
     /**
      * 创建会话
@@ -213,7 +224,7 @@ public class ChatService implements ChatStreamExecutor {
             throw new BusinessException(40101, "用户未登录");
         }
         // M7 D6：请求级 model 必须在注册表且 selectable，否则入口快速失败
-        validateModel(model);
+        chatGateSupport.validateModel(modelRegistry, model);
         // F90：调用前安全防护（Prompt 注入检测）→ MessagePipeline 步骤 1
         chatGuardStep.check(userId, message);
         // M3-11：步骤 2 持久化（会话校验 + 用户消息落库）
@@ -223,61 +234,16 @@ public class ChatService implements ChatStreamExecutor {
                 sessionId, userId, clientMessageId, message);
         String updatedSessionTitle = null;
         if (gate.proceed()) {
-            // M4-4：ARCHIVED 会话拒绝新消息（40902；replay 已在上面豁免）
-            if (sessionGuardProps.isRejectArchived()
-                    && SessionStatus.ARCHIVED.name().equals(session.getStatus())) {
-                throw new BusinessException(40902, "会话已关闭");
-            }
-            if (!gate.userMessageAppended() && !gate.reuseUserMessage()) {
-                // 无幂等键/开关关：原路径由服务端追加用户消息
-                chatPersistenceStep.appendUserMessage(sessionId, message);
-            }
-            // M5-1：首条消息标题联动（短全量/长截断；仅默认标题生效，不覆盖手动标题；
-            // 更新失败仅 WARN，不阻断发送主链路）
-            String generatedTitle = buildSessionTitle(message, titleProps.getMaxLength());
-            if (generatedTitle != null) {
-                try {
-                    if (sessionStorePort.updateTitleIfDefault(
-                            sessionId, generatedTitle, SessionStorePort.DEFAULT_SESSION_TITLE) > 0) {
-                        updatedSessionTitle = generatedTitle;
-                    }
-                } catch (Exception e) {
-                    log.warn("[SessionTitle] 首条消息标题更新失败，继续发送: sessionId={}", sessionId, e);
-                }
-            }
-            // M6-36：新轮次（非 FAILED 复用）清除同会话旧断点——旧任务的重试按钮随之失效
-            if (!gate.reuseUserMessage()) {
-                breakpointStore.clearSessionBreakpoints(sessionId);
-                // M6-39：同时终止同会话其他在途轮次（防旧任务后台完成后幽灵落库）
-                List<String> inFlight = chatPersistenceStep.markSessionInterrupted(
-                        sessionId, clientMessageId);
-                if (inFlight != null && !inFlight.isEmpty()) {
-                    inFlight.forEach(key -> {
-                        breakpointStore.markInterrupted(key);
-                        cancellationRegistry.cancel(key);
-                        cancellationBroadcaster.publishCancel(sessionId, key);
-                    });
-                    log.info("[ChatInterrupt] 新消息终止在途轮次: sessionId={}, keys={}",
-                            sessionId, inFlight);
-                }
-            }
+            chatGateSupport.enforceTurnEntry(sessionGuardProps, session, gate,
+                    chatPersistenceStep, sessionId, message);
+            updatedSessionTitle = chatTurnTitlePolicy.firstMessageTitle(
+                    sessionStorePort, titleProps, sessionId, message);
+            chatGateSupport.clearBreakpointsAndTerminate(gate, breakpointStore, chatPersistenceStep,
+                    cancellationRegistry, cancellationBroadcaster, sessionId, clientMessageId);
         }
         return new ChatStreamExecutor.ChatStreamPrepared(
                 sessionId, message, userId, clientMessageId, gate, updatedSessionTitle, model,
                 anchorIds, preferences);
-    }
-
-    /** M7 D6：未知/禁用/不可选模型 → 40005，不静默回退。 */
-    private void validateModel(String model) {
-        if (model == null || model.isBlank()) {
-            return;
-        }
-        try {
-            modelRegistry.requireSelectable(model);
-        } catch (GatewayException e) {
-            throw new BusinessException(ErrorCode.MODEL_NOT_FOUND.code(),
-                    ErrorCode.MODEL_NOT_FOUND.message() + ": " + model);
-        }
     }
 
     /**
@@ -398,8 +364,20 @@ public class ChatService implements ChatStreamExecutor {
         });
     }
 
-    /** M7：direct 路径在同一线程完成路由，把实际模型写入追溯（图流路径由拦截器记录）。 */
+    /** MI-4：取消链状态接线断言（非法迁移抛 IllegalStateException → 上报；可选注入，缺省跳过）。 */
+    private void assertTurnTransition(TurnState from, TurnState to) {
+        if (stateMachine != null) {
+            stateMachine.assertTransition(from, to);
+        }
+    }
+
+    /** M7：direct 路径在同一线程完成路由，把实际模型写入追溯（图流路径由拦截器记录）。
+     *  MI-4：本方法收编至 trace/TraceGateway（本类保留可选委托调用，缺省时降级 modelRouteTracker 直连——观测通道不阻断业务）。 */
     private void recordRoutedModel() {
+        if (traceGateway != null) {
+            traceGateway.recordRoutedModel();
+            return;
+        }
         String routed = ModelRoutingContext.routed();
         if (routed == null || !TraceContext.active()) {
             return;
@@ -424,6 +402,8 @@ public class ChatService implements ChatStreamExecutor {
         if (cancellation == null) {
             cancellation = TurnCancellation.NOOP;
         }
+        // MI-4：取消链状态接线——注册=RUNNING（本轮起点，无前驱状态不设断言）
+        TurnState turnState = TurnState.RUNNING;
         // M6-44：Redis 中断标记作为跨实例权威兜底——Pub/Sub 广播丢失/订阅未建立时，
         // 图流节点边界与拦截器仍能读到标记并停止（external check 由 isCancelled 组合）
         cancellation.attachExternalCancelCheck(
@@ -575,6 +555,9 @@ public class ChatService implements ChatStreamExecutor {
 
             // M6-36/40：路由前检查中断（Redis 标记 + 本地取消令牌）
             if (breakpointStore.isInterrupted(clientMessageId) || cancellation.isCancelled()) {
+                // MI-4：取消链状态接线——收到广播=CANCEL_REQUESTED
+                assertTurnTransition(turnState, TurnState.CANCEL_REQUESTED);
+                turnState = TurnState.CANCEL_REQUESTED;
                 throw new TurnInterruptedException("轮次已中断");
             }
 
@@ -598,6 +581,9 @@ public class ChatService implements ChatStreamExecutor {
 
             // M6-36/40：路由后、落库前再次检查中断（在途 LLM 已消耗，但不再落库）
             if (breakpointStore.isInterrupted(clientMessageId) || cancellation.isCancelled()) {
+                // MI-4：取消链状态接线——收到广播=CANCEL_REQUESTED
+                assertTurnTransition(turnState, TurnState.CANCEL_REQUESTED);
+                turnState = TurnState.CANCEL_REQUESTED;
                 throw new TurnInterruptedException("轮次已中断");
             }
 
@@ -654,6 +640,9 @@ public class ChatService implements ChatStreamExecutor {
             // M28-15：done 回写载荷取证（与"本轮偏好标签"日志成对——两行即可定位
             // 断点在"前端未发"还是"回写未生成"还是"前端未消费"）
             log.info("[ChatPreference] 回写载荷: {}", preferenceSync);
+            // MI-4：取消链终局接线——正常完成=COMPLETED
+            assertTurnTransition(turnState, TurnState.COMPLETED);
+            turnState = TurnState.COMPLETED;
             return new ChatStreamExecutor.ChatStreamResult(
                     response, aiTokens, routed.fallback(),
                     assistantMessageId, prepared.sessionTitle(),
@@ -664,6 +653,14 @@ public class ChatService implements ChatStreamExecutor {
             // interruptTurn 的竞态——谁先到都收敛为 INTERRUPTED，刷新后可重试）；
             // 已是 FAILED（新消息终止在途 markSessionInterrupted 先行）保持不变，
             // 保证"重试按钮永久消失"语义。
+            // MI-4：取消链终局接线——中断=CANCELLED（RUNNING 先经 CANCEL_REQUESTED，
+            // 用户停止语义两步均合法；非法迁移抛 IllegalStateException → 上报）
+            if (turnState == TurnState.RUNNING) {
+                assertTurnTransition(turnState, TurnState.CANCEL_REQUESTED);
+                turnState = TurnState.CANCEL_REQUESTED;
+            }
+            assertTurnTransition(turnState, TurnState.CANCELLED);
+            turnState = TurnState.CANCELLED;
             chatPersistenceStep.markTurnInterrupted(sessionId, clientMessageId);
             log.warn("[ChatInterrupt] 轮次已中断，跳过落库: key={}", clientMessageId);
             throw e;
@@ -676,6 +673,14 @@ public class ChatService implements ChatStreamExecutor {
                 Thread.currentThread().interrupt();
                 // 注意：本 catch 内抛出的异常不会再被上方 catch(TurnInterruptedException)
                 // 捕获，因此在这里直接完成中断登记与日志
+                // MI-4：取消链终局接线——中断=CANCELLED（RUNNING 先经 CANCEL_REQUESTED，
+                // 用户停止语义两步均合法；非法迁移抛 IllegalStateException → 上报）
+                if (turnState == TurnState.RUNNING) {
+                    assertTurnTransition(turnState, TurnState.CANCEL_REQUESTED);
+                    turnState = TurnState.CANCEL_REQUESTED;
+                }
+                assertTurnTransition(turnState, TurnState.CANCELLED);
+                turnState = TurnState.CANCELLED;
                 chatPersistenceStep.markTurnInterrupted(sessionId, clientMessageId);
                 // M10-2d：预期取消的重复 WARN 收敛为 DEBUG（功能不受影响；
                 // 同键取消/重试语义由 TurnInterruptedException + INTERRUPTED 状态负责）
@@ -851,33 +856,13 @@ public class ChatService implements ChatStreamExecutor {
      * M5-1：更新会话标题（前端双击编辑；归档会话也可改标题——只读历史仍展示）。
      */
     public void updateTitle(Long userId, String sessionId, String title) {
-        ChatSession session = requireOwnedSession(userId, sessionId);
-        String normalized = title == null ? "" : title.trim();
-        if (normalized.isEmpty()) {
-            throw new BusinessException(40001, "会话标题不能为空");
-        }
-        if (normalized.length() > 200) {
-            throw new BusinessException(40001, "会话标题不能超过200个字符");
-        }
-        int updated = sessionStorePort.updateTitle(sessionId, normalized);
-        if (updated == 0) {
-            throw new BusinessException(40404, "会话不存在: " + sessionId);
-        }
+        requireOwnedSession(userId, sessionId);
+        chatTurnTitlePolicy.updateTitle(sessionStorePort, sessionId, title);
     }
 
     /** M5-1：基于首条用户消息生成会话标题（不引 LLM：短全量、长截断） */
     static String buildSessionTitle(String message, int maxLength) {
-        if (message == null) {
-            return null;
-        }
-        String normalized = message.trim().replaceAll("\\s+", " ");
-        if (normalized.isEmpty()) {
-            return null;
-        }
-        if (normalized.length() <= maxLength) {
-            return normalized;
-        }
-        return normalized.substring(0, maxLength) + "…";
+        return ChatTurnTitlePolicy.buildSessionTitle(message, maxLength);
     }
 
     /** M4-4：关闭会话结果（archived=已归档；finalized=收口摘要已完成） */

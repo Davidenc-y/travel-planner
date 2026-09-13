@@ -1,10 +1,12 @@
 package com.travel.knowledge.service;
 
 import com.travel.common.entity.Attraction;
-import com.travel.core.data.MergeRules;
 import com.travel.core.data.SourceConfidence;
 import com.travel.common.util.JsonUtils;
 import com.travel.knowledge.etl.AttractionEtlService;
+import com.travel.knowledge.etl.AttractionFieldNormalizer;
+import com.travel.knowledge.etl.EtlOutboxService;
+import com.travel.knowledge.etl.FieldMergePolicy;
 import com.travel.knowledge.repository.AttractionMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -38,6 +40,8 @@ public class AttractionImportService {
 
     private final AttractionMapper attractionMapper;
     private final AttractionEtlService etlService;
+    /** DG-3b：变更事件 outbox 写入（兜底一致性通道；与导入同事务） */
+    private final EtlOutboxService etlOutboxService;
 
     /**
      * 从 JSON 文件导入景点
@@ -106,6 +110,8 @@ public class AttractionImportService {
                             SourceConfidence.ofSource(a.getSource()));
                     existing.setIndexed(0);
                     attractionMapper.updateById(existing);
+                    // DG-3b：同事务写 outbox 变更事件（兜底一致性通道；XADD 接线随 DG-3c/审计裁决）
+                    etlOutboxService.writeEvent(existing.getId(), "UPDATE");
                     affected.add(existing);
                     updated++;
                     continue;
@@ -117,6 +123,8 @@ public class AttractionImportService {
                 if (a.getSource() == null) a.setSource("manual");
 
                 attractionMapper.insert(a);
+                // DG-3b：同事务写 outbox 变更事件（新增行同样进入兜底一致性通道）
+                etlOutboxService.writeEvent(a.getId(), "INSERT");
                 affected.add(a);
                 success++;
             } catch (Exception e) {
@@ -146,28 +154,32 @@ public class AttractionImportService {
                         .eq(Attraction::getCity, a.getCity()));
     }
 
-    /** F110-B 字段级合并：incoming 非空且置信度 >= 现有值时覆盖；身份字段除外 */
+    /** F110-B 字段级合并：DG-2 起统一委托 {@link FieldMergePolicy}（口径单点；身份字段永不覆盖） */
     private void mergeFields(Attraction t, Attraction incoming,
                              SourceConfidence tConf, SourceConfidence inConf) {
-        t.setDistrict(MergeRules.choose(t.getDistrict(), tConf, incoming.getDistrict(), inConf));
-        t.setType(MergeRules.choose(t.getType(), tConf, incoming.getType(), inConf));
-        t.setDescription(MergeRules.choose(t.getDescription(), tConf, incoming.getDescription(), inConf));
-        t.setLat(MergeRules.choose(t.getLat(), tConf, incoming.getLat(), inConf));
-        t.setLng(MergeRules.choose(t.getLng(), tConf, incoming.getLng(), inConf));
-        t.setAddress(MergeRules.choose(t.getAddress(), tConf, incoming.getAddress(), inConf));
-        t.setOpenHours(MergeRules.choose(t.getOpenHours(), tConf, incoming.getOpenHours(), inConf));
-        t.setTicketPrice(MergeRules.choose(t.getTicketPrice(), tConf, incoming.getTicketPrice(), inConf));
-        t.setFreeEntry(MergeRules.choose(t.getFreeEntry(), tConf, incoming.getFreeEntry(), inConf));
-        t.setRating(MergeRules.choose(t.getRating(), tConf, incoming.getRating(), inConf));
-        t.setRatingCount(MergeRules.choose(t.getRatingCount(), tConf, incoming.getRatingCount(), inConf));
-        t.setTags(MergeRules.choose(t.getTags(), tConf, incoming.getTags(), inConf));
-        t.setRecommendedDuration(MergeRules.choose(
+        t.setDistrict(FieldMergePolicy.choose(t.getDistrict(), tConf, incoming.getDistrict(), inConf));
+        t.setType(FieldMergePolicy.choose(t.getType(), tConf, incoming.getType(), inConf));
+        t.setDescription(FieldMergePolicy.choose(t.getDescription(), tConf, incoming.getDescription(), inConf));
+        t.setLat(FieldMergePolicy.choose(t.getLat(), tConf, incoming.getLat(), inConf));
+        t.setLng(FieldMergePolicy.choose(t.getLng(), tConf, incoming.getLng(), inConf));
+        t.setAddress(FieldMergePolicy.choose(t.getAddress(), tConf, incoming.getAddress(), inConf));
+        t.setOpenHours(FieldMergePolicy.choose(t.getOpenHours(), tConf, incoming.getOpenHours(), inConf));
+        t.setTicketPrice(FieldMergePolicy.choose(t.getTicketPrice(), tConf, incoming.getTicketPrice(), inConf));
+        t.setFreeEntry(FieldMergePolicy.choose(t.getFreeEntry(), tConf, incoming.getFreeEntry(), inConf));
+        t.setRating(FieldMergePolicy.choose(t.getRating(), tConf, incoming.getRating(), inConf));
+        t.setRatingCount(FieldMergePolicy.choose(t.getRatingCount(), tConf, incoming.getRatingCount(), inConf));
+        t.setTags(FieldMergePolicy.choose(t.getTags(), tConf, incoming.getTags(), inConf));
+        t.setRecommendedDuration(FieldMergePolicy.choose(
                 t.getRecommendedDuration(), tConf, incoming.getRecommendedDuration(), inConf));
-        t.setImageUrl(MergeRules.choose(t.getImageUrl(), tConf, incoming.getImageUrl(), inConf));
-        t.setSource(MergeRules.choose(t.getSource(), tConf, incoming.getSource(), inConf));
-        if (t.getPoiId() == null && incoming.getPoiId() != null) {
-            t.setPoiId(incoming.getPoiId());
-        }
+        t.setImageUrl(FieldMergePolicy.choose(t.getImageUrl(), tConf, incoming.getImageUrl(), inConf));
+        t.setSource(FieldMergePolicy.choose(t.getSource(), tConf, incoming.getSource(), inConf));
+        // DG-2：身份字段（poiId）经策略单点——永不覆盖，仅旧值空时回填
+        t.setPoiId(FieldMergePolicy.chooseIdentity(t.getPoiId(), incoming.getPoiId()));
+        // DG-1b：合并完成后生成规范化附加列（open_hours_norm/recommended_duration_min；
+        // 列 DDL 见 scripts/sql/dg1_normalizer.sql，由人工/审计执行——E-13）
+        t.setOpenHoursNorm(AttractionFieldNormalizer.normalizeOpenHours(t.getOpenHours()));
+        t.setRecommendedDurationMin(
+                AttractionFieldNormalizer.normalizeDuration(t.getRecommendedDuration()));
     }
 
     /**
@@ -177,6 +189,8 @@ public class AttractionImportService {
     public boolean importOne(Attraction attraction) {
         try {
             attractionMapper.insert(attraction);
+            // DG-3c 修订版：importOne 补接线（防御性闭合"三处更新点"字面；main 侧暂无调用方）
+            etlOutboxService.writeEvent(attraction.getId(), "INSERT");
             etlService.etlOne(attraction);
             log.info("景点导入成功: name={}", attraction.getName());
             return true;

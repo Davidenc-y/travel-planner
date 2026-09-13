@@ -5,7 +5,7 @@ import com.alibaba.cloud.ai.graph.agent.interceptor.ModelInterceptor;
 import com.alibaba.cloud.ai.graph.agent.interceptor.ModelRequest;
 import com.alibaba.cloud.ai.graph.agent.interceptor.ModelResponse;
 import com.travel.aigateway.route.ModelRoutingContext;
-import com.travel.planning.trace.ModelRouteTracker;
+import com.travel.planning.trace.TraceGateway;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
@@ -37,7 +37,7 @@ public class ModelRouteInterceptor extends ModelInterceptor {
     /** RunnableConfig metadata 中传递模型 key 的键（仿 TURN_CANCELLATION_KEY）。 */
     public static final String MODEL_KEY = "TRAVEL_MODEL_KEY";
 
-    private final ModelRouteTracker modelRouteTracker;
+    private final TraceGateway traceGateway;
 
     @Override
     public String getName() {
@@ -95,14 +95,14 @@ public class ModelRouteInterceptor extends ModelInterceptor {
         }
     }
 
-    /** 消费 requestId 侧信道，把实际路由模型写入追溯。 */
+    /** 消费 requestId 侧信道，把实际路由模型写入追溯（MI-4：经 trace/TraceGateway 收编）。 */
     private void recordRouted(ModelRequest request, String routed) {
         if (routed == null || request == null || request.getContext() == null) {
             return;
         }
         Object requestIdValue = request.getContext().get(TokenUsageInterceptor.REQUEST_ID_KEY);
         if (requestIdValue instanceof String requestId) {
-            modelRouteTracker.record(requestId, routed);
+            traceGateway.record(requestId, routed);
         }
     }
 }

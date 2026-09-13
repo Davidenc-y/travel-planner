@@ -70,6 +70,21 @@ public class AttractionEtlService {
     }
 
     /**
+     * DG-3c：按事件重索引入口（outbox/Stream 兜底一致性通道）。
+     * 重复索引幂等：etlOne 内部按 attractionId upsert ES/Milvus。目标不存在返回 false（消费端按已处理 ACK）。
+     *
+     * @return true=已重索引；false=目标不存在
+     */
+    public boolean reindexOne(Long attractionId) {
+        Attraction a = attractionMapper.selectById(attractionId);
+        if (a == null) {
+            log.warn("[EtlOutbox] 重索引发现景点不存在（事件视为已处理）: id={}", attractionId);
+            return false;
+        }
+        return etlOne(a);
+    }
+
+    /**
      * F119：并行 ETL 批次（虚拟线程 + 有界信号量 + Embedding 全局节流）。
      * 行间相互独立、客户端均线程安全；单行失败保持 indexed=0 由定时 ETL 兜底。
      *

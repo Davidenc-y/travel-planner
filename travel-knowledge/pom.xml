@@ -43,6 +43,12 @@
             <artifactId>spring-boot-starter-actuator</artifactId>
         </dependency>
 
+        <!-- Redis（DG-3c：EtlOutbox/ChangeEventConsumer Redis Stream travel:etl:changes 兜底一致性通道） -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-data-redis</artifactId>
+        </dependency>
+
         <!-- M7：模型网关（注册表/工厂/路由代理；内含 DashScope/OpenAI 核心 SDK） -->
         <dependency>
             <groupId>com.travel.aigateway</groupId>

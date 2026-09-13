@@ -1,6 +1,6 @@
 package com.travel.planning.memory.knowledge;
 
-import com.travel.planning.client.KnowledgeClient;
+import com.travel.planning.client.KnowledgeSearchPort;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
@@ -34,7 +34,7 @@ public class SessionKnowledgeWriter {
     /** M4-5b：二次取父单次取回上限（覆盖超长多日行程；knowledge 侧另有夹逼） */
     private static final int BY_PREFIX_LIMIT = 30;
 
-    private final KnowledgeClient knowledgeClient;
+    private final KnowledgeSearchPort knowledgeClient;
 
     /**
      * 异步写入一批切片（空集合跳过）。

@@ -1,7 +1,7 @@
 package com.travel.planning.memory.knowledge;
 
 import com.travel.common.util.JsonUtils;
-import com.travel.planning.client.KnowledgeClient;
+import com.travel.planning.client.KnowledgeSearchPort;
 import com.travel.planning.trace.TraceContext;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -35,7 +35,7 @@ public class KnowledgeRetrievalService {
     private static final String SOURCE_NOTE =
             com.travel.common.util.PromptFiles.get("knowledge_source_note");
 
-    private final KnowledgeClient knowledgeClient;
+    private final KnowledgeSearchPort knowledgeClient;
 
     /**
      * 检索候选景点并返回紧凑 JSON 数组（结构化事实卡片）；

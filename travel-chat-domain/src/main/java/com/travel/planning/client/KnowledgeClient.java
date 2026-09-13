@@ -20,12 +20,16 @@ import java.util.Map;
  *
  * <p>超时与重试：{@link KnowledgeClientConfig}（B1.1；默认连接 2s/读取 8s、重试 1 次，KNOWLEDGE_FEIGN_* 环境变量可覆盖）</p>
  *
+ * <p>MI-5：本接口 extends {@link KnowledgeSearchPort}（业务端口，纯签名零注解）——
+ * Feign 注解留在本接口（传输契约不外溢），三调用方改注入端口类型（Spring 按类型
+ * 解析同一代理，行为零变更）；knowledge 微服务抽取时提供同契约实现即可替换传输层。</p>
+ *
  * @author david_ency
  * @since 1.0-SNAPSHOT
  */
 @FeignClient(name = "travel-knowledge", url = "${travel.knowledge.base-url:http://localhost:8082}",
         configuration = KnowledgeClientConfig.class)
-public interface KnowledgeClient {
+public interface KnowledgeClient extends KnowledgeSearchPort {
 
     /**
      * RAG 检索（调用 knowledge 的 /api/v1/rag/search）
@@ -36,6 +40,7 @@ public interface KnowledgeClient {
      * @return R<List<Map>> 检索结果（docId/title/snippet/score/...）
      */
     @GetMapping("/api/v1/rag/search")
+    @Override
     R<List<Map<String, Object>>> search(
             @RequestParam("ragType") String ragType,
             @RequestParam("query") String query,
@@ -45,12 +50,14 @@ public interface KnowledgeClient {
      * Phase C/F78：写入一条会话知识切片（knowledge /api/v1/memory/session-context）
      */
     @PostMapping("/api/v1/memory/session-context")
+    @Override
     R<Object> writeSessionContext(@RequestBody Map<String, Object> chunk);
 
     /**
      * Phase C/F78：检索会话知识（sessionId 过滤 + Hybrid RRF）
      */
     @GetMapping("/api/v1/memory/session-context/search")
+    @Override
     R<List<Map<String, Object>>> searchSessionContext(
             @RequestParam("sessionId") String sessionId,
             @RequestParam("query") String query,
@@ -61,6 +68,7 @@ public interface KnowledgeClient {
      * sessionId 隔离与 search 同口径（knowledge 侧 term 过滤）。
      */
     @GetMapping("/api/v1/memory/session-context/by-prefix")
+    @Override
     R<List<Map<String, Object>>> findSessionContextByPrefix(
             @RequestParam("sessionId") String sessionId,
             @RequestParam("seqPrefix") String seqPrefix,
@@ -70,6 +78,7 @@ public interface KnowledgeClient {
      * M8-9：按 seq 前缀删除会话切片（REFINE/重生成覆盖旧版本）。
      */
     @DeleteMapping("/api/v1/memory/session-context/by-prefix")
+    @Override
     R<Integer> deleteSessionContextByPrefix(
             @RequestParam("sessionId") String sessionId,
             @RequestParam("seqPrefix") String seqPrefix);

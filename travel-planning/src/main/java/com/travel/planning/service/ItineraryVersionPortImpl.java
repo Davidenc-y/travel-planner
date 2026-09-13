@@ -8,6 +8,7 @@ import com.travel.common.util.JsonUtils;
 import com.travel.planning.agent.support.ItineraryVersionPort;
 import com.travel.planning.repository.ItineraryMapper;
 import com.travel.planning.service.writeback.ExplicitInputParser;
+import com.travel.planning.service.writeback.WritebackEventPublisher;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
@@ -51,12 +52,32 @@ public class ItineraryVersionPortImpl implements ItineraryVersionPort {
     /** M11-1 版本服务（可选；缺失时首次创建不记快照，不影响主流程） */
     private ItineraryVersionService versionService;
 
+    /** HC-3-fix：详情读缓存失效挂钩（可选注入；缺省/停用时为 null，直接跳过） */
+    private ItineraryDetailCache itineraryDetailCache;
+
+    /** HC-5：writeback 异步削峰开关（默认 true=ETL 类副作用走 Stream 异步；false 回同步路径，观察期回退用） */
+    @Value("${perf.writeback-async.enabled:true}")
+    private boolean writebackAsyncEnabled = true;
+
+    /** HC-5：writeback 事件发布器（可选注入；缺省时回退同步路径） */
+    private WritebackEventPublisher writebackEventPublisher;
+
     @Value("${travel.chat.supervisor.itinerary-writeback.create-on-chat:true}")
     private boolean createOnChat = true;
 
     @Autowired(required = false)
     void setItineraryVersionService(ItineraryVersionService versionService) {
         this.versionService = versionService;
+    }
+
+    @Autowired(required = false)
+    void setItineraryDetailCache(ItineraryDetailCache itineraryDetailCache) {
+        this.itineraryDetailCache = itineraryDetailCache;
+    }
+
+    @Autowired(required = false)
+    void setWritebackEventPublisher(WritebackEventPublisher writebackEventPublisher) {
+        this.writebackEventPublisher = writebackEventPublisher;
     }
 
     /** R1.1：显式构造器（参数顺序=原 @RequiredArgsConstructor 生成签名，既有直构调用方零破坏）。 */
@@ -167,7 +188,18 @@ public class ItineraryVersionPortImpl implements ItineraryVersionPort {
         // M28-12：兴趣确定性解析（"多安排美食和亲子项目"→["美食","亲子"]；未提及 null 不覆盖）
         applyRefinedConstraints(current, refineBudget, refineDays, refineStart, refineParty,
                 explicitInputParser.parseInterests(userInput));
-        sliceWriter.writeAfterGenerated(sessionId, current.getId(), merged.content());
+        // HC-5：版本落库仍在轮内（用户可见一致性）；ETL 类副作用（会话知识切片
+        // + 缓存失效广播）经 travel:chat:writeback 异步消费组执行（开关
+        // perf.writeback-async.enabled，发布失败回退下方同步路径——双路径观察期）。
+        boolean asyncDispatched = writebackAsyncEnabled && writebackEventPublisher != null
+                && writebackEventPublisher.publishRefineWritten(sessionId, current.getId(), merged.content());
+        if (!asyncDispatched) {
+            sliceWriter.writeAfterGenerated(sessionId, current.getId(), merged.content());
+            // HC-3-fix：缓存失效同步执行（HC-5 异步模式下由消费组执行）
+            if (itineraryDetailCache != null) {
+                itineraryDetailCache.evict(current.getId());
+            }
+        }
         log.info("[ItineraryWriteback] REFINE 回写完成: itineraryId={}, sessionId={}",
                 current.getId(), sessionId);
         return Optional.of(current.getId());

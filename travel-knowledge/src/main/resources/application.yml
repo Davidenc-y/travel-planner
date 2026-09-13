@@ -31,8 +31,12 @@ spring:
       max-lifetime: 1200000
 
   # ============ Redis ============
-  # M10-1a：knowledge 无 Redis 代码引用（web_enrich 防抖由 DB 7 天 UPDATE 承担），
-  # 原 spring.data.redis.* 零引用配置已移除，避免误导运维。
+  # DG-3c：恢复 spring.data.redis.*（EtlOutbox/ChangeEventConsumer Redis Stream
+  # travel:etl:changes 兜底一致性通道；模式照抄 planning），原 M10-1a"零引用移除"自本步起失效。
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
 
   # ============ AI DashScope（仅 reranker 直连使用；Chat/Embedding 走 M7 注册表） ============
   ai:
