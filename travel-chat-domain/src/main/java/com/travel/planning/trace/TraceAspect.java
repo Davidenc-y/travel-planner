@@ -7,7 +7,7 @@ import org.aspectj.lang.ProceedingJoinPoint;
 import org.aspectj.lang.annotation.Around;
 import org.aspectj.lang.annotation.Aspect;
 import org.springframework.stereotype.Component;
-import com.travel.planning.memory.shortterm.SessionMemoryPort;
+import com.travel.planning.memory.MemoryFacade;
 
 import java.util.UUID;
 
@@ -26,7 +26,7 @@ public class TraceAspect {
     private final TraceGateway traceGateway;
     private final TraceProperties properties;
     /** M3-9：请求内消息快照生命周期（与 TraceContext 同生命周期，finally 必清理） */
-    private final SessionMemoryPort sessionMemoryPort;
+    private final MemoryFacade memoryFacade;
 
     /** M3-1：模型名从配置读取（travel.ai.models.main），不再硬编码 */
     @Value("${travel.ai.models.main:qwen3.7-max}")
@@ -40,7 +40,7 @@ public class TraceAspect {
             + " || execution(* com.travel.planning.service.ChatService.runStream(..))"
             + " || execution(* com.travel.planning.service.*Service.generate(..))")
     public Object around(ProceedingJoinPoint pjp) throws Throwable {
-        sessionMemoryPort.beginRequest();
+        memoryFacade.beginRequest();
         TraceContext.Holder holder = null;
         try {
             if (!properties.isEnabled()) {
@@ -81,7 +81,7 @@ public class TraceAspect {
             }
             throw e;
         } finally {
-            sessionMemoryPort.endRequest();
+            memoryFacade.endRequest();
             TraceContext.clear();
         }
     }

@@ -12,7 +12,6 @@ import com.travel.planning.guard.GuardService;
 import com.travel.planning.memory.knowledge.SessionContextChunker;
 import com.travel.planning.memory.knowledge.SessionKnowledgeWriter;
 import com.travel.planning.memory.longterm.ProfileContextAssembler;
-import com.travel.planning.memory.longterm.ProfilePort;
 import com.travel.planning.prompt.PromptTemplates;
 import com.travel.planning.repository.ItineraryMapper;
 import com.travel.planning.workflow.ItineraryStateMachineProperties;
@@ -43,7 +42,6 @@ public class ItineraryService {
 
     private final ItineraryMapper itineraryMapper;
     private final TravelWorkflowBuilder workflowBuilder;
-    private final ProfilePort profilePort;
     private final MindmapGenerator mindmapGenerator;
     private final ProfileContextAssembler profileContextAssembler;
     private final SessionContextChunker sessionContextChunker;

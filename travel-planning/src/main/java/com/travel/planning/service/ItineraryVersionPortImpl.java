@@ -43,10 +43,8 @@ public class ItineraryVersionPortImpl implements ItineraryVersionPort {
     private final ItineraryWritebackProperties parseProps;
     /** R1.1：回写确定性解析器（方法体自本类原样迁出 writeback/ExplicitInputParser，行为与文案零变更） */
     private final ExplicitInputParser explicitInputParser;
-    /** M23（P-D/E2）：单锚定时 REFINE 目标=锚定行程。 */
-    private final com.travel.planning.memory.anchor.SessionAnchorStore sessionAnchorStore;
-    /** M20-1：聊天建行程/REFINE 成功后异步重算行为画像（此前仅 /generate 与 /resume 触发） */
-    private final com.travel.planning.memory.longterm.behavior.BehaviorProfileService behaviorProfileService;
+    /** M23（P-D/E2）+ M20-1：锚定读取与行为画像重算——MM-1b.1 收编改走记忆门面。 */
+    private final com.travel.planning.memory.MemoryFacade memoryFacade;
 
 
     /** M11-1 版本服务（可选；缺失时首次创建不记快照，不影响主流程） */
@@ -80,21 +78,19 @@ public class ItineraryVersionPortImpl implements ItineraryVersionPort {
         this.writebackEventPublisher = writebackEventPublisher;
     }
 
-    /** R1.1：显式构造器（参数顺序=原 @RequiredArgsConstructor 生成签名，既有直构调用方零破坏）。 */
+    /** R1.1：显式构造器（MM-1b.1 收编：原末两参 SessionAnchorStore/BehaviorProfileService 合并为 MemoryFacade）。 */
     public ItineraryVersionPortImpl(ItineraryMapper itineraryMapper,
                                     ItineraryPersistenceService persistenceService,
                                     ItinerarySliceWriter sliceWriter,
                                     MindmapGenerator mindmapGenerator,
                                     ItineraryWritebackProperties parseProps,
-                                    com.travel.planning.memory.anchor.SessionAnchorStore sessionAnchorStore,
-                                    com.travel.planning.memory.longterm.behavior.BehaviorProfileService behaviorProfileService) {
+                                    com.travel.planning.memory.MemoryFacade memoryFacade) {
         this.itineraryMapper = itineraryMapper;
         this.persistenceService = persistenceService;
         this.sliceWriter = sliceWriter;
         this.mindmapGenerator = mindmapGenerator;
         this.parseProps = parseProps;
-        this.sessionAnchorStore = sessionAnchorStore;
-        this.behaviorProfileService = behaviorProfileService;
+        this.memoryFacade = memoryFacade;
         this.explicitInputParser = new ExplicitInputParser(parseProps);
     }
 
@@ -107,7 +103,7 @@ public class ItineraryVersionPortImpl implements ItineraryVersionPort {
             return;
         }
         java.util.concurrent.CompletableFuture.runAsync(
-                        () -> behaviorProfileService.recomputeIfEnabled(userId))
+                        () -> memoryFacade.recomputeBehaviorIfEnabled(userId))
                 .whenComplete((v, e) -> {
                     if (e != null) {
                         log.warn("[BehaviorProfile] 聊天回写后重算触发失败（不影响主流程）: userId={}, error={}",
@@ -134,7 +130,7 @@ public class ItineraryVersionPortImpl implements ItineraryVersionPort {
             // preferenceSync 回写前端偏好标签恒为"家庭"（与聊天回答口径分裂）。
             String explicitInput = explicitInputParser.extractExplicitInput(userInput);
             Itinerary existing = findLatestBySession(sessionId,
-                    sessionAnchorStore.getAnchors(sessionId));
+                    memoryFacade.getAnchors(sessionId));
             if (existing != null) {
                 if (!userId.equals(existing.getUserId())) {
                     log.warn("[ItineraryWriteback] 会话行程归属不符，跳过回写: sessionId={}", sessionId);

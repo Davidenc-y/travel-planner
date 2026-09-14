@@ -25,6 +25,18 @@ public final class ModelCircuitGuard {
         this.registry = new CircuitBreaker.Registry(failureThreshold, 60_000, openMs);
     }
 
+    /**
+     * MM-6：只读熔断状态快照（按模型 key 逐个查询；未触发过的熔断器按 CLOSED 呈现，
+     * {@code state()} 为纯读不产生 OPEN→HALF_OPEN 迁移）。
+     */
+    public java.util.Map<String, String> snapshotStates(java.util.Collection<String> modelKeys) {
+        java.util.Map<String, String> out = new java.util.LinkedHashMap<>();
+        for (String k : modelKeys) {
+            out.put(k, registry.of("model:" + k).state().name());
+        }
+        return java.util.Collections.unmodifiableMap(out);
+    }
+
     /** 同步调用保护；失败按 {@link #shouldCountFailure} 判定后计次。 */
     public <T> T call(String modelKey, Supplier<T> supplier) {
         if (!enabled) {

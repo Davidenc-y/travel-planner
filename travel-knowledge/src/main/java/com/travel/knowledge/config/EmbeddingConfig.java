@@ -6,6 +6,7 @@ import com.travel.aigateway.core.GatewayException;
 import com.travel.aigateway.core.ModelDescriptor;
 import com.travel.aigateway.core.ModelRegistry;
 import org.springframework.ai.embedding.EmbeddingModel;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.env.Environment;
@@ -18,13 +19,19 @@ import org.springframework.core.env.Environment;
  * roles=[embedding]、selectable=false），行为不变——SDK 默认模型即
  * text-embedding-v2，注册表强制校验 key 一致；api-key 走 D7 环境变量语义。</p>
  *
+ * <p>MM-7：模型键配置化——原硬编码常量改读 {@code travel.ai.embedding.model}
+ * （yml 可再经 {@code AI_EMBEDDING_MODEL} 环境变量覆盖），默认值与原常量逐字节
+ * 一致，默认零配置行为不变；注册表校验逻辑（存在/enabled/键一致）原样保留。</p>
+ *
  * @author david_ency
  * @since 1.0-SNAPSHOT
  */
 @Configuration
 public class EmbeddingConfig {
 
-    private static final String EMBEDDING_MODEL_KEY = "text-embedding-v2";
+    /** MM-7：原 EMBEDDING_MODEL_KEY 常量改配置化（默认值逐字节一致）。 */
+    @Value("${travel.ai.embedding.model:text-embedding-v2}")
+    private String embeddingModelKey;
 
     private final ModelRegistry modelRegistry;
     private final Environment environment;
@@ -36,13 +43,13 @@ public class EmbeddingConfig {
 
     @Bean
     public EmbeddingModel embeddingModel() {
-        ModelDescriptor descriptor = modelRegistry.get(EMBEDDING_MODEL_KEY)
+        ModelDescriptor descriptor = modelRegistry.get(embeddingModelKey)
                 .orElseThrow(() -> new GatewayException(
-                        "Embedding 模型未注册: " + EMBEDDING_MODEL_KEY));
+                        "Embedding 模型未注册: " + embeddingModelKey));
         if (!descriptor.enabled()) {
-            throw new GatewayException("Embedding 模型未启用: " + EMBEDDING_MODEL_KEY);
+            throw new GatewayException("Embedding 模型未启用: " + embeddingModelKey);
         }
-        if (!EMBEDDING_MODEL_KEY.equals(descriptor.key())) {
+        if (!embeddingModelKey.equals(descriptor.key())) {
             throw new GatewayException("Embedding 模型键不一致: " + descriptor.key());
         }
         DashScopeApi api = DashScopeApi.builder().apiKey(resolveKey(descriptor)).build();

@@ -2,7 +2,7 @@ package com.travel.planning.memory.longterm;
 
 import com.travel.planning.prompt.Markers;
 import com.travel.common.entity.TravelProfile;
-import com.travel.planning.memory.shortterm.SessionMemoryPort;
+import com.travel.planning.memory.MemoryFacade;
 import com.travel.planning.memory.shortterm.ShortTermMemoryProperties;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
@@ -21,11 +21,11 @@ public class ProfileContextAssembler {
 
     private static final String PREFIX = Markers.USER_PROFILE;
 
-    private final SessionMemoryPort sessionMemoryPort;
+    private final MemoryFacade memoryFacade;
     private final ShortTermMemoryProperties memoryProps;
 
-    public ProfileContextAssembler(SessionMemoryPort sessionMemoryPort, ShortTermMemoryProperties memoryProps) {
-        this.sessionMemoryPort = sessionMemoryPort;
+    public ProfileContextAssembler(MemoryFacade memoryFacade, ShortTermMemoryProperties memoryProps) {
+        this.memoryFacade = memoryFacade;
         this.memoryProps = memoryProps;
     }
 
@@ -68,13 +68,13 @@ public class ProfileContextAssembler {
         String nl = String.valueOf('\n');
         List<String> parts = new ArrayList<>(java.util.Arrays.asList(base.split(nl, -1)));
         parts.add(behaviorSection);
-        if (sessionMemoryPort.estimateTokens(String.join(nl, parts)) <= maxTokens) {
+        if (memoryFacade.estimateTokens(String.join(nl, parts)) <= maxTokens) {
             return String.join(nl, parts);
         }
         // 超限：逐尾丢弃（行为段整段最先丢弃；仍超则等价于原路径截断结果）
         for (int i = parts.size() - 1; i > 0; i--) {
             parts.remove(i);
-            if (sessionMemoryPort.estimateTokens(String.join(nl, parts)) <= maxTokens) {
+            if (memoryFacade.estimateTokens(String.join(nl, parts)) <= maxTokens) {
                 return String.join(nl, parts);
             }
         }
@@ -125,14 +125,14 @@ public class ProfileContextAssembler {
         if (parts.isEmpty()) {
             return "";
         }
-        if (sessionMemoryPort.estimateTokens(PREFIX + "\n" + String.join("\n", parts)) <= maxTokens) {
+        if (memoryFacade.estimateTokens(PREFIX + "\n" + String.join("\n", parts)) <= maxTokens) {
             return PREFIX + "\n" + String.join("\n", parts);
         }
         // 超限：按重要性顺序逐段保留，最后一段按 token 截断
         List<String> kept = new ArrayList<>();
-        int used = sessionMemoryPort.estimateTokens(PREFIX);
+        int used = memoryFacade.estimateTokens(PREFIX);
         for (String part : parts) {
-            int t = sessionMemoryPort.estimateTokens(part);
+            int t = memoryFacade.estimateTokens(part);
             if (used + t > maxTokens) {
                 kept.add(truncatePart(part, maxTokens - used));
                 break;

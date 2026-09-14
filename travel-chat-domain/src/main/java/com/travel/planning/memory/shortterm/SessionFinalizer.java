@@ -2,6 +2,7 @@ package com.travel.planning.memory.shortterm;
 
 import com.travel.common.entity.ChatSession;
 import com.travel.planning.config.LlmGovernor;
+import com.travel.planning.memory.MemoryFacade;
 import com.travel.planning.memory.sessionstore.SessionStorePort;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -46,7 +47,7 @@ public class SessionFinalizer {
     /** 启动补偿：单轮最多补跑数（防大量积压拖慢启动后的治理额度） */
     private static final int COMPENSATE_BATCH_LIMIT = 20;
 
-    private final SessionMemoryPort sessionMemoryPort;
+    private final MemoryFacade memoryFacade;
     private final SessionStorePort sessionStorePort;
     private final LlmGovernor llmGovernor;
     private final ShortTermMemoryProperties props;
@@ -77,10 +78,10 @@ public class SessionFinalizer {
     private boolean doFinalize(String sessionId) {
         try {
             return llmGovernor.callWithPermit("session-finalize", () -> {
-                boolean ok = sessionMemoryPort.finalizeSummary(sessionId);
+                boolean ok = memoryFacade.finalizeSummary(sessionId);
                 if (ok) {
                     // 持久层补偿：final 摘要落 MySQL（幂等首写）；空会话落空串标记防重复扫描
-                    String summary = sessionMemoryPort.getSummaryOrEmpty(sessionId);
+                    String summary = memoryFacade.getSummary(sessionId);
                     sessionStorePort.updateSummaryFinal(sessionId,
                             summary == null ? "" : summary);
                 }

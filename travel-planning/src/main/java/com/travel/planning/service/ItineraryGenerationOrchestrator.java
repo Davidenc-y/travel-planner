@@ -12,7 +12,7 @@ import com.travel.common.exception.ItineraryGenerationException;
 import com.travel.common.util.JsonUtils;
 import com.travel.planning.guard.GuardService;
 import com.travel.planning.memory.longterm.ProfileContextAssembler;
-import com.travel.planning.memory.longterm.ProfilePort;
+import com.travel.planning.memory.MemoryFacade;
 import com.travel.planning.prompt.PromptTemplates;
 import com.travel.planning.repository.ItineraryMapper;
 import com.travel.planning.trace.TraceContext;
@@ -44,7 +44,7 @@ public class ItineraryGenerationOrchestrator {
 
     private final ItineraryMapper itineraryMapper;
     private final TravelWorkflowBuilder workflowBuilder;
-    private final ProfilePort profilePort;
+    private final MemoryFacade memoryFacade;
     private final MindmapGenerator mindmapGenerator;
     private final ProfileContextAssembler profileContextAssembler;
     private final GuardService guardService;
@@ -59,7 +59,7 @@ public class ItineraryGenerationOrchestrator {
 
     public ItineraryGenerationOrchestrator(ItineraryMapper itineraryMapper,
                                            TravelWorkflowBuilder workflowBuilder,
-                                           ProfilePort profilePort,
+                                           MemoryFacade memoryFacade,
                                            MindmapGenerator mindmapGenerator,
                                            ProfileContextAssembler profileContextAssembler,
                                            GuardService guardService,
@@ -73,7 +73,7 @@ public class ItineraryGenerationOrchestrator {
                                            WeatherContextBuilder weatherContextBuilder) {
         this.itineraryMapper = itineraryMapper;
         this.workflowBuilder = workflowBuilder;
-        this.profilePort = profilePort;
+        this.memoryFacade = memoryFacade;
         this.mindmapGenerator = mindmapGenerator;
         this.profileContextAssembler = profileContextAssembler;
         this.guardService = guardService;
@@ -133,7 +133,7 @@ public class ItineraryGenerationOrchestrator {
             return toDto(existing);
         }
 
-        TravelProfile profile = profilePort.getOrCreate(userId);
+        TravelProfile profile = memoryFacade.getOrCreateProfile(userId);
         String profileContext = profileContextAssembler.assemble(profile);
         String userInput = buildUserInput(req);
         if (!profileContext.isBlank()) {
@@ -225,7 +225,7 @@ public class ItineraryGenerationOrchestrator {
                     entity.getId(), req.getDestination(), estimatedCost);
 
             sliceWriter.writeAfterGenerated(req.getSessionId(), entity.getId(), itineraryJson);
-            profilePort.recordTrip(userId, req.getDestination(),
+            memoryFacade.recordTrip(userId, req.getDestination(),
                     JsonUtils.toJson(req.getInterests()), entity.getTitle(),
                     req.getBudget(), req.getParty());
             return dtoAssembler.toResponseDTO(entity, false);

@@ -1,12 +1,11 @@
 package com.travel.planning.memory.pipeline;
 
 import com.travel.planning.prompt.Markers;
+import com.travel.planning.memory.MemoryFacade;
 import com.travel.planning.memory.longterm.ProfileContextAssembler;
-import com.travel.planning.memory.longterm.ProfilePort;
 import com.travel.planning.memory.longterm.behavior.BehaviorProfileService;
 import com.travel.planning.memory.longterm.behavior.BehaviorProfileProperties;
 import com.travel.planning.memory.longterm.behavior.BehaviorSections;
-import com.travel.planning.memory.shortterm.SessionMemoryPort;
 import com.travel.planning.memory.shortterm.ShortTermMemoryProperties;
 import jakarta.annotation.PreDestroy;
 import lombok.RequiredArgsConstructor;
@@ -55,13 +54,12 @@ public class ChatMemoryStep implements ChatPipelineStep {
                                 int turns, int totalHistoryTokens) {
     }
 
-    private final ProfilePort profilePort;
     private final ProfileContextAssembler profileContextAssembler;
-    private final SessionMemoryPort sessionMemoryPort;
     private final ShortTermMemoryProperties memoryProps;
     // M17-3：行为画像注入（inject-enabled=false 时零调用零注入，行为逐字节等价）
     private final BehaviorProfileService behaviorProfileService;
     private final BehaviorProfileProperties behaviorProps;
+    private final MemoryFacade memoryFacade;
 
     /** HC-4：并行开关（默认 true；false 走原串行路径）。 */
     @Value("${perf.prepare-parallel.enabled:true}")
@@ -126,20 +124,20 @@ public class ChatMemoryStep implements ChatPipelineStep {
         String profileContext;
         if (behaviorSection == null) {
             // M17-3 红线：inject 关闭/无可靠行为画像时走原路径（与现状逐字节等价）
-            profileContext = profileContextAssembler.assemble(profilePort.getOrCreate(userId));
+            profileContext = profileContextAssembler.assemble(memoryFacade.getOrCreateProfile(userId));
         } else {
             profileContext = profileContextAssembler.assemble(
-                    profilePort.getOrCreate(userId), behaviorSection);
+                    memoryFacade.getOrCreateProfile(userId), behaviorSection);
         }
         return new ProfilePart(profileContext);
     }
 
     /** 读段②：短期记忆段（原文历史/摘要触发/滑动窗口 + 轮数与全量 token 统计）。 */
     private HistoryPart historyPart(String sessionId) {
-        String rawHistory = sessionMemoryPort.composeHistoryContext(sessionId, memoryProps.getMaxTurns());
-        int turns = sessionMemoryPort.countUserTurns(sessionId);
+        String rawHistory = memoryFacade.composeHistory(sessionId, memoryProps.getMaxTurns());
+        int turns = memoryFacade.countUserTurns(sessionId);
         // F57：以全量汇总 token 作为触发依据（截断前统计），配合轮数触发。
-        int totalHistoryTokens = sessionMemoryPort.totalHistoryTokens(sessionId);
+        int totalHistoryTokens = memoryFacade.totalHistoryTokens(sessionId);
         String historySection;
         boolean summaryUsed = false;
         boolean summaryTriggered = false;
@@ -150,14 +148,14 @@ public class ChatMemoryStep implements ChatPipelineStep {
             summaryTriggered = true;
             // F60：触发即异步滚动——doSummarize 内部按 summaryRefreshTurns 决定
             // 真正重生成或仅续期 TTL；否则摘要生成一次后永不刷新（死代码缺陷）。
-            sessionMemoryPort.summarizeAsync(sessionId);
-            String summary = sessionMemoryPort.getSummaryOrEmpty(sessionId);
+            memoryFacade.summarizeAsync(sessionId);
+            String summary = memoryFacade.getSummary(sessionId);
             if (summary.isBlank()) {
                 // 摘要尚未生成（首轮触发）：本轮仍用原文窗口。
                 historySection = rawHistory;
             } else {
                 StringBuilder sb = new StringBuilder(Markers.SESSION_SUMMARY + "\n").append(summary);
-                String recent = sessionMemoryPort.composeRecentWindow(sessionId, memoryProps.getRecentWindowTurns());
+                String recent = memoryFacade.composeRecentWindow(sessionId, memoryProps.getRecentWindowTurns());
                 if (!recent.isBlank()) {
                     sb.append("\n\n【最近对话】\n").append(recent);
                 }
@@ -192,7 +190,7 @@ public class ChatMemoryStep implements ChatPipelineStep {
         if (!behaviorProps.isInjectEnabled()) {
             return null;
         }
-        return behaviorProfileService.getBehavior(userId)
+        return memoryFacade.getBehavior(userId)
                 .filter(behaviorProfileService::isReliable)
                 .map(row -> BehaviorSections.render(row, behaviorProps.getInjectMaxTokens()))
                 .orElse(null);

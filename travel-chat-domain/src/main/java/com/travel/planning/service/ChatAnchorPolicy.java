@@ -1,6 +1,6 @@
 package com.travel.planning.service;
 
-import com.travel.planning.memory.anchor.SessionAnchorStore;
+import com.travel.planning.memory.MemoryFacade;
 import org.springframework.stereotype.Component;
 
 import java.util.List;
@@ -8,8 +8,8 @@ import java.util.List;
 /**
  * R4.2：锚定策略（自 ChatService 迁出，锚定决策可独立单测）。
  *
- * <p>自动锚定判定 + 锚定持久化薄封装；无状态组件，持久化经入参 store
- * 直接委托 {@link SessionAnchorStore}（M28-13 幂等写语义零变更）。</p>
+ * <p>自动锚定判定 + 锚定持久化薄封装；无状态组件，持久化经入参门面
+ * 直接委托 {@link MemoryFacade}（M28-13 幂等写语义零变更）。</p>
  */
 @Component
 public class ChatAnchorPolicy {
@@ -22,8 +22,8 @@ public class ChatAnchorPolicy {
         return carriedAnchorIds == null || carriedAnchorIds.isEmpty();
     }
 
-    /** 锚定持久化薄封装：直接委托 SessionAnchorStore（M28-13：用户显式选择=持续意图；与现值一致时无额外写放大）。 */
-    public void persistAnchors(SessionAnchorStore store, Long userId, String sessionId, List<Long> ids) {
-        store.replaceAnchors(userId, sessionId, ids);
+    /** 锚定持久化薄封装：直接委托记忆门面（M28-13：用户显式选择=持续意图；与现值一致时无额外写放大）。 */
+    public void persistAnchors(MemoryFacade memoryFacade, Long userId, String sessionId, List<Long> ids) {
+        memoryFacade.replaceAnchors(userId, sessionId, ids);
     }
 }

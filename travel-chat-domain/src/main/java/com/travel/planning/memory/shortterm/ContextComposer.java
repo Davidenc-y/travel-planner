@@ -1,8 +1,8 @@
 package com.travel.planning.memory.shortterm;
 
 import com.travel.planning.prompt.Markers;
+import com.travel.planning.memory.MemoryFacade;
 import com.travel.planning.memory.longterm.ProfileContextAssembler;
-import com.travel.planning.memory.longterm.ProfilePort;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
@@ -17,10 +17,9 @@ import org.springframework.stereotype.Component;
 @RequiredArgsConstructor
 public class ContextComposer {
 
-    private final SessionMemoryPort sessionMemoryPort;
-    private final ProfilePort profilePort;
     private final ProfileContextAssembler profileContextAssembler;
     private final ShortTermMemoryProperties memoryProps;
+    private final MemoryFacade memoryFacade;
 
     public record ComposedContext(String text, int tokens, String profileContext,
                                   String historySection) {
@@ -55,7 +54,7 @@ public class ContextComposer {
         int inputTokens = ci.tokens();
 
         if (inputTokens > memoryProps.getInputMaxTokens()) {
-            String summaryOnly = sessionMemoryPort.getSummaryOrEmpty(sessionId);
+            String summaryOnly = memoryFacade.getSummary(sessionId);
             boolean hasSummary = !summaryOnly.isBlank();
             if (hasSummary) {
                 historySection = Markers.SESSION_SUMMARY + "\n" + summaryOnly;
@@ -65,9 +64,9 @@ public class ContextComposer {
                 inputTokens = c1.tokens();
             }
             if (inputTokens > memoryProps.getInputMaxTokens() && hasSummary) {
-                int reserve = sessionMemoryPort.estimateTokens(profileContext)
-                        + sessionMemoryPort.estimateTokens(Markers.CURRENT_QUESTION + "\n" + message) + 8;
-                String cut = sessionMemoryPort.truncateByTokens(
+                int reserve = memoryFacade.estimateTokens(profileContext)
+                        + memoryFacade.estimateTokens(Markers.CURRENT_QUESTION + "\n" + message) + 8;
+                String cut = memoryFacade.truncateByTokens(
                         summaryOnly, Math.max(100, memoryProps.getInputMaxTokens() - reserve));
                 historySection = Markers.SESSION_SUMMARY + "\n" + cut;
                 ComposedInput c2 = composeWithTokens(profileContext, historySection, consensus,
@@ -80,7 +79,7 @@ public class ContextComposer {
             }
             if (inputTokens > memoryProps.getInputMaxTokens()) {
                 profileContext = profileContextAssembler.assemble(
-                        profilePort.getOrCreate(userId), memoryProps.getProfileMaxTokens() / 2);
+                        memoryFacade.getOrCreateProfile(userId), memoryProps.getProfileMaxTokens() / 2);
                 ComposedInput c3 = composeWithTokens(profileContext, historySection, consensus,
                         sessionContext, candidates, message, anchorSection, preferenceSection);
                 composed = c3.text();
@@ -97,7 +96,7 @@ public class ContextComposer {
                                             String preferenceSection) {
         String composed = composeInput(profileContext, historySection, consensus,
                 sessionContext, candidates, message, anchorSection, preferenceSection);
-        return new ComposedInput(composed, sessionMemoryPort.estimateTokens(composed));
+        return new ComposedInput(composed, memoryFacade.estimateTokens(composed));
     }
 
     private String composeInput(String profileContext, String historySection, String consensus,

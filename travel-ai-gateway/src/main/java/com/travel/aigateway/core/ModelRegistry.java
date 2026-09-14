@@ -120,4 +120,30 @@ public class ModelRegistry {
         }
         return List.copyOf(out);
     }
+
+    /**
+     * MM-6：注册表全量描述符只读快照（脱敏——仅 key/roles/enabled/selectable/endpointMode，
+     * 禁 baseUrl 明文与 apiKeyEnv；既有四查询方法零变更）。
+     */
+    public List<Map<String, Object>> snapshot() {
+        List<Map<String, Object>> out = new ArrayList<>();
+        for (ModelDescriptor d : byKey.values()) {
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("key", d.key());
+            m.put("roles", d.roles());
+            m.put("selectable", d.selectable());
+            m.put("enabled", d.enabled());
+            m.put("endpointMode", d.endpointMode());
+            out.add(Collections.unmodifiableMap(m));
+        }
+        return List.copyOf(out);
+    }
+
+    /** MM-6：角色绑定实际解析结果（main/light 默认模型 key；无可用默认为 null）。 */
+    public Map<String, String> roleBindings() {
+        Map<String, String> m = new LinkedHashMap<>();
+        m.put("main", safeDefault("main"));
+        m.put("light", safeDefault("light"));
+        return Collections.unmodifiableMap(m);
+    }
 }

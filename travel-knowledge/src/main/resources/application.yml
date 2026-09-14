@@ -82,6 +82,9 @@ travel:
     token: ${TRAVEL_INTERNAL_TOKEN:}
   # M7 Batch 4：模型注册表（单一事实源；chatModel/lightModel 由 gateway 提供）
   ai:
+    # MM-7：Embedding 模型键配置化（默认值与原硬编码常量逐字节一致；未配置=零行为变化）
+    embedding:
+      model: ${AI_EMBEDDING_MODEL:text-embedding-v2}
     model-registry:
       enabled: true
       default-timeout-seconds: 120

@@ -8,8 +8,8 @@ import com.travel.common.enums.ItineraryStatus;
 import com.travel.common.exception.BusinessException;
 import com.travel.common.exception.ItineraryGenerationException;
 import com.travel.common.util.JsonUtils;
+import com.travel.planning.memory.MemoryFacade;
 import com.travel.planning.memory.longterm.ProfileContextAssembler;
-import com.travel.planning.memory.longterm.ProfilePort;
 import com.travel.planning.prompt.PromptTemplates;
 import com.travel.planning.repository.ItineraryMapper;
 import com.travel.planning.workflow.ItineraryTaskSnapshotPort;
@@ -43,7 +43,7 @@ public class ItineraryResumeCoordinator {
     private final ItineraryStateMachineProperties stateMachineProps;
     private final ItineraryMapper itineraryMapper;
     private final TravelWorkflowBuilder workflowBuilder;
-    private final ProfilePort profilePort;
+    private final MemoryFacade memoryFacade;
     private final MindmapGenerator mindmapGenerator;
     private final ProfileContextAssembler profileContextAssembler;
     private final PromptTemplates promptTemplates;
@@ -85,7 +85,7 @@ public class ItineraryResumeCoordinator {
                 task.getId(), resumeFrom, snapshots.keySet());
 
         ItineraryGenerateRequestDTO req = rebuildRequest(task);
-        TravelProfile profile = profilePort.getOrCreate(task.getUserId());
+        TravelProfile profile = memoryFacade.getOrCreateProfile(task.getUserId());
         String profileContext = profileContextAssembler.assemble(profile);
         String userInput = promptTemplates.itineraryUserInput().formatted(
                 req.getDestination(), req.getDays(),
@@ -149,7 +149,7 @@ public class ItineraryResumeCoordinator {
                     task.getId(), resumeFrom, System.currentTimeMillis() - start);
             try {
                 ItineraryGenerateRequestDTO rebuilt = rebuildRequest(task);
-                profilePort.recordTrip(task.getUserId(), task.getDestination(),
+                memoryFacade.recordTrip(task.getUserId(), task.getDestination(),
                         JsonUtils.toJson(rebuilt.getInterests()), task.getTitle(),
                         task.getBudget(), task.getParty());
             } catch (Exception pe) {

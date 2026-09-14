@@ -58,7 +58,7 @@ function WelcomePage() {
           <p
             key={idx}
             className={cn(
-              'text-lg md:text-xl leading-relaxed transition-all duration-700',
+              'text-lg md:text-xl leading-relaxed transition-all duration-[var(--dur-slowest)]',
               idx < visible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-3'
             )}
           >

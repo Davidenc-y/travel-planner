@@ -4,7 +4,7 @@ import com.travel.common.exception.BusinessException;
 import com.travel.common.result.R;
 import com.travel.planning.memory.anchor.ItineraryBrief;
 import com.travel.planning.memory.anchor.ItineraryBriefPort;
-import com.travel.planning.memory.anchor.SessionAnchorStore;
+import com.travel.planning.memory.MemoryFacade;
 import com.travel.planning.memory.sessionstore.SessionStorePort;
 import com.travel.planning.util.AuthUtils;
 import lombok.RequiredArgsConstructor;
@@ -35,7 +35,7 @@ import java.util.List;
 @RequiredArgsConstructor
 public class SessionAnchorController {
 
-    private final SessionAnchorStore sessionAnchorStore;
+    private final MemoryFacade memoryFacade;
     private final ItineraryBriefPort itineraryBriefPort;
     private final SessionStorePort sessionStorePort;
 
@@ -44,8 +44,8 @@ public class SessionAnchorController {
     public R<List<ItineraryBrief>> getAnchors(@PathVariable String sessionId) {
         Long userId = AuthUtils.resolveUserId();
         requireOwnedSession(userId, sessionId);
-        List<Long> stored = sessionAnchorStore.getAnchors(sessionId);
-        List<Long> valid = sessionAnchorStore.replaceAnchors(userId, sessionId, stored);
+        List<Long> stored = memoryFacade.getAnchors(sessionId);
+        List<Long> valid = memoryFacade.replaceAnchors(userId, sessionId, stored);
         return R.ok(rebuildBriefs(userId, valid));
     }
 
@@ -55,7 +55,7 @@ public class SessionAnchorController {
                                         @RequestBody AnchorReplaceRequest body) {
         Long userId = AuthUtils.resolveUserId();
         requireOwnedSession(userId, sessionId);
-        List<Long> effective = sessionAnchorStore.replaceAnchors(userId, sessionId, body.itineraryIds());
+        List<Long> effective = memoryFacade.replaceAnchors(userId, sessionId, body.itineraryIds());
         log.info("[SessionAnchor] replaced: sessionId={}, effective={}", sessionId, effective.size());
         return R.ok(effective);
     }

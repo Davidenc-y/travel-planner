@@ -39,7 +39,10 @@ public enum ErrorCode {
     /** M4-3：同幂等键请求仍在处理中（客户端同键退避重试） */
     MESSAGE_PROCESSING(40904, 409, "消息处理中，请稍后重试"),
     /** M4-8：行程仍在生成中（同 clientRequestId 并发请求应等待或走 resume） */
-    ITINERARY_PROCESSING(40905, 409, "行程正在生成中，请稍后重试或使用继续生成");
+    ITINERARY_PROCESSING(40905, 409, "行程正在生成中，请稍后重试或使用继续生成"),
+    /** MM-8-fix（二次审批）：方法级开关未启用（如灰度动态写默认关闭）——ResponseStatusException
+     *  不被 GlobalExceptionHandler 识别会吞成 50000，改走 BusinessException 通道后 HTTP 405 可达客户端 */
+    METHOD_NOT_ALLOWED(40501, 405, "方法不被允许（功能开关未启用）");
 
     private final int code;
     private final int httpStatus;

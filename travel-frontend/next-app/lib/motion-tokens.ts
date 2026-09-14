@@ -11,6 +11,7 @@ export const DUR_MS = {
   base: 250,
   slow: 400,
   reveal: 300,
+  slowest: 700, // MM-10a：欢迎页揭示长过渡档（原 duration-700 字面值收编；数值不变）
 } as const;
 
 /**

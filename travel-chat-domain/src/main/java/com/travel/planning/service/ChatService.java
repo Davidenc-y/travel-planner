@@ -89,8 +89,8 @@ public class ChatService implements ChatStreamExecutor {
     private final ModelRegistry modelRegistry;
     // M7：实际路由模型追溯记录（direct 路径由 runStream 包裹捕获；HC-5 起为 TraceGateway 缺省时的降级直连）
     private final ModelRouteTracker modelRouteTracker;
-    /** M23（E1）：锚定存储（brief 渲染 + 会话锚定集合）。 */
-    private final com.travel.planning.memory.anchor.SessionAnchorStore sessionAnchorStore;
+    /** M23（E1）：锚定存储（brief 渲染 + 会话锚定集合）——MM-1a.4 收编改走记忆门面。 */
+    private final com.travel.planning.memory.MemoryFacade memoryFacade;
     private final com.travel.planning.memory.anchor.ItineraryBriefPort itineraryBriefPort;
     /** M23b（E4）：偏好段渲染器（确定性；含目的地冲突提示行）。 */
     private final com.travel.planning.memory.preference.PreferenceSectionRenderer preferenceSectionRenderer;
@@ -489,9 +489,9 @@ public class ChatService implements ChatStreamExecutor {
                 // M28-13：消息携带锚定（含新会话首条消息的预选草稿）→ 持久化为服务端锚定
                 // （用户显式选择=持续意图；幂等——与现值一致时无额外写放大）
                 if (!anchorIds.isEmpty()) {
-                    chatAnchorPolicy.persistAnchors(sessionAnchorStore, userId, sessionId, anchorIds);
+                    chatAnchorPolicy.persistAnchors(memoryFacade, userId, sessionId, anchorIds);
                 }
-                String anchorSection = sessionAnchorStore.renderSection(userId, anchorIds);
+                String anchorSection = memoryFacade.renderAnchorSection(userId, anchorIds);
                 // M23b（E4）：偏好段渲染（含与锚定目的地的冲突提示行）+ 检索 query 偏好拼接
                 com.travel.common.dto.PreferenceTagsDTO preferences = prepared.preferences();
                 // M28-14：偏好标签到达性观测（一条 INFO 即可判定前端是否携带——
@@ -611,10 +611,10 @@ public class ChatService implements ChatStreamExecutor {
             com.travel.stream.service.ChatStreamExecutor.ChatStreamResult.AnchorSuggestion suggestion = null;
             if (routedItineraryId != null
                     && chatAnchorPolicy.shouldAutoAnchor(anchorIds) // M28-13：用户已显式携带锚定（含新会话预选）时不被新行程覆盖
-                    && sessionAnchorStore.getAnchors(prepared.sessionId()).isEmpty()
+                    && memoryFacade.getAnchors(prepared.sessionId()).isEmpty()
                     && isSessionFirstItinerary(routedItineraryId,
                             itineraryBriefPort.findSessionItineraryIds(prepared.sessionId()))) {
-                chatAnchorPolicy.persistAnchors(sessionAnchorStore, userId, prepared.sessionId(),
+                chatAnchorPolicy.persistAnchors(memoryFacade, userId, prepared.sessionId(),
                         java.util.List.of(routedItineraryId));
                 log.info("[SessionAnchor] 会话首个行程已自动锚定: sessionId={}, itineraryId={}",
                         prepared.sessionId(), routedItineraryId);

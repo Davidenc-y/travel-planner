@@ -5,8 +5,10 @@ import com.travel.common.entity.AgentTrace;
 /**
  * Agent 追溯存储端口（F89）。
  *
- * <p>抽象落库实现：MySQL（默认）/ 日志降级。planning 与 knowledge 各提供实现，
- * 便于未来拆 travel-trace 模块时只迁移本接口与实现。</p>
+ * <p>抽象落库实现：MySQL（默认）/ 日志降级。当前仅 travel-chat-domain 提供两实现
+ * （{@code MysqlTraceStore}/{@code LogTraceStore}，经 {@code travel.trace.store} 条件装配；
+ * knowledge 的 {@code travel.trace.enabled} 为独立 RAG 链路开关，与本端口无涉），
+ * travel-trace 模块拆分为远期预留（届时只迁移本接口与实现）。</p>
  */
 public interface TraceStore {
 

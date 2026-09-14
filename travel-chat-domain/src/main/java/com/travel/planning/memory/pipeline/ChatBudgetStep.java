@@ -1,9 +1,9 @@
 package com.travel.planning.memory.pipeline;
 
 import com.travel.planning.memory.chat.ChatIntent;
+import com.travel.planning.memory.MemoryFacade;
 import com.travel.planning.memory.knowledge.KnowledgeRetrievalService;
 import com.travel.planning.memory.knowledge.RagInjectionProperties;
-import com.travel.planning.memory.knowledge.SessionFactConsolidator;
 import com.travel.planning.memory.knowledge.SessionKnowledgeWriter;
 import com.travel.planning.memory.shortterm.ContextComposer;
 import lombok.RequiredArgsConstructor;
@@ -52,11 +52,11 @@ public class ChatBudgetStep implements ChatPipelineStep {
 
     private final KnowledgeRetrievalService knowledgeRetrievalService;
     private final SessionKnowledgeWriter sessionKnowledgeWriter;
-    private final SessionFactConsolidator sessionFactConsolidator;
     private final ContextComposer contextComposer;
     private final RagInjectionProperties ragInjectionProperties;
     private final RagJudge ragJudge;
     private final RagJudgeProperties ragJudgeProperties;
+    private final MemoryFacade memoryFacade;
 
     /**
      * 组装 画像+历史+共识+会话知识+候选+当前问题，并执行四档 token 预算兜底
@@ -109,7 +109,7 @@ public class ChatBudgetStep implements ChatPipelineStep {
         sessionHits = expandItineraryParentView(sessionId, sessionHits);
         String sessionContext = SessionKnowledgeWriter.format(sessionHits);
         // F85：会话事实共识——同主题 feedback 覆盖旧 constraint，注入【会话最新确认】
-        String consensus = sessionFactConsolidator.render(sessionFactConsolidator.consolidate(sessionHits));
+        String consensus = memoryFacade.renderFacts(memoryFacade.consolidateFacts(sessionHits));
         // M4-5a：在线相关性 Judge——不相关段置空（fail-open，见 RagJudge）
         if (judgeApplicable(intent, sessionContext, candidates)) {
             RagJudge.JudgeResult verdict = ragJudge.judge(message, sessionContext, candidates);

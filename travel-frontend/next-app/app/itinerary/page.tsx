@@ -26,7 +26,7 @@ const PAGE_SIZE_OPTIONS = [8, 10, 20, 50];
 
 function ItineraryListContent() {
   const router = useRouter();
-  const { userId, isAuthenticated } = useAuth();
+  const { userId, isAuthenticated, mounted } = useAuth();
   const confirm = useConfirm();
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(8);
@@ -84,6 +84,12 @@ function ItineraryListContent() {
   const [resumingId, setResumingId] = useState<number | null>(null);
 
   useEffect(() => {
+    // MM-10a 守卫加固：mounted=false（鉴权状态未知，SSR/首帧）时不触发 replace——
+    // 消除 dev StrictMode 下"未鉴权误跳首页"竞态（生产语义不变：mounted 翻 true
+    // 后本 effect 经依赖数组重跑，守卫按真实鉴权态执行）
+    if (!mounted) {
+      return;
+    }
     if (!isAuthenticated) {
       router.replace('/');
       return;
@@ -95,7 +101,7 @@ function ItineraryListContent() {
     if (directId != null) {
       setSelectedId(directId);
     }
-  }, [userId, isAuthenticated]);
+  }, [userId, isAuthenticated, mounted]);
 
   // M6-54：存在生成中（GENERATING）的行程时自动轮询刷新（3s），生成完成后停止；
   // B3/PE-05（F-26）：页面不可见（切后台标签）时暂停轮询，回归可见时立即刷新一次

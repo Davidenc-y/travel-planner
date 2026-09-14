@@ -178,6 +178,7 @@ body {
   --dur-base: 250ms;
   --dur-slow: 400ms;
   --dur-reveal: 300ms;
+  --dur-slowest: 700ms; /* MM-10a：欢迎页揭示长过渡档（原 duration-700 字面值收编） */
 }
 
 /* FE-A1：系统级减少动画——装饰动画跳过，功能反馈保留 opacity 过渡 */
