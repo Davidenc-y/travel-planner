@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { titleNeedsSave } from '@/lib/schemas';
 import { chatApi, getErrorMessage } from '@/lib/api';
+import { guarded } from '@/lib/submit-guard';
 import type { ChatSession } from '@/types';
 import { takePrefetch } from '@/lib/prefetch';
 
@@ -190,7 +191,8 @@ export function useSessionList(userId: number | null) {
     titleSavingRef.current = true;
     setEditingSessionId(null);
     try {
-      await chatApi.updateTitle(sid, title);
+      // FE-S3：写路径标准化接入 guarded（同键在途合并；既有 titleSavingRef 守卫保留）
+      await guarded(`session-title:${sid}`, () => chatApi.updateTitle(sid, title));
       setSessions((prev) => prev.map((s) =>
         s.sessionId === sid ? { ...s, title } : s));
       toast.success('标题已更新');

@@ -171,3 +171,37 @@ body {
   background: var(--border);
   border-radius: 3px;
 }
+
+/* FE-A1：动画时长 token（与 lib/motion-tokens.ts DUR_MS 同值镜像） */
+:root {
+  --dur-fast: 150ms;
+  --dur-base: 250ms;
+  --dur-slow: 400ms;
+  --dur-reveal: 300ms;
+}
+
+/* FE-A1：系统级减少动画——装饰动画跳过，功能反馈保留 opacity 过渡 */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* FE-A2b：思考逐行揭示 fade-in（--dur-reveal 同源节奏） */
+@keyframes reveal-line-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.reveal-line {
+  animation: reveal-line-fade var(--dur-reveal) ease-out both;
+}

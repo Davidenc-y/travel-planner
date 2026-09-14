@@ -12,6 +12,7 @@
  */
 import { MessagesSquare } from 'lucide-react';
 import { SUGGESTED_PROMPTS } from '@/lib/suggested-prompts';
+import { DUR_MS, useMinDisplay } from '@/lib/motion-tokens';
 import type { ChatMessage } from '@/types';
 import type { StreamState } from '@/hooks/useChatStream';
 import {
@@ -88,6 +89,11 @@ export function MessageStreamWrapper({
   handleEditResend,
   handleRetry,
 }: MessageStreamWrapperProps) {
+  // FE-A3：thinking 指示器最少展示 400ms（--dur-slow 档）——SSE 快速到达时
+  // phase 短暂闪过 thinking，按 minDisplay 补足展示防"闪现即逝"。
+  const thinkingActive = currentStreamState?.phase === 'thinking';
+  const holdThinking = useMinDisplay(thinkingActive, DUR_MS.slow);
+  const showTimeline = thinkingActive || holdThinking;
   return (
     <>
       {messages.length === 0 && !currentStreamState ? (
@@ -131,9 +137,9 @@ export function MessageStreamWrapper({
           );
         })
       )}
-      {/* M6：执行过程时间线（C-03，替代原 ThinkingBubble） */}
-      {currentStreamState?.phase === 'thinking' && (
-        <ThinkingTimeline lines={currentStreamState.thinkingLines} />
+      {/* M6：执行过程时间线（C-03，替代原 ThinkingBubble）；FE-A3 最少展示 400ms */}
+      {showTimeline && (
+        <ThinkingTimeline lines={currentStreamState?.thinkingLines ?? []} />
       )}
       {/* M6：流式输出（思考完成后替换时间线；C-02 Markdown 增量渲染） */}
       {currentStreamState?.phase === 'streaming' && (

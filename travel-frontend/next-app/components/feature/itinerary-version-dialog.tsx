@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { toast } from 'sonner';
 import { Dialog } from '@/components/ui/dialog';
 import { itineraryApi, getErrorMessage } from '@/lib/api';
+import { guarded } from '@/lib/submit-guard';
 import { mergePreferenceSync } from '@/lib/schemas';
 import { PREFS_STORAGE_KEY } from '@/hooks/useSessionPreference';
 
@@ -48,7 +49,10 @@ export function ItineraryVersionDialog({
       const detailRes = await itineraryApi.version(itineraryId, version);
       setVersionDetail(detailRes.data.data);
       if (activeVersion !== version) {
-        const res = await itineraryApi.activateVersion(itineraryId, version);
+        // FE-S3：写路径标准化接入 guarded（同键在途合并；既有 switching 守卫保留）
+        const res = await guarded(`version-activate:${itineraryId}`, () =>
+          itineraryApi.activateVersion(itineraryId, version)
+        );
         // M28-6：切换后同步该行程来源会话的偏好标签（约束列已随版本重算；
         // localStorage 直写，返回聊天页挂载时恢复即真实生效于后续消息）
         await syncPreferenceToSession(itineraryId);

@@ -9,6 +9,7 @@
  */
 import { toast } from 'sonner';
 import { itineraryApi, getErrorMessage } from '@/lib/api';
+import { guarded } from '@/lib/submit-guard';
 import type { PreferenceTags } from '@/lib/schemas';
 import { PreferenceDotButton, PreferencePanel } from '@/components/chat/composer/preference-panel';
 
@@ -46,10 +47,13 @@ export function PreferencePanelWrapper({
   const handlePrefPanelClose = () => {
     onRequestClose();
     if (!firstAnchorId || (!tags.party && !tags.interests?.length)) return;
-    itineraryApi.updateConstraints(firstAnchorId, {
-      party: tags.party,
-      interests: tags.interests?.length ? tags.interests : undefined,
-    })
+    // FE-S3：同键在途合并——面板快速关开重复提交共享同一 PATCH（完成即释放）
+    guarded(`constraints:${firstAnchorId}`, () =>
+      itineraryApi.updateConstraints(firstAnchorId, {
+        party: tags.party,
+        interests: tags.interests?.length ? tags.interests : undefined,
+      })
+    )
       .then(() => {
         toast.success('同行人与兴趣已同步到锚定行程');
         onAnchorsSynced();

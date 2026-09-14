@@ -1,6 +1,6 @@
 'use client';
 
-import { memo, useEffect, useState } from 'react';
+import { memo, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { Check, ChevronRight, Copy, Loader2, Pencil, Plane, RotateCcw, X } from 'lucide-react';
 import { toast } from 'sonner';
@@ -10,6 +10,7 @@ import { buildItineraryUrl } from '@/lib/url-guard';
 import { STREAM_MARKDOWN_PREF_KEY } from '@/lib/constants';
 import { copyText } from '@/lib/clipboard';
 import { formatClockTime, formatDurationShort } from '@/lib/time-format';
+import { RevealQueue } from '@/lib/reveal-queue';
 import { ChatMessageContent } from '@/components/feature/chat-message-content';
 import { useThrottledValue } from '@/lib/use-throttled-value';
 
@@ -243,6 +244,37 @@ export const MessageBubble = memo(MessageBubbleInner);
 
 /** B3/09 C-03：进行中轮次的执行过程时间线（C1 去气泡：通栏灰字 + 最新行 spinner） */
 export function ThinkingTimeline({ lines }: { lines: string[] }) {
+  // FE-A2b：reveal-queue 展示层节流——采集侧 lines 全量入队，300ms 逐行揭示
+  //（fade-in --dur-reveal）；采集侧收缩（新一轮重试重置）即时清队列与展示；
+  // 卸载时 flush 防丢行并停表（phase 离开 thinking 即组件卸载，方案操作③）。
+  const [revealed, setRevealed] = useState<string[]>([]);
+  const queueRef = useRef<RevealQueue | null>(null);
+  const enqueuedCountRef = useRef(0);
+
+  useEffect(() => {
+    if (lines.length < enqueuedCountRef.current) {
+      queueRef.current?.dispose();
+      queueRef.current = null;
+      enqueuedCountRef.current = 0;
+      setRevealed([]);
+      return;
+    }
+    const queue =
+      queueRef.current ?? new RevealQueue((line) => setRevealed((prev) => [...prev, line]));
+    queueRef.current = queue;
+    for (const line of lines.slice(enqueuedCountRef.current)) {
+      queue.enqueue(line);
+      enqueuedCountRef.current += 1;
+    }
+  }, [lines]);
+
+  useEffect(() => {
+    return () => {
+      queueRef.current?.flush();
+      queueRef.current?.dispose();
+    };
+  }, []);
+
   return (
     <div className="flex justify-start w-full">
       <div className="w-full">
@@ -250,15 +282,15 @@ export function ThinkingTimeline({ lines }: { lines: string[] }) {
           <Loader2 className="h-4 w-4 animate-spin" />
           Agent 执行中…
         </div>
-        {lines.length > 0 && (
+        {revealed.length > 0 && (
           <div
             role="log"
             aria-label="执行过程"
             className="mt-2 max-h-40 space-y-1 overflow-y-auto border-l-2 border-line pl-3"
           >
-            {lines.map((line, idx) => (
-              <p key={idx} className="flex items-start gap-1.5 text-xs text-ink-faint">
-                {idx < lines.length - 1 ? (
+            {revealed.map((line, idx) => (
+              <p key={idx} className="reveal-line flex items-start gap-1.5 text-xs text-ink-faint">
+                {idx < revealed.length - 1 ? (
                   <Check className="mt-0.5 h-3 w-3 flex-shrink-0 text-success" />
                 ) : (
                   <Loader2 className="mt-0.5 h-3 w-3 flex-shrink-0 animate-spin text-brand-500" />

@@ -136,7 +136,8 @@ export function SessionList({
     const isPinned = pinnedSet.has(s.sessionId);
     const isEditing = editingSessionId === s.sessionId;
     return (
-      <div key={s.sessionId} className="group relative">
+      // FE-C3：CSS 级虚拟化——视口外行跳过渲染（零 JS 零行为变更；intrinsic 尺寸≈行高 36px）
+      <div key={s.sessionId} className="group relative [content-visibility:auto] [contain-intrinsic-size:auto_36px]">
         <div
           role="button"
           tabIndex={0}

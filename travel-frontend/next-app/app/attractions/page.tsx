@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { Loader2, Search, MapPin, Star, Ticket, ArrowRight } from 'lucide-react';
 import Link from 'next/link';
@@ -10,6 +10,7 @@ import { formatCurrency } from '@/lib/utils';
 import { ListState } from '@/components/ui/list-state';
 import { PagedSelect, PagedSingleSelect } from '@/components/ui/paged-options';
 import { takePrefetch } from '@/lib/prefetch';
+import { useApiQuery } from '@/lib/use-api-query';
 import { SmartImage } from '@/components/ui/smart-image';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -162,18 +163,19 @@ export default function AttractionsPage() {
   const [query, setQuery] = useState('');
   const [ragType, setRagType] = useState('hybrid');
   const [results, setResults] = useState<SearchResult[]>([]);
-  const [list, setList] = useState<Attraction[]>([]);
   const [cities, setCities] = useState<string[]>([]);
   const [cityOptions, setCityOptions] = useState<string[]>(FALLBACK_CITY_OPTIONS);
   const [allSelected, setAllSelected] = useState(false);
   const [typeFilter, setTypeFilter] = useState<string | undefined>(undefined);
   const [page, setPage] = useState(1);
-  const [totalPages, setTotalPages] = useState(1);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [searchLoading, setSearchLoading] = useState(false);
   const [mode, setMode] = useState<'search' | 'browse'>('search');
   // B4（M5）：详情弹窗
   const [detailItem, setDetailItem] = useState<Attraction | null>(null);
+
+  // FE-P3.2.2：浏览列表取数迁移 useApiQuery（SWR-lite，与 itinerary 列表页同口径）——
+  // 筛选/页码经 ref 供 fetcher 读取，loadPage 同步推进 ref 后 refetch；仅 browse 模式启用。
+  const browseRef = useRef({ page: 1, cityQuery: undefined as string | undefined, type: undefined as string | undefined, hasFilter: false });
 
   // M5-1：城市下拉动态化——从后端加载全部城市，失败降级内置列表
   useEffect(() => {
@@ -189,7 +191,7 @@ export default function AttractionsPage() {
 
   const handleSearch = async () => {
     if (!query.trim()) return;
-    setLoading(true);
+    setSearchLoading(true);
     try {
       const res = await attractionApi.search(query, ragType, 10);
       setResults(res.data.data || []);
@@ -197,48 +199,60 @@ export default function AttractionsPage() {
     } catch (err) {
       toast.error('检索失败: ' + getErrorMessage(err));
     } finally {
-      setLoading(false);
+      setSearchLoading(false);
     }
   };
 
-  const loadAll = async (targetPage = 1, cityList = cities, all = allSelected, type = typeFilter) => {
-    // F102：命中预取缓存则直接展示（仅无筛选条件时，避免错误命中）
-    if (!type && !all && cityList.length === 0) {
-      const cached = takePrefetch<PageResult<Attraction>>(`attractions:${targetPage}:${PAGE_SIZE}`);
-      if (cached) {
-        setError(null);
-        setList(cached.list || []);
-        setTotalPages(Math.max(1, cached.totalPages || 1));
-        setPage(targetPage);
-        setLoading(false);
-        return;
+  const {
+    data: browseData,
+    loading,
+    error,
+    refetch,
+  } = useApiQuery<PageResult<Attraction>>(
+    useCallback(() => {
+      const p = browseRef.current;
+      // F102：命中预取缓存则直接展示（仅无筛选条件时，避免错误命中）
+      if (!p.hasFilter) {
+        const cached = takePrefetch<PageResult<Attraction>>(`attractions:${p.page}:${PAGE_SIZE}`);
+        if (cached) return Promise.resolve(cached);
       }
-    }
-    setError(null);
-    setLoading(true);
-    try {
       // F101：多城市逗号分隔传给后端（空数组=全部）；B4/M7：type 筛选贯通（后端参数已有）
-      const cityQuery = !all && cityList.length > 0 ? cityList.join(',') : undefined;
-      const res = await attractionApi.list(cityQuery, type, targetPage, PAGE_SIZE);
-      const data = res.data.data;
-      setList(data?.list || []);
-      setTotalPages(Math.max(1, data?.totalPages || 1));
-      setPage(targetPage);
-    } catch (err) {
-      const message = getErrorMessage(err);
-      setError(message);
-      toast.error('加载失败: ' + message);
-    } finally {
-      setLoading(false);
+      return attractionApi.list(p.cityQuery, p.type, p.page, PAGE_SIZE).then((res) => res.data.data);
+    }, []),
+    [],
+    {
+      enabled: mode === 'browse',
+      // 与 itinerary 列表页同口径（FE-P3.2.1）：SWR 全量静默——有数据不闪 loading，
+      // 静默失败保持旧列表；仅首次无缓存走骨架。分页/筛选/模式切换静默换数据的
+      // 语义统一与现状骨架差异已披露（审计日志第 8 轮，待二次审批）。
+      cacheKey: 'attractions:browse',
+      staleMs: 24 * 60 * 60_000,
     }
-  };
+  );
+  const list = browseData?.list || [];
+  const totalPages = Math.max(1, browseData?.totalPages || 1);
+
+  const loadPage = useCallback(
+    (targetPage: number, cityList: string[], all: boolean, type: string | undefined) => {
+      const cityQuery = !all && cityList.length > 0 ? cityList.join(',') : undefined;
+      browseRef.current = { page: targetPage, cityQuery, type, hasFilter: Boolean(type || all || cityList.length > 0) };
+      setPage(targetPage);
+      refetch();
+    },
+    [refetch]
+  );
+
+  // 首载失败 toast（现状语义保留）；静默刷新失败保持旧列表且不 toast
+  useEffect(() => {
+    if (error) toast.error('加载失败: ' + error);
+  }, [error]);
 
   const switchToBrowse = () => {
     setMode('browse');
     setCities([]);
     setAllSelected(false);
     setTypeFilter(undefined);
-    loadAll(1, [], false, undefined);
+    loadPage(1, [], false, undefined);
   };
 
   // F102：多选城市；"全部"与其他城市互斥（选中全部→其他取消；点城市→全部取消）
@@ -247,7 +261,7 @@ export default function AttractionsPage() {
       const nextAll = !allSelected;
       setAllSelected(nextAll);
       setCities([]);
-      loadAll(1, [], nextAll, typeFilter);
+      loadPage(1, [], nextAll, typeFilter);
       return;
     }
     const next = allSelected ? [v] : cities.includes(v)
@@ -255,13 +269,13 @@ export default function AttractionsPage() {
       : [...cities, v];
     setAllSelected(false);
     setCities(next);
-    loadAll(1, next, false, typeFilter);
+    loadPage(1, next, false, typeFilter);
   };
 
   // B4/M7：类型筛选变更 → 回第 1 页
   const onTypeChange = (type: string | undefined) => {
     setTypeFilter(type);
-    loadAll(1, cities, allSelected, type);
+    loadPage(1, cities, allSelected, type);
   };
 
   return (
@@ -311,8 +325,8 @@ export default function AttractionsPage() {
                   <option key={t.value} value={t.value}>{t.label}</option>
                 ))}
               </select>
-              <Button onClick={handleSearch} disabled={loading} aria-label="搜索">
-                {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
+              <Button onClick={handleSearch} disabled={searchLoading} aria-label="搜索">
+                {searchLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
               </Button>
             </div>
           </div>
@@ -336,7 +350,7 @@ export default function AttractionsPage() {
                 </div>
               </div>
             ))}
-            {results.length === 0 && !loading && (
+            {results.length === 0 && !searchLoading && (
               <div className="card p-6 text-center text-ink-faint">
                 <p>输入关键词开始搜索</p>
                 <Link
@@ -387,8 +401,7 @@ export default function AttractionsPage() {
             empty={list.length === 0}
             emptyMessage="暂无数据"
             onRetry={() => {
-              setError(null);
-              loadAll();
+              refetch();
             }}
             skeletonCount={6}
           >
@@ -403,7 +416,7 @@ export default function AttractionsPage() {
           <Pagination
             page={page}
             totalPages={totalPages}
-            onChange={(p) => loadAll(p)}
+            onChange={(p) => loadPage(p, cities, allSelected, typeFilter)}
             disabled={loading}
           />
         </>

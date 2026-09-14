@@ -1,7 +1,8 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { anchorApi } from '@/lib/api';
+import { toast } from 'sonner';
+import { anchorApi, getErrorMessage } from '@/lib/api';
 import type { AnchorBrief } from '@/types';
 
 /**
@@ -83,11 +84,13 @@ export function useSessionAnchor(currentSessionId?: string | null) {
         ...prev,
         [sid]: { ...(prev[sid] ?? EMPTY), ids: effective },
       }));
-    } catch {
+    } catch (err) {
       setAnchors((prev) => ({
         ...prev,
         [sid]: { ...(prev[sid] ?? EMPTY), ids: prevIds },
       }));
+      // FE-C1：失败回滚后走既有错误通道明示（乐观态已恢复，不阻断后续勾选）
+      toast.error('锚定更新失败: ' + getErrorMessage(err));
     }
   }, []);
 

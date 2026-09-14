@@ -6,6 +6,7 @@ import { authApi, setSuppressAuthRedirect } from './api';
 import { userApi } from './api';
 import { toast } from 'sonner';
 import { isTokenExpired } from './token';
+import { sweepExpired, watchLogout } from './storage-hygiene';
 
 // F91：cookie 与 localStorage 双写，供 middleware.ts 路由守卫读取
 function setAuthCookie(token: string) {
@@ -50,6 +51,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     setMounted(true);
+    // FE-S2：启动过期清扫——access 过期且 refresh 在场 → 仅移除 access（并清过期 cookie），
+    // 保留 refresh 走既有 401 单飞刷新流；无 refresh 时不动，沿用下方 F95 全清口径。
+    if (sweepExpired() === 'swept') {
+      clearAuthCookie();
+    }
     const savedToken = localStorage.getItem('accessToken');
     const savedUserId = localStorage.getItem('userId');
     const savedUsername = localStorage.getItem('username');
@@ -82,6 +88,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setAuthCookie(savedToken);
       }
     }
+  }, []);
+
+  // FE-S2：跨标签登出广播——其他标签页移除 refreshToken 时，复用既有登出清理函数收敛本标签
+  useEffect(() => {
+    return watchLogout(() => logout());
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const login = (token: string, refreshToken: string, userId: number, username: string) => {

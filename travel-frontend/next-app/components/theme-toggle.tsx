@@ -33,7 +33,8 @@ export function ThemeToggle() {
       onClick={() => setTheme(isDark ? 'light' : 'dark')}
       className={cn(
         // F94：横向滑动开关——高度减小(h-7)、左右变宽(w-12)，图案左右移动不越界
-        'relative h-7 w-12 shrink-0 rounded-full transition-colors duration-200 magnetic focus-ring',
+        // FE-A1：duration-200 → --dur-base（微调一档 200→250ms）
+        'relative h-7 w-12 shrink-0 rounded-full transition-colors duration-[var(--dur-base)] magnetic focus-ring',
         'bg-slate-200 dark:bg-slate-700'
       )}
       aria-label="切换主题"
@@ -41,7 +42,7 @@ export function ThemeToggle() {
       <span
         className={cn(
           'absolute top-0.5 left-0.5 flex h-6 w-6 items-center justify-center rounded-full',
-          'bg-white dark:bg-slate-950 shadow transition-transform duration-200',
+          'bg-white dark:bg-slate-950 shadow transition-transform duration-[var(--dur-base)]',
           isDark ? 'translate-x-5' : 'translate-x-0'
         )}
       >

@@ -11,11 +11,68 @@
  *    为后端集成与接口测试专用，前端【不】提供任何调用封装，页面也不得使用。
  */
 
-import axios, { AxiosInstance } from 'axios';
+import axios, { AxiosInstance, AxiosResponse, InternalAxiosRequestConfig } from 'axios';
 import type { AuthResponse, R } from '@/types';
+import { backoffDelay } from '@/lib/backoff';
 
 export const PLANNING_BASE = process.env.NEXT_PUBLIC_API_PLANNING || 'http://localhost:8081';
 export const KNOWLEDGE_BASE = process.env.NEXT_PUBLIC_API_KNOWLEDGE || 'http://localhost:8082';
+
+// ==================== GET 在途去重（FE-P2） ====================
+// 仅 GET 且"method+url+序列化 params"同键的并发请求共享同一在途 Promise；响应以浅拷贝
+// 分发给各等待者。错误不缓存（键即释放）；非 GET 或携带自定义头（Authorization/Accept/
+// Content-Type 之外）的请求不去重；在途键上限 32，LRU 淘汰。开关 NEXT_PUBLIC_HTTP_DEDUPE
+// （默认开，置 'false' 关闭）。
+//
+// 响应对象不可变性约定：去重分发与共享均为浅拷贝（{...res}），data 载荷仍为同引用——
+// 消费端不得就地修改响应对象或 data（如需变更请自行克隆），否则可能污染并发等待者。
+const HTTP_DEDUPE_ENABLED = process.env.NEXT_PUBLIC_HTTP_DEDUPE !== 'false';
+const DEDUPE_MAX_KEYS = 32;
+const DEDUPE_HIT = '__dedupe_hit__';
+const BENIGN_HEADER_KEYS = new Set(['authorization', 'accept', 'content-type']);
+
+interface DedupeMeta {
+  key: string;
+  resolveShared: (res: AxiosResponse) => void;
+  rejectShared: (err: unknown) => void;
+}
+
+/** params 确定性序列化（键排序），保证同参不同序生成同键 */
+function stableParamsValue(params: unknown): string {
+  if (params == null) return '';
+  if (typeof URLSearchParams !== 'undefined' && params instanceof URLSearchParams) {
+    return params.toString();
+  }
+  if (typeof params !== 'object') return String(params);
+  return JSON.stringify(params, (_k, v) => {
+    if (v && typeof v === 'object' && !Array.isArray(v)) {
+      return Object.keys(v as Record<string, unknown>)
+        .sort()
+        .reduce<Record<string, unknown>>((acc, key) => {
+          acc[key] = (v as Record<string, unknown>)[key];
+          return acc;
+        }, {});
+    }
+    return v;
+  });
+}
+
+function dedupeKey(config: InternalAxiosRequestConfig): string {
+  return `${(config.method || 'get').toUpperCase()} ${config.url || ''} ${stableParamsValue(config.params)}`;
+}
+
+function flattenHeaders(headers: unknown): Record<string, unknown> {
+  if (!headers) return {};
+  const h = headers as { toJSON?: () => Record<string, unknown> };
+  return typeof h.toJSON === 'function' ? h.toJSON() : (headers as Record<string, unknown>);
+}
+
+/** 去重资格：仅 GET，且未携带白名单（Authorization/Accept/Content-Type）之外的自定义头 */
+function isDedupeEligible(config: InternalAxiosRequestConfig): boolean {
+  if ((config.method || '').toUpperCase() !== 'GET') return false;
+  const flat = flattenHeaders(config.headers);
+  return !Object.keys(flat).some((k) => !BENIGN_HEADER_KEYS.has(k.toLowerCase()));
+}
 
 // ==================== 认证辅助（F87） ====================
 
@@ -73,6 +130,66 @@ async function tryRefresh(): Promise<string | null> {
 
 export function createClient(baseURL: string): AxiosInstance {
   const client = axios.create({ baseURL, timeout: 120000 });
+
+  // ---- FE-P2：GET 在途去重拦截器（先注册：响应链先于 401 处理器执行）。
+  // 命中在途键的请求在请求链抛 sentinel，由响应错误拦截器回收并复用同一 Promise。
+  const inflightGets = new Map<string, { promise: Promise<AxiosResponse> }>();
+  const dedupeMetaByConfig = new WeakMap<InternalAxiosRequestConfig, DedupeMeta>();
+
+  client.interceptors.request.use((config) => {
+    if (!HTTP_DEDUPE_ENABLED || !isDedupeEligible(config)) return config;
+    const key = dedupeKey(config);
+    const existing = inflightGets.get(key);
+    if (existing) {
+      inflightGets.delete(key);
+      inflightGets.set(key, existing); // LRU touch
+      throw { [DEDUPE_HIT]: key };
+    }
+    let resolveShared!: (res: AxiosResponse) => void;
+    let rejectShared!: (err: unknown) => void;
+    const promise = new Promise<AxiosResponse>((resolve, reject) => {
+      resolveShared = resolve;
+      rejectShared = reject;
+    });
+    // 二次审批修复（2026-09-14）：单调用者错误路径下 rejectShared 会打到无消费者的
+    // 共享 Promise（unhandled rejection 噪音）；挂一个 no-op catch 标记已处理，
+    // 真实等待者仍各自经 promise 感知拒绝（附加 handler 不影响他人订阅）。
+    promise.catch(() => {});
+    if (inflightGets.size >= DEDUPE_MAX_KEYS) {
+      const oldest = inflightGets.keys().next().value;
+      if (oldest !== undefined) inflightGets.delete(oldest);
+    }
+    inflightGets.set(key, { promise });
+    dedupeMetaByConfig.set(config, { key, resolveShared, rejectShared });
+    return config;
+  });
+
+  client.interceptors.response.use(
+    (res) => {
+      const meta = dedupeMetaByConfig.get(res.config);
+      if (!meta) return res;
+      dedupeMetaByConfig.delete(res.config);
+      inflightGets.delete(meta.key);
+      meta.resolveShared({ ...res }); // 共享者独立浅拷贝（响应对象不可变性约定见文件头注释）
+      return { ...res }; // 发起者亦为独立浅拷贝
+    },
+    (error) => {
+      const hitKey = (error as Record<string, unknown> | null)?.[DEDUPE_HIT];
+      if (typeof hitKey === 'string') {
+        const entry = inflightGets.get(hitKey);
+        return entry ? entry.promise : Promise.reject(error);
+      }
+      const errConfig = error?.config as InternalAxiosRequestConfig | undefined;
+      const meta = errConfig ? dedupeMetaByConfig.get(errConfig) : undefined;
+      if (meta && errConfig) {
+        dedupeMetaByConfig.delete(errConfig);
+        inflightGets.delete(meta.key);
+        meta.rejectShared(error); // 错误穿透全部等待者；键即释放（错误不缓存）
+      }
+      return Promise.reject(error);
+    }
+  );
+
   client.interceptors.request.use((config) => {
     if (typeof window !== 'undefined') {
       const token = localStorage.getItem('accessToken');
@@ -113,6 +230,36 @@ export function createClient(baseURL: string): AxiosInstance {
       return Promise.reject(error);
     }
   );
+
+  // ---- FE-C2：5xx/网络错误指数退避重试（上限 2 次；401 单飞刷新既有语义优先且不走此环）。
+  // 二次审批裁决（2026-09-14，FE-C2-fix）：自动重试收窄为 GET-only——非 GET（如 POST
+  // /itineraries/generate 创建行程、POST /resume）在网络错误下重放存在重复提交风险；
+  // 已知幂等的写操作未来可经请求级 header 'X-Retry-Idempotent: true' 显式 opt-in。
+  client.interceptors.response.use(
+    (res) => res,
+    (error) => {
+      const status = error?.response?.status;
+      if (status === 401) return Promise.reject(error); // 交给上一环单飞刷新/清凭据
+      if (error?.code === 'ERR_CANCELED' || isAbortError(error)) return Promise.reject(error);
+      const cfg = error?.config as (InternalAxiosRequestConfig & { _netRetries?: number }) | undefined;
+      if (!cfg) return Promise.reject(error);
+      const method = (cfg.method || 'get').toLowerCase();
+      const idempotentOptIn = cfg.headers?.['X-Retry-Idempotent'] === 'true';
+      if (method !== 'get' && !idempotentOptIn) return Promise.reject(error);
+      const retryable = status == null || status >= 500; // 网络错误（无响应）或 5xx
+      if (!retryable) return Promise.reject(error);
+      const retries = cfg._netRetries ?? 0;
+      if (retries >= 2) return Promise.reject(error);
+      cfg._netRetries = retries + 1;
+      const delay = backoffDelay(retries); // 首次 0ms 立即，第二次 300±j
+      return new Promise((resolve, reject) => {
+        setTimeout(() => {
+          client(cfg).then(resolve, reject);
+        }, delay);
+      });
+    }
+  );
+
   return client;
 }
 

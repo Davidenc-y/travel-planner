@@ -282,7 +282,7 @@ export function TurnScrollbar({
               key={turn.key}
               aria-hidden
               className={cn(
-                'absolute left-1/2 rounded-full transition-all duration-150',
+                'absolute left-1/2 rounded-full transition-all duration-[var(--dur-fast)]',
                 tickClass(idx)
               )}
               style={{
