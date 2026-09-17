@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>com.travel.planner</groupId>
+        <artifactId>travel-planner</artifactId>
+        <version>1.0-SNAPSHOT</version>
+    </parent>
+
+    <groupId>com.travel.memory</groupId>
+    <artifactId>travel-memory</artifactId>
+    <packaging>jar</packaging>
+
+    <name>travel-memory</name>
+    <description>E-19①/E-26：会话记忆存储域物理抽取（V1 同包搬运——shortterm/longterm/anchor/
+        sessionstore + MemoryFacade 双件 + LlmGovernor + 3 mapper 接口；包名 com.travel.planning.*
+        跨 jar 并存，classpath 合法、Spring/@MapperScan 按包扫描不受影响）。
+        依赖方向：travel-memory → {travel-common, travel-core, travel-ai-gateway}；
+        chat-domain → travel-memory。不引入任何 Web Starter。</description>
+
+    <dependencies>
+        <!-- E-27 依赖白名单：travel-common / travel-core / travel-ai-gateway + mybatis-plus
+             （版本均由父 pom dependencyManagement 统一管理，禁新增三方依赖） -->
+        <!-- 中立内核（熔断/限流/归一化） -->
+        <dependency>
+            <groupId>com.travel.core</groupId>
+            <artifactId>travel-core</artifactId>
+        </dependency>
+        <!-- 公共基础（Entity/DTO/ErrorCode/Util/prompt.Markers 契约常量） -->
+        <dependency>
+            <groupId>com.travel.common</groupId>
+            <artifactId>travel-common</artifactId>
+        </dependency>
+        <!-- M7：模型网关（LlmGovernor 治理所依赖的模型注册/工厂口径） -->
+        <dependency>
+            <groupId>com.travel.aigateway</groupId>
+            <artifactId>travel-ai-gateway</artifactId>
+        </dependency>
+        <!-- MyBatis Plus（repository 3 mapper 接口随迁 D-4d；D-4f 起测试用 spring-boot-starter-test
+             按需以既有版本补入） -->
+        <dependency>
+            <groupId>com.baomidou</groupId>
+            <artifactId>mybatis-plus-spring-boot3-starter</artifactId>
+        </dependency>
+
+        <!-- D-4f：测试依赖（对齐 chat-domain test 依赖清单，版本由 spring-boot-parent 管理） -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+</project>

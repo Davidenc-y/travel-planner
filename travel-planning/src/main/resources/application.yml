@@ -142,6 +142,14 @@ travel:
       keepalive-ms: 15000
       chunk-max-chars: 16
 
+# ============ 灰度开关（GrayReleaseManager KNOWN_KEYS 消费键，D-2a 起）============
+# 注意：enabled() 键缺失回落 false——消费键须在此显式配置；默认 true=现状行为零变更
+gray:
+  itinerary-detail-cache:
+    enabled: true
+  writeback-consumer:
+    enabled: true
+
 # ============ Actuator ============
 management:
   endpoints:

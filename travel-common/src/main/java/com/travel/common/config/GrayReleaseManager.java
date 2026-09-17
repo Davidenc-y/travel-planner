@@ -14,7 +14,9 @@ import java.util.concurrent.ConcurrentHashMap;
  * MI-6：灰度开关单点（只读视图，读 Environment；不含动态写——动态切换留人工批次）。
  *
  * <p>聚合现存灰度键全集（前置核验 2026-09-13：{@code gray.stream.webflux-enabled}、
- * {@code gray.brief.redis.enabled}；新增灰度键时在此登记 KNOWN_KEYS 即可进快照）。
+ * {@code gray.brief.redis.enabled}；2026-09-14 D-2a 增 {@code gray.itinerary-detail-cache.enabled}、
+ * D-2b 增 {@code gray.writeback-consumer.enabled}；
+ * 新增灰度键时在此登记 KNOWN_KEYS 即可进快照）。
  * {@code enabled(key)} 供消费点做字面判断（当前代码内零字面判断消费点——两键均为
  * 注解/条件装配驱动，消费点替换记零处）；{@code snapshot()} 输出全部已知键当前值，
  * 供 {@code gray.release.snapshot} 端点（AdminReliabilityController）只读输出。</p>
@@ -24,6 +26,10 @@ import java.util.concurrent.ConcurrentHashMap;
  * 一致）；{@code override/clearOverride/clearAllOverrides} 受
  * {@code travel.gray.dynamic-write.enabled} 门控（默认 false=false 时全部 no-op，
  * E-19④：代码可产出、启用须人工改配置）；变更审计日志前缀 {@code [GrayOverride]}。</p>
+ *
+ * <p>D-2c 边界三句：本能力仅在启用它的进程内生效（当前=8081，local profile 配置）；
+ * 内存覆盖层重启即失，持久化不存在；8083 进程（{@code gray.brief.redis.enabled} 所在）
+ * 不可达本覆盖层，其灰度键取值不因本开关变化。</p>
  *
  * @author david_ency
  * @since 1.0-SNAPSHOT
@@ -35,7 +41,9 @@ public class GrayReleaseManager {
     /** 现存灰度键全集（新增灰度键在此登记即进快照）。 */
     public static final List<String> KNOWN_KEYS = List.of(
             "gray.stream.webflux-enabled",
-            "gray.brief.redis.enabled");
+            "gray.brief.redis.enabled",
+            "gray.itinerary-detail-cache.enabled",
+            "gray.writeback-consumer.enabled");
 
     private final Environment environment;
 

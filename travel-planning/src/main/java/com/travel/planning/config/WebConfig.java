@@ -70,6 +70,8 @@ public class WebConfig implements WebMvcConfigurer {
                         "/api/v1/itineraries/chat-session-itineraries",
                         "/api/v1/itineraries/chat-weather",
                         // M25（E5）：分享公开只读面（授权=签名 token；匿名限流面覆盖）
-                        "/api/v1/share/**");
+                        "/api/v1/share/**",
+                        // D-3a（E-19③）：CSP violation 公网上报 collector（匿名证据通道；限频 /api/** 全局粒度保留覆盖）
+                        "/api/v1/csp-report");
     }
 }

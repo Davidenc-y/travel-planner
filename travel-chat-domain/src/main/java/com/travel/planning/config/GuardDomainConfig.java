@@ -8,7 +8,7 @@ import org.springframework.context.annotation.Configuration;
 /**
  * M6-31：领域侧防护装配（熔断注册表）。
  *
- * <p>原 GuardConfig 因 RateLimitInterceptor（travel-web-mvc）留在 MVC 侧；本配置
+ * <p>原 GuardConfig 因 RateLimitInterceptor（原属 travel-web-mvc，该模块已于 2026-09-14 D-1a 删除）留在 MVC 侧；本配置
  * 提供纯领域 Bean（CircuitBreaker.Registry），供 travel-planning 与未来
  * travel-stream-webflux 共用，避免领域模块反向依赖 MVC。</p>
  */

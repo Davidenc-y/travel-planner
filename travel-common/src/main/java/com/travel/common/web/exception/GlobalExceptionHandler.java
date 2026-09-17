@@ -19,7 +19,7 @@ import jakarta.validation.ConstraintViolationException;
 import java.util.Locale;
 
 /**
- * 全局异常处理器（M6-9 P2：自 travel-common 迁移至 travel-web-mvc，行为不变）。
+ * 全局异常处理器（M6-9 P2：自 travel-common 迁移至 travel-web-mvc（该模块已于 2026-09-14 D-1a 删除），行为不变）。
  *
  * <p>统一捕获所有异常，返回标准 R&lt;Void&gt; 响应。</p>
  *

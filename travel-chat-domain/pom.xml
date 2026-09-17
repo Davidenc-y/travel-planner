@@ -31,6 +31,11 @@
             <groupId>com.travel.common</groupId>
             <artifactId>travel-common</artifactId>
         </dependency>
+        <!-- E-19①/E-26：会话记忆存储域物理抽取（V1 同包搬运；D-4c/d/e 迁移消费方经此依赖可见） -->
+        <dependency>
+            <groupId>com.travel.memory</groupId>
+            <artifactId>travel-memory</artifactId>
+        </dependency>
 
         <!-- M7：模型网关（注册表/工厂/路由代理；内含 DashScope/OpenAI 核心 SDK） -->
         <dependency>

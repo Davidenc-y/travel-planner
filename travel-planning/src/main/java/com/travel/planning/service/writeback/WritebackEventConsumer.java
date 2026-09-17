@@ -1,5 +1,6 @@
 package com.travel.planning.service.writeback;
 
+import com.travel.common.config.GrayReleaseManager;
 import com.travel.planning.service.ItineraryDetailCache;
 import com.travel.planning.service.ItinerarySliceWriter;
 import lombok.RequiredArgsConstructor;
@@ -25,7 +26,9 @@ import java.util.Map;
  * <p>消费语义：每条事件执行 会话知识切片写回（writeAfterGenerated）+ 行程详情缓存失效（evict）
  * 后 XACK；<b>消费失败不 ACK 留待重投</b>；同一事件累计消费失败 ≥{@link #DLQ_AFTER_DELIVERIES}
  * 次转死信日志 <b>[WritebackDLQ]</b> 并 ACK（终止重投循环，人工按日志处置）。
- * 幂等性：切片写回与缓存 evict 均可安全重复执行。</p>
+ * 幂等性：切片写回与缓存 evict 均可安全重复执行。灰度暂停开关
+ * {@code gray.writeback-consumer.enabled}（D-2b，yml 显式 true=现状消费行为；false=轮询头
+ * 直接空转返回 0，Stream 积压人工应急门）。</p>
  *
  * @author david_ency
  * @since 1.0-SNAPSHOT
@@ -43,10 +46,14 @@ public class WritebackEventConsumer {
     public static final String CONSUMER_NAME = "planning-1";
     /** 消费失败重投上限（达到即转死信日志并 ACK） */
     private static final int DLQ_AFTER_DELIVERIES = 3;
+    /** D-2b 灰度暂停键（与 GrayReleaseManager.KNOWN_KEYS 登记字面一致） */
+    public static final String GRAY_KEY = "gray.writeback-consumer.enabled";
 
     private final StringRedisTemplate redisTemplate;
     private final ItinerarySliceWriter sliceWriter;
     private final ItineraryDetailCache itineraryDetailCache;
+    /** D-2b 灰度暂停门（enabled() 键缺失回落 false，故 yml 须显式 true） */
+    private final GrayReleaseManager gray;
 
     /**
      * 消费一轮（生产由 @Scheduled 轮询；单测直接调用）。
@@ -55,6 +62,9 @@ public class WritebackEventConsumer {
      */
     @Scheduled(fixedDelay = 2000)
     public long consumeOnce() {
+        if (!gray.enabled(GRAY_KEY)) {
+            return 0;
+        }
         ensureGroup();
         List<MapRecord<String, Object, Object>> records = redisTemplate.opsForStream().read(
                 Consumer.from(GROUP, CONSUMER_NAME),

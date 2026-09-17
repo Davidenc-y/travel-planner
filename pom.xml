@@ -25,6 +25,7 @@
     <modules>
         <module>travel-core</module>
         <module>travel-common</module>
+        <module>travel-memory</module>
         <module>travel-chat-stream</module>
         <module>travel-chat-domain</module>
         <module>travel-ai-gateway</module>
@@ -150,6 +151,12 @@
             <dependency>
                 <groupId>com.travel.common</groupId>
                 <artifactId>travel-common</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <!-- E-19①/E-27：travel-memory 模块登记（内部模块坐标管理，非新三方依赖） -->
+            <dependency>
+                <groupId>com.travel.memory</groupId>
+                <artifactId>travel-memory</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>

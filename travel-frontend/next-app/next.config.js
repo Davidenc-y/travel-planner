@@ -17,9 +17,9 @@ const securityHeaders = [
   // connect 需放行 planning/knowledge/webflux 三后端（FE-S1b 起由上方环境推导）
   // FE-S1b 转强制条件：Report-Only 观察 ≥1 轮且浏览器 console 无意外违规报告、
   // 部署态 img-src/connect-src 域复核齐备后，将 key 换为 'Content-Security-Policy'
-  // （并同步收紧 script-src 的 unsafe-eval 评估）。转强制属二次审批事项，不自行动。
+  // （2026-09-17 D-3c 已切换；unsafe-eval/unsafe-inline 保留属用户决策 C，后续再评估收紧）。
   {
-    key: 'Content-Security-Policy-Report-Only',
+    key: 'Content-Security-Policy',
     value: [
       "default-src 'self'",
       "script-src 'self' 'unsafe-inline' 'unsafe-eval'",
@@ -29,6 +29,8 @@ const securityHeaders = [
       "font-src 'self' data:",
       "object-src 'none'",
       "base-uri 'self'",
+      // D-3b（E-19③）：违规上报指向 8081 collector（apiPlanning=既有 env 推导变量 planningBase 同名口径）
+      `report-uri ${planningBase}/api/v1/csp-report`,
     ].join('; '),
   },
 ];
