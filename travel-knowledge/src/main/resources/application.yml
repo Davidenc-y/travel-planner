@@ -152,14 +152,14 @@ travel:
       timeout-ms: 120000
       keepalive-ms: 15000
       chunk-max-chars: 16
-    # MR-D3：Milvus 索引参数显式化（默认=两集合 DESCRIBE 实测隐式现值，零行为变更，E-33；
-    # 实测 2026-09-18：session_context/attraction_vectors 均 IVF_FLAT/L2/nlist=1024）。
-    # 文章 §6.3 HNSW 建议 M16-32/efC100-200/ef50-200、§6.5 SQ8≈内存 1/4——切换 index-type
-    # 属行为变更（需重建索引+人工裁决），非本批默认。
+    # MR2-1（2026-09-18 二次审批同步）：两集合物理索引已切换 HNSW/M=16/efC=128/L2，
+    # yml 键值从 IVF_FLAT 同步为 HNSW 消除配置漂移（ContextRetriever:373 建新集合时
+    # 用此键——原漂移会导致未来新建集合退回 IVF_FLAT）。nlist 改 M=16/efC=128（HNSW 参数）。
     milvus:
       index:
-        index-type: IVF_FLAT
-        nlist: 1024
+        index-type: HNSW
+        M: 16
+        efConstruction: 128
         metric: L2
   # F104 P1：MinIO 业务对象存储（docker-compose travel-minio，9000/9001）
   minio:
@@ -189,8 +189,11 @@ travel:
         enabled: false
         variants: 3
     # MR-E1：来源权威度注册表（source→authority 0~1；默认空=不参与排序，E-33。
-    # 文档侧需重灌索引携带 source 字段后方能实际生效，见《冲突治理字段缺口报告》20260918）
-    source-registry: {}
+    # MR2-2/MR2-3 已重灌 ES/Milvus 携带 source 字段，本表自 MR2-4 起实际生效）
+    source-registry:
+      amap: 0.9
+      manual: 0.8
+      web_enrich: 0.5
     # B1.2：RAG 查询级进程内 TTL 缓存（默认开可关；hit 直接返回，miss 走原逻辑后写入）
     query-cache:
       enabled: true
