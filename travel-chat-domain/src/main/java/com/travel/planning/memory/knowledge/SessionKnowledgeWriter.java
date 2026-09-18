@@ -35,6 +35,7 @@ public class SessionKnowledgeWriter {
     private static final int BY_PREFIX_LIMIT = 30;
 
     private final KnowledgeSearchPort knowledgeClient;
+    private final MemoryConsolidationService consolidationService;
 
     /**
      * 异步写入一批切片（空集合跳过）。
@@ -59,6 +60,9 @@ public class SessionKnowledgeWriter {
             body.put("role", chunk.role());
             body.put("sourceNode", chunk.sourceNode());
             body.put("createdAt", LocalDateTime.now().format(ISO));
+            // MR-C1：写入侧留痕挂钩（整合服务台账；门控关=服务内部直接丢弃，零副作用）
+            consolidationService.recordChunk(sessionId, chunk.type(), seq, chunk.content(),
+                    String.valueOf(body.get("createdAt")));
             CompletableFuture.runAsync(() -> {
                 try {
                     knowledgeClient.writeSessionContext(body);

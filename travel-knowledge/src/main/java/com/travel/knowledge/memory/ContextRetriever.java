@@ -1,6 +1,7 @@
 package com.travel.knowledge.memory;
 
 import com.travel.knowledge.rag.support.RRFusion;
+import com.travel.knowledge.store.MilvusIndexProperties;
 import io.milvus.client.MilvusServiceClient;
 import io.milvus.grpc.SearchResults;
 import io.milvus.param.MetricType;
@@ -44,13 +45,16 @@ public class ContextRetriever {
     private final MilvusServiceClient milvusClient;
     private final RestHighLevelClient esClient;
     private final EmbeddingModel embeddingModel;
+    private final MilvusIndexProperties milvusIndexProperties;
 
     public ContextRetriever(MilvusServiceClient milvusClient,
                             RestHighLevelClient esClient,
-                            EmbeddingModel embeddingModel) {
+                            EmbeddingModel embeddingModel,
+                            MilvusIndexProperties milvusIndexProperties) {
         this.milvusClient = milvusClient;
         this.esClient = esClient;
         this.embeddingModel = embeddingModel;
+        this.milvusIndexProperties = milvusIndexProperties;
     }
 
     /**
@@ -332,6 +336,10 @@ public class ContextRetriever {
             boolean exists = Boolean.TRUE.equals(milvusClient.hasCollection(
                     io.milvus.param.collection.HasCollectionParam.newBuilder().withCollectionName(MILVUS_COLLECTION).build()).getData());
             if (exists) {
+                // MR-D3：集合已存在也单行输出生效索引参数（显式化可观测，[MilvusIndex] 授权前缀）
+                log.info("[MilvusIndex] collection={} indexType={} nlist={} metric={} (existing)",
+                        MILVUS_COLLECTION, milvusIndexProperties.getIndexType(),
+                        milvusIndexProperties.getNlist(), milvusIndexProperties.getMetric());
                 return;
             }
             int dim = embed("init").length;
@@ -358,17 +366,21 @@ public class ContextRetriever {
                     .withCollectionName(MILVUS_COLLECTION)
                     .withFieldTypes(fields)
                     .build());
+            // MR-D3：索引参数显式化（默认=实测隐式现值，零行为变更，E-33）
             milvusClient.createIndex(io.milvus.param.index.CreateIndexParam.newBuilder()
                     .withCollectionName(MILVUS_COLLECTION)
                     .withFieldName("vector")
-                    .withIndexType(io.milvus.param.IndexType.IVF_FLAT)
-                    .withMetricType(MetricType.L2)
-                    .withExtraParam("{\"nlist\":1024}")
+                    .withIndexType(io.milvus.param.IndexType.valueOf(milvusIndexProperties.getIndexType()))
+                    .withMetricType(MetricType.valueOf(milvusIndexProperties.getMetric()))
+                    .withExtraParam("{\"nlist\":" + milvusIndexProperties.getNlist() + "}")
                     .build());
             milvusClient.loadCollection(io.milvus.param.collection.LoadCollectionParam.newBuilder()
                     .withCollectionName(MILVUS_COLLECTION)
                     .build());
             log.info("[SessionContext] Milvus collection 已自动创建: {} (dim={})", MILVUS_COLLECTION, dim);
+            log.info("[MilvusIndex] collection={} indexType={} nlist={} metric={} (created)",
+                    MILVUS_COLLECTION, milvusIndexProperties.getIndexType(),
+                    milvusIndexProperties.getNlist(), milvusIndexProperties.getMetric());
         } catch (Exception e) {
             log.warn("[SessionContext] Milvus collection 初始化失败（写入将降级）: {}", e.getMessage());
         }

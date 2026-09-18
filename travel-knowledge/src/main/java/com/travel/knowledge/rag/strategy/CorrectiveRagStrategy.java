@@ -62,10 +62,15 @@ public class CorrectiveRagStrategy implements RagStrategy {
         log.info("[CorrectiveRAG] 初始检索 {} 条", initialResults.size());
 
         // Step 2: 检查质量
-        if (checkQuality(initialResults)) {
+        // MR-B2：lowConfidence 标记纳入降级判定输入——B1 阈值门控 gated 时结果集带标记，
+        // 视为质量不达标走既有纠错路径（重写→重检索→合并）；门控关（默认）无标记零变更（E-33）。
+        if (checkQuality(initialResults) && !hasLowConfidence(initialResults)) {
             log.info("[CorrectiveRAG] 质量达标，直接返回");
             initialResults.forEach(r -> r.setSource("corrective_rag"));
             return initialResults;
+        }
+        if (hasLowConfidence(initialResults)) {
+            log.info("[CorrectiveRAG] lowConfidence 触发纠错降级");
         }
 
         // Step 3: LLM 重写 query
@@ -96,6 +101,15 @@ public class CorrectiveRagStrategy implements RagStrategy {
                 .average()
                 .orElse(0);
         return avgLength >= MIN_AVG_LENGTH;
+    }
+
+    /**
+     * MR-B2：低置信标记检测（B1 阈值门控 gated 时结果集带 lowConfidence=true；
+     * 门控关（默认）恒 false——关闭态零变更，E-33）。
+     */
+    private boolean hasLowConfidence(List<SearchResult> results) {
+        return results != null && results.stream()
+                .anyMatch(r -> Boolean.TRUE.equals(r.getLowConfidence()));
     }
 
     /**

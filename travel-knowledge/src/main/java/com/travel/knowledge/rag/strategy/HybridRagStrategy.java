@@ -1,5 +1,8 @@
 package com.travel.knowledge.rag.strategy;
 
+import com.travel.knowledge.rag.retrieval.HydeQueryRewriter;
+import com.travel.knowledge.rag.retrieval.LlmQueryExpander;
+import com.travel.knowledge.rag.rerank.RerankGate;
 import com.travel.knowledge.rag.rerank.Reranker;
 import com.travel.knowledge.rag.rerank.RerankProperties;
 import com.travel.knowledge.rag.support.RRFusion;
@@ -46,6 +49,18 @@ public class HybridRagStrategy extends AbstractRagStrategy {
     private final Reranker reranker;
     private final RerankProperties rerankProperties;
     private final RagRoutingMetrics routingMetrics;
+    /** MR-B1：rerank 低置信阈值门控（基于本类已注入的 rerankProperties 构造，不增构造签名） */
+    private final RerankGate rerankGate;
+    /** MR-D1：HyDE 假设答案改写器（travel.rag.query.hyde.enabled 默认 false=原 query） */
+    private final HydeQueryRewriter hydeQueryRewriter;
+    /** MR-D2：LLM 多 Query 扩展器（llm-expand.enabled=true 才有 bean；未注入=现状单路） */
+    private LlmQueryExpander llmQueryExpander;
+
+    /** MR-D2：optional 注入（bean 缺省=现状单路，构造签名零变更） */
+    @Autowired(required = false)
+    void setLlmQueryExpander(LlmQueryExpander llmQueryExpander) {
+        this.llmQueryExpander = llmQueryExpander;
+    }
 
     @Autowired
     public HybridRagStrategy(EsDocumentStore esStore,
@@ -54,7 +69,8 @@ public class HybridRagStrategy extends AbstractRagStrategy {
                               RagFilterBuilder ragFilterBuilder,
                               Reranker reranker,
                               RerankProperties rerankProperties,
-                              RagRoutingMetrics routingMetrics) {
+                              RagRoutingMetrics routingMetrics,
+                              HydeQueryRewriter hydeQueryRewriter) {
         this.esStore = esStore;
         this.embeddingModel = embeddingModel;
         this.milvusStore = milvusStore;
@@ -62,6 +78,8 @@ public class HybridRagStrategy extends AbstractRagStrategy {
         this.reranker = reranker;
         this.rerankProperties = rerankProperties;
         this.routingMetrics = routingMetrics;
+        this.rerankGate = new RerankGate(rerankProperties);
+        this.hydeQueryRewriter = hydeQueryRewriter;
     }
 
     @Override
@@ -69,7 +87,13 @@ public class HybridRagStrategy extends AbstractRagStrategy {
         // M8-9d：poolSize 由模板 retrievalPoolSize 统一给出（质量/精排放大），
         // 此处只负责召回+融合+池内精排，不再自行截断（截断收口到模板出口）。
         List<RRFusion.ScoredItem> bm25Results = bm25Search(intent, poolSize);
-        List<RRFusion.ScoredItem> knnResults = knnSearch(intent, poolSize);
+        // MR-D1：HyDE——假设答案文本仅参与向量路（KNN），原 query 保留参与 BM25（文章 §3.2
+        // 双路语义）；门控关/fail-open 一律原 query（E-33）
+        // MR-D2：llm-expand.enabled=true（bean 存在）时走多 Query 路：变体各自向量检索 +
+        // RRFusion 级联合并（复用 G11）；未注入=现状单路（E-33）
+        List<RRFusion.ScoredItem> knnResults = llmQueryExpander != null
+                ? knnMultiQuery(intent, poolSize)
+                : knnSearch(intent, hydeQueryRewriter.vectorQueryText(intent), poolSize);
         List<RRFusion.FusionResult> fused = RRFusion.fuse(bm25Results, knnResults, poolSize);
         List<SearchResult> merged = fused.stream()
                 .map(f -> SearchResult.builder()
@@ -86,7 +110,8 @@ public class HybridRagStrategy extends AbstractRagStrategy {
         long rerankStart = System.currentTimeMillis();
         List<SearchResult> reranked = reranker.rerank(intent.rawQuery(), merged);
         routingMetrics.recordRerank(System.currentTimeMillis() - rerankStart);
-        return reranked;
+        // MR-B1：阈值门控（默认 0.0=关闭，apply 原样返回零路径变更）
+        return rerankGate.apply(reranked);
     }
 
     /**
@@ -129,12 +154,33 @@ public class HybridRagStrategy extends AbstractRagStrategy {
     }
 
     /**
+     * MR-D2：LLM 多 Query 路——变体各自向量检索，RRFusion 级联合并去重（复用 G11）；
+     * 变体数由扩展器决定（fail-open 单变体=退化为单路）。
+     */
+    private List<RRFusion.ScoredItem> knnMultiQuery(QueryIntent intent, int poolSize) {
+        List<String> variants = llmQueryExpander.variantsOf(intent);
+        if (variants == null || variants.isEmpty()) {
+            return knnSearch(intent, hydeQueryRewriter.vectorQueryText(intent), poolSize);
+        }
+        List<RRFusion.ScoredItem> acc = knnSearch(intent, variants.get(0), poolSize);
+        for (int i = 1; i < variants.size(); i++) {
+            List<RRFusion.FusionResult> fused = RRFusion.fuse(acc,
+                    knnSearch(intent, variants.get(i), poolSize), poolSize);
+            acc = fused.stream()
+                    .map(f -> new RRFusion.ScoredItem(f.docId(), f.title(), f.snippet(),
+                            f.fusedScore(), f.keywords(), f.sourceDate(), f.imageUrl()))
+                    .collect(Collectors.toList());
+        }
+        return acc;
+    }
+
+    /**
      * KNN 向量检索（Milvus）— 适配 Milvus Java SDK 2.3.4 API
      */
-    private List<RRFusion.ScoredItem> knnSearch(QueryIntent intent, int topK) {
-        try {
+    private List<RRFusion.ScoredItem> knnSearch(QueryIntent intent, String vectorQueryText, int topK) {        try {
             String expr = ragFilterBuilder.milvusExpr(intent);
-            var embeddingResponse = embeddingModel.embedForResponse(List.of(intent.rawQuery()));
+            // MR-D1：向量路文本 = HyDE 假设答案（门控开）或原 query（门控关/fail-open）
+            var embeddingResponse = embeddingModel.embedForResponse(List.of(vectorQueryText));
             float[] queryVector = embeddingResponse.getResults().get(0).getOutput();
             // M3-3：统一经 MilvusVectorStore 检索（装箱/解析封装）
             List<MilvusVectorStore.SearchRow> rows = milvusStore.search(

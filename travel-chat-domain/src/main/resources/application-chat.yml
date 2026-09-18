@@ -69,6 +69,8 @@ travel:
     base-url: ${KNOWLEDGE_BASE_URL:http://localhost:8082}
   # F55/B1：短期会话记忆（摘要压缩）
   memory:
+    # MR-C3：语义召回注入 top-K（附加召回近会话蒸馏产物 type∈{semantic,entity}；默认 0=关闭，E-33）
+    recall-semantic-top-k: 0
     shortterm:
       enabled: true
       max-turns: 10
@@ -98,7 +100,15 @@ travel:
       min-trips: 2               # 可靠性门槛：窗口内行程数
       min-sessions: 5            # 可靠性门槛：窗口内会话数
       inject-max-tokens: 120     # 注入段 token 预算上限
-      trace-scan-limit: 2000     # 单次重算 trace 读取上限
+      trace-scan-limit: 2000
+    # MR-C1：会话记忆整合（去重+时间戳旧删新留；默认关=no-op，E-33 关闭态零变更）
+    consolidation:
+      enabled: false             # 门控：false=recordChunk 丢弃+批扫 no-op（现状零变更）
+      cron: "0 0 4 * * *"        # 批扫调度（PlanningApplication @EnableScheduling 面）
+      batch-size: 20             # 单轮批扫会话数上限
+      # MR-C2：情节→语义蒸馏（一会话一蒸馏；type=semantic/entity 入会话域，先删后增幂等）
+      distill:
+        enabled: false           # 门控：false=批扫内跳过蒸馏（现状零变更）
   # M4-2/P0-2：planning 侧检索注入 topK（默认值等于 F63/F83 硬编码，行为不变）
   rag:
     session-context:

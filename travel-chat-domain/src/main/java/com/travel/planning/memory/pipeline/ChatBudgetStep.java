@@ -7,6 +7,7 @@ import com.travel.planning.memory.knowledge.RagInjectionProperties;
 import com.travel.planning.memory.knowledge.SessionKnowledgeWriter;
 import com.travel.planning.memory.shortterm.ContextComposer;
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
@@ -58,6 +59,15 @@ public class ChatBudgetStep implements ChatPipelineStep {
     private final RagJudgeProperties ragJudgeProperties;
     private final MemoryFacade memoryFacade;
 
+    /** MR-C3：语义召回注入 top-K（{@code travel.memory.recall-semantic-top-k}，默认 0=关闭，E-33） */
+    @Value("${travel.memory.recall-semantic-top-k:0}")
+    private int recallSemanticTopK;
+
+    /** 配置面（单测注入用；生产由 @Value 绑定） */
+    void setRecallSemanticTopK(int recallSemanticTopK) {
+        this.recallSemanticTopK = recallSemanticTopK;
+    }
+
     /**
      * 组装 画像+历史+共识+会话知识+候选+当前问题，并执行四档 token 预算兜底
      * （F63/F66 预检索门控、F78 C3 会话知识检索、F83 topK、F85 共识、M3-9 兜底、M4-5a/b 前置处理）。
@@ -92,6 +102,30 @@ public class ChatBudgetStep implements ChatPipelineStep {
         // F83：topK 放大（默认 8），避免类型加分把行程切片挤出注入（E4 召回问题）
         List<Map<String, Object>> sessionHits = sessionKnowledgeWriter.searchStructured(
                 sessionId, message, ragInjectionProperties.getSessionContextTopK());
+        // MR-C3：语义召回注入——按前缀附加召回近会话蒸馏产物（type∈{semantic,entity}，seq 前缀
+        // distill:，与 C2 落库口径同源）。K=travel.memory.recall-semantic-top-k，默认 0=关闭：
+        // 零额外调用、sessionHits 原样（逐字节等价，E-33）；按 seq 去重、上限 K 条。
+        if (recallSemanticTopK > 0) {
+            List<Map<String, Object>> distilled = sessionKnowledgeWriter.fetchBySeqPrefix(sessionId, "distill:");
+            if (distilled != null && !distilled.isEmpty()) {
+                Set<String> seenSeqs = new HashSet<>();
+                for (Map<String, Object> h : sessionHits) {
+                    seenSeqs.add(String.valueOf(h.get("seq")));
+                }
+                List<Map<String, Object>> merged = new ArrayList<>(sessionHits);
+                for (Map<String, Object> h : distilled) {
+                    if (merged.size() >= sessionHits.size() + recallSemanticTopK) {
+                        break;
+                    }
+                    Object type = h.get("type");
+                    if (("semantic".equals(type) || "entity".equals(type))
+                            && seenSeqs.add(String.valueOf(h.get("seq")))) {
+                        merged.add(h);
+                    }
+                }
+                sessionHits = merged;
+            }
+        }
         // M23（E2）：锚定非空时，itinerary_day 切片只保留锚定集合内的行程——
         // 注意力切换的结构保证（AI 不再沿用切换前的旧规划）
         if (anchorIds != null && !anchorIds.isEmpty()) {

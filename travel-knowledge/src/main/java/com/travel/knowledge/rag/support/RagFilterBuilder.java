@@ -5,6 +5,7 @@ import com.travel.knowledge.rag.retrieval.RagRetrievalProperties;
 import lombok.RequiredArgsConstructor;
 import org.elasticsearch.index.query.QueryBuilder;
 import org.elasticsearch.index.query.QueryBuilders;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 
@@ -28,6 +29,15 @@ import java.util.List;
 public class RagFilterBuilder {
 
     private final RagRetrievalProperties retrievalProperties;
+
+    /** MR-E1：来源权威度注册表（travel.rag.source-registry；空注册表=查询结构零变更，E-33） */
+    private SourceAuthorityRegistry sourceAuthorityRegistry;
+
+    /** MR-E1：optional 注入（未注入/空注册表=现状查询结构零变更） */
+    @Autowired(required = false)
+    void setSourceAuthorityRegistry(SourceAuthorityRegistry sourceAuthorityRegistry) {
+        this.sourceAuthorityRegistry = sourceAuthorityRegistry;
+    }
 
     /**
      * 构建 ES 查询：multiMatch(name,description) + city 底分 + 可选 city/type/free 过滤
@@ -65,6 +75,14 @@ public class RagFilterBuilder {
             bool.minimumShouldMatch(1);
         } else {
             bool.must(QueryBuilders.matchAllQuery());
+        }
+        // MR-E1：来源权威度加权——注册表非空时按 source 追加 should 加权分量（authority=term
+        // boost，影响排序）；空注册表=查询结构零变更（E-33）。注意：现 ES 文档尚无 source 字段，
+        // 分量实际命中需重灌索引（见《冲突治理字段缺口报告》20260918）。
+        if (sourceAuthorityRegistry != null && sourceAuthorityRegistry.isActive()) {
+            sourceAuthorityRegistry.getRegistry().forEach((source, authority) ->
+                    bool.should(QueryBuilders.termQuery("source", source)
+                            .boost((float) (double) authority)));
         }
         return bool;
     }

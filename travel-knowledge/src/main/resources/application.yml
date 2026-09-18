@@ -152,6 +152,15 @@ travel:
       timeout-ms: 120000
       keepalive-ms: 15000
       chunk-max-chars: 16
+    # MR-D3：Milvus 索引参数显式化（默认=两集合 DESCRIBE 实测隐式现值，零行为变更，E-33；
+    # 实测 2026-09-18：session_context/attraction_vectors 均 IVF_FLAT/L2/nlist=1024）。
+    # 文章 §6.3 HNSW 建议 M16-32/efC100-200/ef50-200、§6.5 SQ8≈内存 1/4——切换 index-type
+    # 属行为变更（需重建索引+人工裁决），非本批默认。
+    milvus:
+      index:
+        index-type: IVF_FLAT
+        nlist: 1024
+        metric: L2
   # F104 P1：MinIO 业务对象存储（docker-compose travel-minio，9000/9001）
   minio:
     endpoint: http://${MIDDLEWARE_HOST:192.168.253.129}:9000
@@ -171,6 +180,17 @@ travel:
     default-type: hybrid
     # P3：auto 复杂查询首选路由（supervisor / agent / heuristic），用于 A/B 对比
     auto-router: supervisor
+    # MR-D1：HyDE 假设答案改写（向量路专用；默认关=原 query 零变更，E-33）
+    query:
+      hyde:
+        enabled: false
+      # MR-D2：LLM 多 Query 扩展（bean 条件装配；默认关=rule 现状，E-33）
+      llm-expand:
+        enabled: false
+        variants: 3
+    # MR-E1：来源权威度注册表（source→authority 0~1；默认空=不参与排序，E-33。
+    # 文档侧需重灌索引携带 source 字段后方能实际生效，见《冲突治理字段缺口报告》20260918）
+    source-registry: {}
     # B1.2：RAG 查询级进程内 TTL 缓存（默认开可关；hit 直接返回，miss 走原逻辑后写入）
     query-cache:
       enabled: true
@@ -226,6 +246,9 @@ travel:
       timeout-ms: 2000
       # M7 Batch 4：rerank 模型配置化（默认不变）
       model: gte-rerank-v2
+      # MR-B1：rerank 低置信阈值门控（E-33 默认 0.0=关闭；二次审批修复——原仅代码默认值
+      # 缺 yml 显式登记，行为等价仅补可发现性；(0,1] 生效，topScore<threshold 判低置信）
+      gate-threshold: 0.0
     # M8-9d：候选质量感知选择（默认关=顺序截断，行为与现状一致；灰度开启见 local）
     quality:
       enabled: false

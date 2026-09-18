@@ -23,4 +23,7 @@ public class RerankProperties {
 
     /** DashScope rerank 单次调用硬性超时（毫秒），超时 fail-open */
     private long timeoutMs = 2000;
+
+    /** MR-B1：rerank 低置信阈值门控（E-33 默认 0.0=关闭；(0,1] 生效，topScore&lt;threshold 判低置信） */
+    private double gateThreshold = 0.0;
 }

@@ -1,5 +1,6 @@
 package com.travel.knowledge.rag.model;
 
+import com.fasterxml.jackson.annotation.JsonInclude;
 import lombok.Builder;
 import lombok.Data;
 import lombok.AllArgsConstructor;
@@ -42,6 +43,10 @@ public class SearchResult {
 
     /** 检索来源：milvus / es / hybrid / self_rag / corrective_rag */
     private String source;
+
+    /** MR-B1：低置信标记（rerank 阈值门控 gated 时置 true；NON_NULL 保证门控关时响应体逐字节等价，E-33） */
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    private Boolean lowConfidence;
 
     // ===== M8-1：结构化事实字段（由 AttractionEnricher 从 MySQL t_attraction 补全）=====
     // null 语义约定（全链统一，M8-2/3/4 依赖）：字段为 null 表示知识库无此数据
