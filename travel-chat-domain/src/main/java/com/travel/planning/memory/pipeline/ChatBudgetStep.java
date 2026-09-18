@@ -1,7 +1,7 @@
 package com.travel.planning.memory.pipeline;
 
 import com.travel.planning.memory.chat.ChatIntent;
-import com.travel.planning.memory.MemoryFacade;
+import com.travel.memory.MemoryFacade;
 import com.travel.planning.memory.knowledge.KnowledgeRetrievalService;
 import com.travel.planning.memory.knowledge.RagInjectionProperties;
 import com.travel.planning.memory.knowledge.SessionKnowledgeWriter;

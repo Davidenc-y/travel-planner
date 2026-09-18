@@ -1,8 +1,8 @@
 package com.travel.webflux.support;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.travel.planning.memory.anchor.ItineraryBrief;
-import com.travel.planning.memory.anchor.ItineraryBriefPort;
+import com.travel.memory.anchor.ItineraryBrief;
+import com.travel.memory.anchor.ItineraryBriefPort;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Primary;

@@ -3,6 +3,7 @@ package com.travel.planning.memory.longterm;
 import com.alibaba.cloud.ai.graph.RunnableConfig;
 import com.alibaba.cloud.ai.graph.agent.tools.ToolContextHelper;
 import com.travel.common.util.JsonUtils;
+import com.travel.memory.longterm.ProfilePort;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.model.ToolContext;

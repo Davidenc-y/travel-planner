@@ -8,6 +8,13 @@ const streamBase = process.env.NEXT_PUBLIC_STREAM_BASE || 'http://localhost:8083
 const connectSrc = ["'self'", 'ws:', 'wss:', planningBase, knowledgeBase];
 if (!connectSrc.includes(streamBase)) connectSrc.push(streamBase);
 
+// E-31（20260918 E-3a）：production 分支剔除 'unsafe-eval'（eval 收紧仅产线）；
+// dev 完整保留（Next dev 工具链依赖）；unsafe-inline 不动（E-31 范围冻结）。
+const isProduction = process.env.NODE_ENV === 'production';
+const scriptSrc = isProduction
+  ? "script-src 'self' 'unsafe-inline'"
+  : "script-src 'self' 'unsafe-inline' 'unsafe-eval'";
+
 const securityHeaders = [
   { key: 'X-Frame-Options', value: 'DENY' },
   { key: 'X-Content-Type-Options', value: 'nosniff' },
@@ -18,11 +25,12 @@ const securityHeaders = [
   // FE-S1b 转强制条件：Report-Only 观察 ≥1 轮且浏览器 console 无意外违规报告、
   // 部署态 img-src/connect-src 域复核齐备后，将 key 换为 'Content-Security-Policy'
   // （2026-09-17 D-3c 已切换；unsafe-eval/unsafe-inline 保留属用户决策 C，后续再评估收紧）。
+  // E-31（20260918 E-3a）：script-src 见上方 isProduction 分支——production 剔除 unsafe-eval。
   {
     key: 'Content-Security-Policy',
     value: [
       "default-src 'self'",
-      "script-src 'self' 'unsafe-inline' 'unsafe-eval'",
+      scriptSrc,
       "style-src 'self' 'unsafe-inline'",
       "img-src 'self' data: blob: https: http://localhost:8082 http://192.168.253.129:9000",
       `connect-src ${connectSrc.join(' ')}`,

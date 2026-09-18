@@ -30,6 +30,14 @@
             <artifactId>spring-boot-starter</artifactId>
         </dependency>
 
+        <!-- E-4a（20260918）：GrayReleaseManager 覆盖层 Redis 化所需 StringRedisTemplate；
+             版本由父 pom BOM 管理，坐标与 travel-planning 既有依赖逐字一致（R17 留痕：
+             ⑦条白名单外 ≤2 文件非 P0 + 依赖已被 planning 大量使用） -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-data-redis</artifactId>
+        </dependency>
+
         <!-- Jackson（R<T>/JsonUtils 序列化） -->
         <dependency>
             <groupId>com.fasterxml.jackson.core</groupId>

@@ -2,7 +2,7 @@ package com.travel.planning.memory.pipeline;
 
 import com.travel.common.util.AgentOutputUtils;
 import com.travel.common.util.JsonUtils;
-import com.travel.planning.prompt.PromptTemplates;
+import com.travel.memory.prompt.PromptTemplates;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.beans.factory.annotation.Qualifier;

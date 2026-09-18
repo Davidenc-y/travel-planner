@@ -44,7 +44,7 @@ public class ItineraryVersionPortImpl implements ItineraryVersionPort {
     /** R1.1：回写确定性解析器（方法体自本类原样迁出 writeback/ExplicitInputParser，行为与文案零变更） */
     private final ExplicitInputParser explicitInputParser;
     /** M23（P-D/E2）+ M20-1：锚定读取与行为画像重算——MM-1b.1 收编改走记忆门面。 */
-    private final com.travel.planning.memory.MemoryFacade memoryFacade;
+    private final com.travel.memory.MemoryFacade memoryFacade;
 
 
     /** M11-1 版本服务（可选；缺失时首次创建不记快照，不影响主流程） */
@@ -84,7 +84,7 @@ public class ItineraryVersionPortImpl implements ItineraryVersionPort {
                                     ItinerarySliceWriter sliceWriter,
                                     MindmapGenerator mindmapGenerator,
                                     ItineraryWritebackProperties parseProps,
-                                    com.travel.planning.memory.MemoryFacade memoryFacade) {
+                                    com.travel.memory.MemoryFacade memoryFacade) {
         this.itineraryMapper = itineraryMapper;
         this.persistenceService = persistenceService;
         this.sliceWriter = sliceWriter;

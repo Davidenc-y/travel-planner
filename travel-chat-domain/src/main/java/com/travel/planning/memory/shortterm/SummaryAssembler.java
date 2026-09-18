@@ -2,8 +2,11 @@ package com.travel.planning.memory.shortterm;
 
 import com.travel.common.entity.ChatMessage;
 import com.travel.common.util.JsonUtils;
-import com.travel.planning.config.LlmGovernor;
-import com.travel.planning.prompt.PromptTemplates;
+import com.travel.memory.shortterm.SessionMemoryPort;
+import com.travel.memory.shortterm.ShortTermMemoryProperties;
+import com.travel.memory.shortterm.WindowComposer;
+import com.travel.memory.config.LlmGovernor;
+import com.travel.memory.prompt.PromptTemplates;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.beans.factory.annotation.Autowired;

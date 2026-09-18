@@ -4,7 +4,7 @@ import com.travel.planning.agent.AbstractReactSubAgent;
 import com.travel.planning.agent.supervisor.TokenUsageInterceptor;
 import com.travel.planning.agent.supervisor.ModelRouteInterceptor;
 import com.travel.planning.agent.supervisor.QuotaShortCircuitInterceptor;
-import com.travel.planning.prompt.PromptTemplates;
+import com.travel.memory.prompt.PromptTemplates;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.beans.factory.annotation.Qualifier;

@@ -7,7 +7,7 @@ import com.alibaba.cloud.ai.graph.agent.flow.agent.SupervisorAgent;
 import com.travel.core.guard.CircuitBreaker;
 import com.travel.aigateway.route.ModelRoutingContext;
 import com.travel.planning.memory.longterm.ProfileToolProvider;
-import com.travel.planning.prompt.PromptTemplates;
+import com.travel.memory.prompt.PromptTemplates;
 import com.travel.stream.service.TurnCancellation;
 import com.travel.stream.service.TurnInterruptedException;
 import com.travel.planning.trace.TraceContext;

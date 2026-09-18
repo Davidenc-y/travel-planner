@@ -3,7 +3,7 @@ package com.travel.planning.service;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.travel.common.entity.Itinerary;
 import com.travel.common.entity.ItineraryVersion;
-import com.travel.planning.memory.longterm.behavior.TripFactsPort;
+import com.travel.memory.longterm.behavior.TripFactsPort;
 import com.travel.planning.repository.ItineraryMapper;
 import com.travel.planning.repository.ItineraryVersionMapper;
 import org.springframework.stereotype.Component;

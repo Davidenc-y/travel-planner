@@ -1,8 +1,9 @@
 package com.travel.planning.memory.shortterm;
 
 import com.travel.planning.prompt.Markers;
-import com.travel.planning.memory.MemoryFacade;
+import com.travel.memory.MemoryFacade;
 import com.travel.planning.memory.longterm.ProfileContextAssembler;
+import com.travel.memory.shortterm.ShortTermMemoryProperties;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;

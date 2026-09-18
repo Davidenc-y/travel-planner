@@ -1,12 +1,12 @@
 package com.travel.planning.memory.pipeline;
 
 import com.travel.planning.prompt.Markers;
-import com.travel.planning.memory.MemoryFacade;
+import com.travel.memory.MemoryFacade;
 import com.travel.planning.memory.longterm.ProfileContextAssembler;
-import com.travel.planning.memory.longterm.behavior.BehaviorProfileService;
-import com.travel.planning.memory.longterm.behavior.BehaviorProfileProperties;
-import com.travel.planning.memory.longterm.behavior.BehaviorSections;
-import com.travel.planning.memory.shortterm.ShortTermMemoryProperties;
+import com.travel.memory.longterm.behavior.BehaviorProfileService;
+import com.travel.memory.longterm.behavior.BehaviorProfileProperties;
+import com.travel.memory.longterm.behavior.BehaviorSections;
+import com.travel.memory.shortterm.ShortTermMemoryProperties;
 import jakarta.annotation.PreDestroy;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;

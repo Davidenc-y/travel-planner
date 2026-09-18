@@ -1,7 +1,9 @@
 package com.travel.planning.memory.shortterm;
 
 import com.travel.common.entity.ChatMessage;
-import com.travel.planning.memory.sessionstore.SessionStorePort;
+import com.travel.memory.sessionstore.SessionStorePort;
+import com.travel.memory.shortterm.SessionMemoryPort;
+import com.travel.memory.shortterm.WindowComposer;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 

@@ -7,7 +7,7 @@ import org.aspectj.lang.ProceedingJoinPoint;
 import org.aspectj.lang.annotation.Around;
 import org.aspectj.lang.annotation.Aspect;
 import org.springframework.stereotype.Component;
-import com.travel.planning.memory.MemoryFacade;
+import com.travel.memory.MemoryFacade;
 
 import java.util.UUID;
 

@@ -7,7 +7,7 @@ import com.travel.planning.agent.supervisor.ModelRouteInterceptor;
 import com.travel.planning.agent.supervisor.QuotaShortCircuitInterceptor;
 import com.travel.planning.client.KnowledgeSearchPort;
 import com.travel.planning.memory.longterm.ProfileToolProvider;
-import com.travel.planning.prompt.PromptTemplates;
+import com.travel.memory.prompt.PromptTemplates;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.model.ToolContext;

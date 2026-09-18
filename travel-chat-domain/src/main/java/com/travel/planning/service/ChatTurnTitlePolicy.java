@@ -2,7 +2,7 @@ package com.travel.planning.service;
 
 import com.travel.common.exception.BusinessException;
 import com.travel.planning.memory.pipeline.ChatTitleProperties;
-import com.travel.planning.memory.sessionstore.SessionStorePort;
+import com.travel.memory.sessionstore.SessionStorePort;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 

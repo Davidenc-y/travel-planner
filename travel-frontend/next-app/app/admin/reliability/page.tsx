@@ -4,7 +4,14 @@ import { useEffect, useState } from 'react';
 import dynamic from 'next/dynamic';
 import { adminApi, getErrorMessage } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
+import { useApiQuery } from '@/lib/use-api-query';
 import { formatTokenCount } from '@/lib/usage-format';
+import {
+  DataQualityCard,
+  TurnLatencyCard,
+  type DataQualityPayload,
+  type TurnLatencyPayload,
+} from './cards';
 
 // M27（S6）：recharts ~222KB 按需加载（降 /admin/reliability First Load JS；仅访问时拉取）
 const ReliabilityCharts = dynamic(() => import('./charts'), {
@@ -86,6 +93,20 @@ export default function ReliabilityPage() {
     tokens: r.tokens,
   }));
   const tokenTotal = Number(stats?.tokensTotal ?? 0);
+
+  // E-5c：两卡数据（useApiQuery 跨挂载缓存；enabled=false 防非管理员/未挂载发起请求；
+  // hooks 须无条件调用，故置于早退守卫之前）
+  const adminQueryEnabled = Boolean(mounted && isAuthenticated && isAdmin);
+  const dataQuality = useApiQuery<DataQualityPayload>(
+    () => adminApi.dataQuality().then((res) => res.data.data as DataQualityPayload),
+    [adminQueryEnabled],
+    { enabled: adminQueryEnabled, cacheKey: 'admin:data-quality' },
+  );
+  const turnLatency = useApiQuery<TurnLatencyPayload>(
+    () => adminApi.turnLatency(days).then((res) => res.data.data as TurnLatencyPayload),
+    [adminQueryEnabled, days],
+    { enabled: adminQueryEnabled, cacheKey: `admin:turn-latency:${days}` },
+  );
 
   // M27（S6）：非管理员直访防御（后端 40302 为权威；此处避免无谓请求与闪烁）
   if (mounted && (!isAuthenticated || !isAdmin)) {
@@ -258,6 +279,12 @@ export default function ReliabilityPage() {
                 <p className="py-6 text-center text-sm text-ink-faint">暂无配额数据</p>
               )}
             </section>
+          </div>
+
+          {/* E-5c：数据质量/轮次耗时两卡（useApiQuery 复用 FE-P3.1 模式；卡片本体零图表依赖） */}
+          <div className="grid gap-4 lg:grid-cols-2">
+            <DataQualityCard payload={dataQuality.data} />
+            <TurnLatencyCard payload={turnLatency.data} />
           </div>
         </>
       )}

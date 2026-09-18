@@ -1,6 +1,6 @@
 package com.travel.planning.service;
 
-import com.travel.planning.memory.MemoryFacade;
+import com.travel.memory.MemoryFacade;
 import org.springframework.stereotype.Component;
 
 import java.util.List;

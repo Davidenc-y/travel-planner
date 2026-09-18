@@ -19,7 +19,7 @@ import com.travel.stream.service.TurnInterruptedException;
 import com.travel.stream.service.ChatStreamExecutor;
 import com.travel.stream.service.TurnCancellationRegistry;
 import com.travel.planning.memory.chat.ChatIntent;
-import com.travel.planning.memory.sessionstore.SessionStorePort;
+import com.travel.memory.sessionstore.SessionStorePort;
 import com.travel.planning.memory.pipeline.ChatBreakpointStore;
 import com.travel.planning.memory.pipeline.ChatGuardStep;
 import com.travel.planning.memory.pipeline.ChatPersistenceStep;
@@ -90,8 +90,8 @@ public class ChatService implements ChatStreamExecutor {
     // M7：实际路由模型追溯记录（direct 路径由 runStream 包裹捕获；HC-5 起为 TraceGateway 缺省时的降级直连）
     private final ModelRouteTracker modelRouteTracker;
     /** M23（E1）：锚定存储（brief 渲染 + 会话锚定集合）——MM-1a.4 收编改走记忆门面。 */
-    private final com.travel.planning.memory.MemoryFacade memoryFacade;
-    private final com.travel.planning.memory.anchor.ItineraryBriefPort itineraryBriefPort;
+    private final com.travel.memory.MemoryFacade memoryFacade;
+    private final com.travel.memory.anchor.ItineraryBriefPort itineraryBriefPort;
     /** M23b（E4）：偏好段渲染器（确定性；含目的地冲突提示行）。 */
     private final com.travel.planning.memory.preference.PreferenceSectionRenderer preferenceSectionRenderer;
     /** M23b（E3）：注意力焦点判定器（观测模式：仅日志，不隔离）。 */

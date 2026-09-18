@@ -2,10 +2,12 @@ package com.travel.planning.memory;
 
 import com.travel.common.entity.TravelProfile;
 import com.travel.common.entity.UserBehaviorProfile;
-import com.travel.planning.memory.anchor.SessionAnchorStore;
+import com.travel.memory.anchor.SessionAnchorStore;
+import com.travel.memory.knowledge.dto.ConsensusEntry;
 import com.travel.planning.memory.knowledge.SessionFactConsolidator;
-import com.travel.planning.memory.longterm.behavior.BehaviorProfileService;
-import com.travel.planning.memory.shortterm.SessionMemoryPort;
+import com.travel.memory.longterm.behavior.BehaviorProfileService;
+import com.travel.memory.shortterm.SessionMemoryPort;
+import com.travel.memory.MemoryFacade;
 import com.travel.planning.service.TravelProfileService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
@@ -54,7 +56,7 @@ public class DefaultMemoryFacade implements MemoryFacade {
     }
 
     @Override
-    public List<SessionFactConsolidator.ConsensusEntry> consolidateFacts(List<Map<String, Object>> hits) {
+    public List<ConsensusEntry> consolidateFacts(List<Map<String, Object>> hits) {
         return sessionFactConsolidator.consolidate(hits);
     }
 
@@ -142,7 +144,7 @@ public class DefaultMemoryFacade implements MemoryFacade {
     }
 
     @Override
-    public String renderFacts(List<SessionFactConsolidator.ConsensusEntry> entries) {
+    public String renderFacts(List<ConsensusEntry> entries) {
         return sessionFactConsolidator.render(entries);
     }
 }

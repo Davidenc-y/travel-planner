@@ -2,7 +2,7 @@ package com.travel.planning.agent.supervisor;
 
 import com.travel.planning.prompt.Markers;
 import com.travel.core.guard.CircuitBreaker;
-import com.travel.planning.prompt.PromptTemplates;
+import com.travel.memory.prompt.PromptTemplates;
 import com.travel.stream.service.TurnCancellation;
 import com.travel.planning.trace.TraceContext;
 import lombok.extern.slf4j.Slf4j;

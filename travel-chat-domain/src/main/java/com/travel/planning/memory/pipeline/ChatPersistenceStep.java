@@ -9,7 +9,7 @@ import com.travel.common.enums.ChatRole;
 import com.travel.common.exception.BusinessException;
 import com.travel.common.util.TextTokens;
 import com.travel.core.stream.TurnGate;
-import com.travel.planning.memory.sessionstore.SessionStorePort;
+import com.travel.memory.sessionstore.SessionStorePort;
 import com.travel.planning.repository.ChatMessageIdemMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;

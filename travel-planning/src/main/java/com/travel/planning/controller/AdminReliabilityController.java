@@ -4,7 +4,9 @@ import com.travel.common.config.GrayReleaseManager;
 import com.travel.common.exception.BusinessException;
 import com.travel.common.result.R;
 import com.travel.planning.service.AdminAccessService;
+import com.travel.planning.service.DataQualityService;
 import com.travel.planning.service.ReliabilityStatsService;
+import com.travel.planning.service.TurnLatencyService;
 import com.travel.planning.util.AuthUtils;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -30,6 +32,10 @@ public class AdminReliabilityController {
     private final AdminAccessService adminAccessService;
     /** MI-6：灰度开关只读快照（GrayReleaseManager 聚合 Environment；不含动态写）。 */
     private final GrayReleaseManager grayReleaseManager;
+    /** E-5a：数据质量端点聚合（outbox 计数+writeback Stream 积压+对账标记）。 */
+    private final DataQualityService dataQualityService;
+    /** E-5b：慢轮次端点聚合（t_agent_trace 按模型百分位+Top 明细）。 */
+    private final TurnLatencyService turnLatencyService;
 
     @GetMapping("/stats")
     public R<Map<String, Object>> stats(@RequestParam(defaultValue = "7") Integer days) {
@@ -48,6 +54,33 @@ public class AdminReliabilityController {
             throw new BusinessException(40302, "无权访问灰度快照");
         }
         return R.ok(grayReleaseManager.snapshot());
+    }
+
+    /**
+     * E-5a：数据质量端点（纯读聚合）——outbox 未消费计数/writeback Stream 积压
+     * （死信口径 F 案A：PEL 计数）/三端对账标记（check_consistency 未实现，
+     * R19b 显式标记不伪造数据）。
+     */
+    @GetMapping("/data-quality")
+    public R<Map<String, Object>> dataQuality() {
+        Long userId = AuthUtils.resolveUserId();
+        if (!adminAccessService.isAdmin(userId)) {
+            throw new BusinessException(40302, "无权访问数据质量看板");
+        }
+        return R.ok(dataQualityService.dataQualitySnapshot());
+    }
+
+    /**
+     * E-5b：慢轮次端点（纯读聚合）——t_agent_trace 按 model 分组 P50/P95/avg/count
+     * + Top 慢轮次明细 10 条（只读 SQL 经 AgentTraceMapper 新增查询方法）。
+     */
+    @GetMapping("/turn-latency")
+    public R<Map<String, Object>> turnLatency(@RequestParam(defaultValue = "7") Integer days) {
+        Long userId = AuthUtils.resolveUserId();
+        if (!adminAccessService.isAdmin(userId)) {
+            throw new BusinessException(40302, "无权访问慢轮次看板");
+        }
+        return R.ok(turnLatencyService.turnLatency(days == null ? 7 : days));
     }
 
     /**

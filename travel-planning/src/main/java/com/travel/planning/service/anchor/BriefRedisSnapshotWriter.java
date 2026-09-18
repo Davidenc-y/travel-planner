@@ -1,7 +1,7 @@
 package com.travel.planning.service.anchor;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.travel.planning.memory.anchor.ItineraryBrief;
+import com.travel.memory.anchor.ItineraryBrief;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Component;

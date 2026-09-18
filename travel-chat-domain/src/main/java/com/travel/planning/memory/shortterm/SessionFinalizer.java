@@ -1,9 +1,10 @@
 package com.travel.planning.memory.shortterm;
 
 import com.travel.common.entity.ChatSession;
-import com.travel.planning.config.LlmGovernor;
-import com.travel.planning.memory.MemoryFacade;
-import com.travel.planning.memory.sessionstore.SessionStorePort;
+import com.travel.memory.config.LlmGovernor;
+import com.travel.memory.MemoryFacade;
+import com.travel.memory.sessionstore.SessionStorePort;
+import com.travel.memory.shortterm.ShortTermMemoryProperties;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.context.event.ApplicationReadyEvent;

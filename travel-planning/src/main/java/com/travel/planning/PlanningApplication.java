@@ -1,12 +1,14 @@
 package com.travel.planning;
 
 import com.travel.common.CommonMarker;
+import com.travel.memory.MemoryModuleMarker;
 import com.travel.stream.ChatStreamMarker;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.context.annotation.Import;
 import org.springframework.cloud.openfeign.EnableFeignClients;
 import org.springframework.scheduling.annotation.EnableScheduling;
+import org.mybatis.spring.annotation.MapperScan;
 
 /**
  * 旅游行程规划服务启动类
@@ -30,7 +32,12 @@ import org.springframework.scheduling.annotation.EnableScheduling;
         PlanningMarker.class,       // travel-planning 本模块
         ChatDomainMarker.class,     // travel-chat-domain（同根包 com.travel.planning，跨 jar）
         ChatStreamMarker.class,     // travel-chat-stream（com.travel.stream）
-        CommonMarker.class})        // travel-common（TokenAuthService/MybatisPlusConfig/FileStorageProperties）
+        CommonMarker.class,         // travel-common（TokenAuthService/MybatisPlusConfig/FileStorageProperties）
+        MemoryModuleMarker.class})  // travel-memory（com.travel.memory，E-1c 新增：V1 契约/治理件 LlmGovernor 等）
+// E-2fix（二次审批 2026-09-18）：E-1a 三 mapper 迁 com.travel.memory.repository 后超出 MyBatis-Plus
+// 自动扫描根（com.travel.planning），8081 启动即 ReliabilityStatsService 缺 AgentTraceMapper bean——
+// 显式双包扫描对齐 webflux（TravelStreamWebfluxApplication 同款），单测不起全上下文故漏检，双进程冒烟拦截。
+@MapperScan({"com.travel.planning.repository", "com.travel.memory.repository"})
 @EnableFeignClients(basePackages = "com.travel.planning.client")
 @EnableScheduling
 // M7：模型网关装配（travel.ai.model-registry.enabled=true 时提供 chatModel/lightModel）

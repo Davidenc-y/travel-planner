@@ -1,6 +1,8 @@
 package com.travel.planning.memory.knowledge;
 
 import com.travel.common.dto.PreferenceVocabulary;
+import com.travel.memory.knowledge.dto.ConsensusEntry;
+import com.travel.memory.knowledge.dto.Topic;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
@@ -28,21 +30,8 @@ public class SessionFactConsolidator {
     }
 
 
-    /** 共识主题 */
-    public enum Topic {
-        BUDGET("预算"), DESTINATION("目的地"), DAYS("天数"),
-        PARTY("人数"), STYLE("风格"), INTEREST("兴趣");
-
-        final String label;
-
-        Topic(String label) {
-            this.label = label;
-        }
-    }
-
-    /** 共识条目：同主题内 createdAt 晚者胜；feedback 覆盖旧 constraint */
-    public record ConsensusEntry(Topic topic, String value, String type, String createdAt) {
-    }
+    // E-2b：Topic/ConsensusEntry 嵌套类型提升至 com.travel.memory.knowledge.dto（C 案，原语义逐字迁移），
+    // 本留驻类改产出 memory 契约 DTO；E-30 授权 Facade 签名同步。
 
     /**
      * M28-10：同行人规范值映射（与 PreferenceVocabulary 同口径）。

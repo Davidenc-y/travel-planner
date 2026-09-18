@@ -3,7 +3,7 @@ package com.travel.planning.service;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.travel.common.dto.UsageStatsDTO;
 import com.travel.common.entity.AgentTrace;
-import com.travel.planning.repository.AgentTraceMapper;
+import com.travel.memory.repository.AgentTraceMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
