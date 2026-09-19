@@ -109,7 +109,8 @@ public class WebEnrichWritebackService {
                 if (fields.isEmpty()) {
                     return;
                 }
-                writeback(attractionId, fields.get().openHours(), fields.get().ticketPrice());
+                writeback(attractionId, fields.get().openHours(), fields.get().ticketPrice(),
+                        fields.get().description());
             } catch (Exception e) {
                 log.warn("[WebEnrichWriteback] 异步补全失败（静默降级）: id={}, err={}",
                         attractionId, e.getMessage());
@@ -124,7 +125,7 @@ public class WebEnrichWritebackService {
     /**
      * 幂等回写；返回 true=已写入并触发 ETL，false=跳过（已有值/防抖命中/参数非法）。
      */
-    public boolean writeback(Long attractionId, String openHours, Double ticketPrice) {
+    public boolean writeback(Long attractionId, String openHours, Double ticketPrice, String description) {
         if (attractionId == null) {
             return false;
         }
@@ -144,13 +145,20 @@ public class WebEnrichWritebackService {
                     null, SourceConfidence.ofSource("web_enrich"))) {
                 update.setTicketPrice(BigDecimal.valueOf(ticketPrice));
             }
+            // J-2b：description 回写（空值保护 + FieldMergePolicy 双重防护）
+            if (description != null && !description.isBlank()
+                    && FieldMergePolicy.shouldOverwrite("description", null, description,
+                            null, SourceConfidence.ofSource("web_enrich"))) {
+                update.setDescription(description.trim());
+            }
             update.setEnrichSource("web_enrich");
             update.setEnrichUpdatedAt(LocalDateTime.now());
             int rows = attractionMapper.update(update, new LambdaUpdateWrapper<Attraction>()
                     .eq(Attraction::getId, attractionId)
-                    // 空字段保护：仅当至少一个目标字段仍为 null 时允许写入
+                    // 空字段保护：仅当至少一个目标字段仍为 null 时允许写入（J-2b +description）
                     .and(w -> w.isNull(Attraction::getOpenHours)
-                            .or().isNull(Attraction::getTicketPrice))
+                            .or().isNull(Attraction::getTicketPrice)
+                            .or().isNull(Attraction::getDescription))
                     // 7 天防抖：未补充过，或上次补充已超 7 天
                     .and(w -> w.isNull(Attraction::getEnrichSource)
                             .or().lt(Attraction::getEnrichUpdatedAt,

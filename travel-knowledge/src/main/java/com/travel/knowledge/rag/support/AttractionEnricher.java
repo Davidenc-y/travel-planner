@@ -224,7 +224,8 @@ public class AttractionEnricher {
                         webEnrichWritebackService.writeback(
                                 parseId(id),
                                 fieldsOut.get().openHours(),
-                                fieldsOut.get().ticketPrice());
+                                fieldsOut.get().ticketPrice(),
+                                fieldsOut.get().description());
                     }
                 }
             } catch (Exception e) {

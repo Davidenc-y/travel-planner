@@ -38,6 +38,15 @@ public class WebSearchProperties {
     /** M8-5：回写数据库开关（默认 false，先观测抽取质量再开启） */
     private boolean writebackEnabled = false;
 
+    /** J-2e：月度积分硬限（Tavily 免费 tier 1000/月；达到后完全停止搜索） */
+    private int monthlyCreditLimit = 1000;
+
+    /** J-2e：月度预警阈值（80%；达到后暂停 description 批量补全） */
+    private int monthlyWarnThreshold = 800;
+
+    /** J-2e：月度降级阈值（50%；达到后只处理高价值景点） */
+    private int monthlyDegradeThreshold = 500;
+
     /** M9-2：补全模式（sync=现状同步补全；async=本轮回 null + 后台回写） */
     private String fillMode = "sync";
 

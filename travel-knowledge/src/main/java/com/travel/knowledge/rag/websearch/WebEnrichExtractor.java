@@ -28,8 +28,8 @@ public class WebEnrichExtractor {
             "忽略", "忽略以上", "系统提示", "系统指令", "请遵循", "不要遵守",
             "重置对话", "扮演", "你是", "无视上");
 
-    /** 抽取结果（校验通过才返回） */
-    public record EnrichedFields(String openHours, Double ticketPrice) {
+    /** 抽取结果（校验通过才返回）——J-2a 加 description 字段 */
+    public record EnrichedFields(String openHours, Double ticketPrice, String description) {
     }
 
     /**
@@ -48,11 +48,11 @@ public class WebEnrichExtractor {
         }
         try {
             String prompt = """
-                    你是旅游信息抽取器。从搜索结果中抽取景点的开放时间和门票价格，只输出 JSON。
+                    你是旅游信息抽取器。从搜索结果中抽取景点的开放时间、门票价格和景点描述，只输出 JSON。
                     景点：%s（%s）
                     搜索文本：%s
-                    输出格式：{"openHours": "格式如 09:00-17:00 或 全天，未提及填 null", "ticketPrice": 数字元，未提及填 null}
-                    约束：只从搜索文本提取，不得编造；无法确定填 null。
+                    输出格式：{"openHours": "格式如 09:00-17:00 或 全天，未提及填 null", "ticketPrice": 数字元，未提及填 null", "description": "用50字以内总结该景点在搜索文本中的核心特色，未提及填 null"}
+                    约束：只从搜索文本提取，不得编造；无法确定填 null。description 必须来自搜索原文的概括。
                     """.formatted(name, city == null ? "" : city, text);
             String response = lightModel.call(prompt);
             JsonNode node = readJson(response);
@@ -62,9 +62,15 @@ public class WebEnrichExtractor {
             String openHours = node.hasNonNull("openHours") ? node.path("openHours").asText("") : "";
             Double ticketPrice = node.path("ticketPrice").isNumber()
                     ? node.path("ticketPrice").asDouble() : null;
+            String description = node.hasNonNull("description")
+                    ? node.path("description").asText("").trim() : "";
+            if (description.length() > 200) {
+                description = description.substring(0, 200);
+            }
             EnrichedFields fields = new EnrichedFields(
                     openHours.isBlank() ? null : openHours.trim(),
-                    ticketPrice);
+                    ticketPrice,
+                    description.isBlank() ? null : description);
             if (!validate(fields)) {
                 log.warn("[WebEnrich] 抽取校验失败，丢弃: name={}, fields={}", name, fields);
                 return Optional.empty();

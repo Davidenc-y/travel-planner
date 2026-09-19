@@ -34,18 +34,20 @@ public class TavilyWebSearchAdapter implements WebSearchPort {
     private final HttpClient httpClient;
     private final RateLimiter rateLimiter;
     private final CircuitBreaker circuitBreaker;
+    private final TavilyQuotaManager quotaManager;
 
     @Autowired
-    public TavilyWebSearchAdapter(WebSearchProperties properties) {
+    public TavilyWebSearchAdapter(WebSearchProperties properties, TavilyQuotaManager quotaManager) {
         this(properties, HttpClient.newBuilder()
                 .connectTimeout(Duration.ofSeconds(5))
-                .build());
+                .build(), quotaManager);
     }
 
     /** 测试注入：可替换 HttpClient（默认 JDK 内置，零新依赖） */
-    TavilyWebSearchAdapter(WebSearchProperties properties, HttpClient httpClient) {
+    TavilyWebSearchAdapter(WebSearchProperties properties, HttpClient httpClient, TavilyQuotaManager quotaManager) {
         this.properties = properties;
         this.httpClient = httpClient;
+        this.quotaManager = quotaManager;
         this.rateLimiter = new RateLimiter(Math.max(1, properties.getRateLimitPerMinute()));
         this.circuitBreaker = new CircuitBreaker(3, 60_000, 30_000);
     }
@@ -53,6 +55,11 @@ public class TavilyWebSearchAdapter implements WebSearchPort {
     @Override
     public Optional<WebSearchResult> search(String query) {
         if (query == null || query.isBlank()) {
+            return Optional.empty();
+        }
+        // J-2d：月度配额前置检查（exhausted 时静默降级）
+        if (quotaManager != null && !quotaManager.canSearch()) {
+            log.debug("[TavilyQuota] 配额不足，跳过搜索: remaining=0");
             return Optional.empty();
         }
         var provider = properties.findProvider("tavily");
@@ -99,6 +106,10 @@ public class TavilyWebSearchAdapter implements WebSearchPort {
                     throw new IllegalStateException("Tavily HTTP " + response.statusCode());
                 }
                 Optional<WebSearchResult> parsed = parse(response.body());
+                // J-2d：搜索成功消耗 1 credit
+                if (parsed.isPresent() && quotaManager != null) {
+                    quotaManager.consume();
+                }
                 parsed.ifPresent(r ->
                         log.info("[WebSearch] Tavily 搜索成功: query={}, title={}", query, r.title()));
                 return parsed;

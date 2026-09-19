@@ -105,7 +105,7 @@ travel:
       circuit-open-ms: 30000
   # M15-1：Open-Meteo 天气接入（零 Key；默认关闭灰度，开启后日预算 3000/QPS1）
   weather:
-    enabled: false
+    enabled: true
     forecast-base-url: https://api.open-meteo.com/v1
     geocoding-base-url: https://geocoding-api.open-meteo.com/v1
     timeout-ms: 8000

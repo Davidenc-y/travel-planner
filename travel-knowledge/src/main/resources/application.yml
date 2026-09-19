@@ -183,10 +183,10 @@ travel:
     # MR-D1：HyDE 假设答案改写（向量路专用；默认关=原 query 零变更，E-33）
     query:
       hyde:
-        enabled: false
+        enabled: true
       # MR-D2：LLM 多 Query 扩展（bean 条件装配；默认关=rule 现状，E-33）
       llm-expand:
-        enabled: false
+        enabled: true
         variants: 3
     # MR-E1：来源权威度注册表（source→authority 0~1；默认空=不参与排序，E-33。
     # MR2-2/MR2-3 已重灌 ES/Milvus 携带 source 字段，本表自 MR2-4 起实际生效）
@@ -269,7 +269,7 @@ travel:
     retrieval:
       city-score-boost: 0.5
       # 生产保守默认关；local 灰度开启，验证后可转正
-      planning-expansion-enabled: false
+      planning-expansion-enabled: true
       planning-trigger-keywords: [规划, 安排, 行程, 攻略, 几日游, 一日游, 两日游, 三日游, 旅游, 路线, 推荐]
       planning-expansion-words: [旅游, 景点, 推荐, 攻略]
   # ETL 配置

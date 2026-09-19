@@ -70,7 +70,7 @@ travel:
   # F55/B1：短期会话记忆（摘要压缩）
   memory:
     # MR-C3：语义召回注入 top-K（附加召回近会话蒸馏产物 type∈{semantic,entity}；默认 0=关闭，E-33）
-    recall-semantic-top-k: 0
+    recall-semantic-top-k: 2
     shortterm:
       enabled: true
       max-turns: 10
@@ -103,12 +103,12 @@ travel:
       trace-scan-limit: 2000
     # MR-C1：会话记忆整合（去重+时间戳旧删新留；默认关=no-op，E-33 关闭态零变更）
     consolidation:
-      enabled: false             # 门控：false=recordChunk 丢弃+批扫 no-op（现状零变更）
+      enabled: true              # J-1 开启：定时记忆整合（去重+蒸馏）
       cron: "0 0 4 * * *"        # 批扫调度（PlanningApplication @EnableScheduling 面）
       batch-size: 20             # 单轮批扫会话数上限
       # MR-C2：情节→语义蒸馏（一会话一蒸馏；type=semantic/entity 入会话域，先删后增幂等）
       distill:
-        enabled: false           # 门控：false=批扫内跳过蒸馏（现状零变更）
+        enabled: true            # J-1 开启：情节→语义蒸馏
   # M4-2/P0-2：planning 侧检索注入 topK（默认值等于 F63/F83 硬编码，行为不变）
   rag:
     session-context:
@@ -178,7 +178,7 @@ travel:
     # M24（E3）：三闸门隔离（默认关=观测模式；D-V8-4 达标后改 enabled: true；
     # 子闸门可分批开启/单闸回退：slice-skip 切片 / profile-skip 偏好 / summary-filter 摘要）
     detour-isolation:
-      enabled: false
+      enabled: true
       slice-skip: true
       profile-skip: true
       summary-filter: true
@@ -192,7 +192,7 @@ travel:
         create-on-chat: true
       # M13-3：派发去重（输出已有值短路子Agent，false=现状灰度）
       dispatch-dedup:
-        enabled: false
+        enabled: true
   # F90：Agent 调用前安全防护（Prompt 注入 / 熔断 / 限流）
   # M16-3：注入词表本文件为唯一源（PromptInjectionRule 已删除代码默认词表，
   # guard 开启时词表缺失将启动失败——拒绝以空词表静默放行）
