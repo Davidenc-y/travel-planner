@@ -292,6 +292,8 @@ public class AttractionEtlService {
         meta.put("free_entry", a.getFreeEntry() != null ? a.getFreeEntry().longValue() : 0L);
         meta.put("createdAt", a.getCreatedAt() != null ? a.getCreatedAt().toString() : "");
         meta.put("imageUrl", a.getImageUrl() == null ? "" : a.getImageUrl());
+        // F-1（P0）：写入 source 权威度标记，与 MR2 重灌脚本口径一致
+        meta.put("source", mapSource(a.getSource()));
         milvusStore.upsert(MILVUS_COLLECTION, docId, MilvusVectorStore.box(vector), meta);
         log.debug("Milvus 写入成功: id={}", docId);
     }
@@ -314,9 +316,25 @@ public class AttractionEtlService {
         doc.put("createdAt", a.getCreatedAt() != null ? a.getCreatedAt().toString() : "");
         // F121/P1：图片 URL 入 ES（供 BM25/Naive 路检索结果带图）
         doc.put("imageUrl", a.getImageUrl() == null ? "" : a.getImageUrl());
+        // F-1（P0）：写入 source 权威度标记，与 MR2 重灌脚本口径一致
+        doc.put("source", mapSource(a.getSource()));
 
         // M3-3：统一经 EsDocumentStore 写入
         esStore.index(ES_INDEX, docId, doc);
         log.debug("ES 写入成功: id={}", docId);
+    }
+
+    /**
+     * F-1（P0）：source 权威度映射——amap/manual 原样保留，mock 等其余取值归一为
+     * web_enrich，空/null 兜底 web_enrich；与 MR2-2/MR2-3 重灌脚本口径逐字一致。
+     */
+    private String mapSource(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return "web_enrich";
+        }
+        return switch (raw) {
+            case "amap", "manual" -> raw;
+            default -> "web_enrich";
+        };
     }
 }

@@ -140,10 +140,10 @@ public class ItineraryWritebackProperties {
         if (input == null) {
             return null;
         }
-        String marker = com.travel.planning.prompt.Markers.CURRENT_QUESTION;
+        String marker = com.travel.common.prompt.Markers.CURRENT_QUESTION;
         int idx = input.lastIndexOf(marker);
         String question = idx >= 0 ? input.substring(idx + marker.length()) : input;
-        int userId = question.lastIndexOf(com.travel.planning.prompt.Markers.LEGACY_USER_ID_SUFFIX);
+        int userId = question.lastIndexOf(com.travel.common.prompt.Markers.LEGACY_USER_ID_SUFFIX);
         if (userId >= 0) {
             question = question.substring(0, userId);
         }

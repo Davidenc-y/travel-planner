@@ -1,6 +1,6 @@
 package com.travel.planning.workflow;
 
-import com.travel.planning.prompt.Markers;
+import com.travel.common.prompt.Markers;
 import com.alibaba.cloud.ai.graph.CompileConfig;
 import com.alibaba.cloud.ai.graph.CompiledGraph;
 import com.alibaba.cloud.ai.graph.KeyStrategy;

@@ -1,6 +1,6 @@
 package com.travel.planning.weather;
 
-import com.travel.planning.prompt.Markers;
+import com.travel.common.prompt.Markers;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;

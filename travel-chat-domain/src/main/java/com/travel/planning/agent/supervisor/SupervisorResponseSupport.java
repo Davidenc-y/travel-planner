@@ -1,6 +1,6 @@
 package com.travel.planning.agent.supervisor;
 
-import com.travel.planning.prompt.Markers;
+import com.travel.common.prompt.Markers;
 import com.alibaba.cloud.ai.graph.OverAllState;
 import com.travel.common.util.AgentOutputUtils;
 import com.travel.common.util.JsonUtils;

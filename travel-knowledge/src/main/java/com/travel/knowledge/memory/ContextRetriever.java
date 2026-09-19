@@ -336,9 +336,24 @@ public class ContextRetriever {
             boolean exists = Boolean.TRUE.equals(milvusClient.hasCollection(
                     io.milvus.param.collection.HasCollectionParam.newBuilder().withCollectionName(MILVUS_COLLECTION).build()).getData());
             if (exists) {
-                // MR2-1：集合已存在也输出生效索引参数（注：输出 yml 配置值，物理索引以 DESC 为准）
-                log.info("[MilvusIndex] collection={} indexType(yml)={} metric={} (existing; physical per DESC)",
-                        MILVUS_COLLECTION, milvusIndexProperties.getIndexType(),
+                // F-6（P2-9）：输出物理索引实际值（describeIndex DESC 优先，失败降级标注 yml 值口径）
+                String physical;
+                try {
+                    io.milvus.grpc.DescribeIndexResponse descResp = milvusClient.describeIndex(
+                            io.milvus.param.index.DescribeIndexParam.newBuilder()
+                                    .withCollectionName(MILVUS_COLLECTION)
+                                    .build()).getData();
+                    io.milvus.response.DescIndexResponseWrapper.IndexDesc idx =
+                            new io.milvus.response.DescIndexResponseWrapper(descResp)
+                                    .getIndexDescByFieldName("vector");
+                    physical = idx == null ? "NO_INDEX(vector)"
+                            : idx.getIndexType() + "/" + idx.getExtraParam() + "/" + idx.getMetricType();
+                } catch (Exception descEx) {
+                    physical = "DESC_FAIL(" + descEx.getMessage() + ")";
+                }
+                log.info("[MilvusIndex] collection={} physical={} ymlConfig={}/{} (existing)",
+                        MILVUS_COLLECTION, physical,
+                        milvusIndexProperties.getIndexType(),
                         milvusIndexProperties.getMetric());
                 return;
             }

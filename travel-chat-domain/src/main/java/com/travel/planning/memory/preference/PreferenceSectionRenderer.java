@@ -1,7 +1,7 @@
 package com.travel.planning.memory.preference;
 
 import com.travel.common.dto.PreferenceTagsDTO;
-import com.travel.planning.prompt.Markers;
+import com.travel.common.prompt.Markers;
 import org.springframework.stereotype.Component;
 
 import java.util.List;

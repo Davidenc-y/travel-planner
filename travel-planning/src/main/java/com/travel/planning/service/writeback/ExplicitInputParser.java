@@ -1,7 +1,7 @@
 package com.travel.planning.service.writeback;
 
 import com.travel.common.dto.PreferenceVocabulary;
-import com.travel.planning.prompt.Markers;
+import com.travel.common.prompt.Markers;
 import com.travel.planning.service.ItineraryWritebackProperties;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;

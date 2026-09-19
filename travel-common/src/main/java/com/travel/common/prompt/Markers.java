@@ -1,4 +1,4 @@
-package com.travel.planning.prompt;
+package com.travel.common.prompt;
 
 /**
  * 上下文段落 marker 契约常量（M16-2 契约常量化）。

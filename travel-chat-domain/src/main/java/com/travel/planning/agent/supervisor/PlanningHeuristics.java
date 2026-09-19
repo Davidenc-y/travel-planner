@@ -1,7 +1,7 @@
 package com.travel.planning.agent.supervisor;
 
 import com.travel.planning.config.ChatWordLists;
-import com.travel.planning.prompt.Markers;
+import com.travel.common.prompt.Markers;
 import org.springframework.stereotype.Component;
 
 import static com.travel.common.util.AgentOutputUtils.containsAny;

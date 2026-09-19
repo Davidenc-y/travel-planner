@@ -310,7 +310,7 @@ public class ChatRoutingStep implements ChatPipelineStep {
         java.time.LocalDate today = java.time.LocalDate.now();
         String dow = today.getDayOfWeek().getDisplayName(
                 java.time.format.TextStyle.FULL, java.util.Locale.CHINESE);
-        String dateLine = "\n" + com.travel.planning.prompt.Markers.CURRENT_DATE + today + "（" + dow + "）。用户未指定出发日期时，"
+        String dateLine = "\n" + com.travel.common.prompt.Markers.CURRENT_DATE + today + "（" + dow + "）。用户未指定出发日期时，"
                 + "行程日期从今天之后合理选择或用『第N天』相对表述，禁止编造已过去的日期。\n";
         composed = composed + dateLine;
         if (chatWeatherContextPort == null) {

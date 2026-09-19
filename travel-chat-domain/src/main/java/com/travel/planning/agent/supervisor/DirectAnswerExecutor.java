@@ -1,6 +1,6 @@
 package com.travel.planning.agent.supervisor;
 
-import com.travel.planning.prompt.Markers;
+import com.travel.common.prompt.Markers;
 import com.travel.core.guard.CircuitBreaker;
 import com.travel.memory.prompt.PromptTemplates;
 import com.travel.stream.service.TurnCancellation;

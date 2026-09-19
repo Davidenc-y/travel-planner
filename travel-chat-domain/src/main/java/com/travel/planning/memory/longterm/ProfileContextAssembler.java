@@ -1,6 +1,6 @@
 package com.travel.planning.memory.longterm;
 
-import com.travel.planning.prompt.Markers;
+import com.travel.common.prompt.Markers;
 import com.travel.common.entity.TravelProfile;
 import com.travel.memory.MemoryFacade;
 import com.travel.memory.shortterm.ShortTermMemoryProperties;

@@ -9,10 +9,13 @@ const connectSrc = ["'self'", 'ws:', 'wss:', planningBase, knowledgeBase];
 if (!connectSrc.includes(streamBase)) connectSrc.push(streamBase);
 
 // E-31（20260918 E-3a）：production 分支剔除 'unsafe-eval'（eval 收紧仅产线）；
-// dev 完整保留（Next dev 工具链依赖）；unsafe-inline 不动（E-31 范围冻结）。
+// dev 完整保留（Next dev 工具链依赖）。
+// F-7b（P1-7）：script-src 由 middleware 动态注入 nonce（此处为 _next/static 等非 middleware
+// 覆盖路径的静态 fallback；middleware 动态头优先于此配置——response.headers.set() > headers()）。
+// production fallback 剔除 'unsafe-inline'（middleware nonce 主路径）；dev fallback 保留（Next dev 工具链）。
 const isProduction = process.env.NODE_ENV === 'production';
 const scriptSrc = isProduction
-  ? "script-src 'self' 'unsafe-inline'"
+  ? "script-src 'self'"
   : "script-src 'self' 'unsafe-inline' 'unsafe-eval'";
 
 const securityHeaders = [
