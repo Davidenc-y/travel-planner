@@ -27,7 +27,8 @@ const typeLabels: Record<string, string> = {
 };
 
 const ragTypes = [
-  { value: 'hybrid', label: '混合检索（推荐）' },
+  { value: 'auto', label: '智能路由（自动选择最优策略）' },
+  { value: 'hybrid', label: '混合检索' },
   { value: 'naive', label: '关键词' },
   { value: 'self_rag', label: '自适应' },
   { value: 'corrective_rag', label: '查询重写' },
@@ -162,7 +163,7 @@ function AttractionDetailDialog({
 
 export default function AttractionsPage() {
   const [query, setQuery] = useState('');
-  const [ragType, setRagType] = useState('hybrid');
+  const [ragType, setRagType] = useState('auto');
   const [results, setResults] = useState<SearchResult[]>([]);
   const [cities, setCities] = useState<string[]>([]);
   const [cityOptions, setCityOptions] = useState<string[]>(FALLBACK_CITY_OPTIONS);

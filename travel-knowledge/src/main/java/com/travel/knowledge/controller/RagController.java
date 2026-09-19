@@ -54,8 +54,8 @@ public class RagController {
             topK = Math.max(1, Math.min(topK, 50));
         }
         log.info("[RagController] ragType={}, query={}, topK={}", ragType, trimmed, topK);
-        // M3-2/P0-7：统一委托 AttractionService.search（保证追溯链路一致，不再双入口）
-        String type = (ragType == null || ragType.isBlank()) ? "hybrid" : ragType;
+        // H-1：缺省走 auto 自主路由（三层递进：supervisor→llm→heuristic），不再硬编码 hybrid
+        String type = (ragType == null || ragType.isBlank()) ? "auto" : ragType;
         return R.ok(attractionService.search(trimmed, type, topK));
     }
 }

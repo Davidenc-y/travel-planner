@@ -43,7 +43,8 @@ public class KnowledgeRetrievalService {
      */
     public String retrieveCandidates(String query, int topK) {
         try {
-            var resp = knowledgeClient.search("hybrid", query, Math.max(1, Math.min(topK, 10)));
+            // H-1：聊天/行程规划链路改走 auto 自主路由（原先硬编码 hybrid 旁路了三层路由系统）
+            var resp = knowledgeClient.search("auto", query, Math.max(1, Math.min(topK, 10)));
             if (resp == null || resp.getData() == null || resp.getData().isEmpty()) {
                 log.warn("[KnowledgeRetrieval] 检索为空: query={}", query);
                 markDegraded("knowledge_empty", query);
