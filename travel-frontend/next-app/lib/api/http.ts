@@ -269,6 +269,7 @@ export const knowledgeApi = createClient(KNOWLEDGE_BASE);
 /**
  * 统一错误信息提取（F87）：优先后端 message，其次 axios 错误文本。
  * R2/S5：40301 限流统一为固定友好文案（后端 message 可能含内部细节）。
+ * G-3：安全白名单——已知友好文案直接透传，未知 50000+ 统一兜底不暴露内部细节。
  * 页面 toast 一律使用本函数，避免重复拼装。
  */
 export function getErrorMessage(err: unknown): string {
@@ -280,9 +281,25 @@ export function getErrorMessage(err: unknown): string {
   if (e?.response?.data?.code === 40303) {
     // 优先后端消息（已动态携带模型名），缺失时才用通用兜底
     return e?.response?.data?.message
-      || '模型额度不足：当前模型不可用，请切换其他可用模型，或在 DashScope 控制台充值/关闭“仅免费额度”后重试';
+      || '模型额度不足：当前模型不可用，请切换其他可用模型，或在 DashScope 控制台充值/关闭”仅免费额度”后重试';
   }
-  return e?.response?.data?.message || e?.message || '请求失败，请稍后重试';
+  const msg = e?.response?.data?.message || e?.message || '';
+  const code = e?.response?.data?.code;
+  // G-3：已知友好文案白名单（正则匹配前缀，覆盖后端各业务异常消息）
+  const KNOWN_SAFE = [
+    /^提示内容为空或超长/, /^查询内容/, /^会话不存在/, /^无权访问/,
+    /^请求过于频繁/, /^登录已过期/, /^消息过长/, /^消息内容为空/,
+    /^模型不存在/, /^模型额度不足/, /^行程/, /^用户名/, /^邮箱/,
+    /^知识库无相关/, /^非法控制字符/, /^暂停/, /^无权/,
+  ];
+  if (msg && KNOWN_SAFE.some((re) => re.test(msg))) {
+    return msg;
+  }
+  // G-3：50000+（系统异常）或空消息统一兜底——不暴露后端内部细节
+  if (!msg || (code !== undefined && code >= 50000)) {
+    return '系统繁忙，请稍后重试';
+  }
+  return msg; // 4xxxx 业务码保留原文（业务语义）
 }
 
 /** R4：从未知错误中安全提取 HTTP/业务错误码（兼容 axios 双形态：HTTP 对齐 / 业务码双轨） */

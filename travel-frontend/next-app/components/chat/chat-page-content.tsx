@@ -16,6 +16,7 @@ import { chatApi, getErrorMessage, httpErrorCode, isAbortError, itineraryApi } f
 import { useAuth } from '@/lib/auth-context';
 import type { ChatMessage, ChatResponse } from '@/types';
 import { generateUUID } from '@/lib/utils';
+import { guardInput } from '@/lib/input-guard';
 import { ERROR_CODE } from '@/lib/constants';
 import { Skeleton } from '@/components/ui/skeleton';
 import { TurnScrollbar } from '@/components/chat/TurnScrollbar';
@@ -435,6 +436,16 @@ function ChatContent() {
     const isRetry = retrySid != null && !asNew;
     const text = retrySid != null ? retryText! : input.trim();
     if (!text || sendingRef.current || creatingRef.current) return;
+
+    // G-4：前端输入护栏——长度/垃圾/违禁一次检查（非重试路径才拦截，重试放行）
+    if (!isRetry) {
+      const guard = guardInput(text);
+      if (!guard.ok) {
+        toast.warning(guard.reason);
+        return;
+      }
+    }
+
     const hadNoSession = !isRetry && !currentSessionId;
 
     // M5-1：初始界面直接发送 → 自动创建会话并进入

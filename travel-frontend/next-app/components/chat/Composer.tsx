@@ -63,9 +63,18 @@ export function Composer({ value, onChange, onSend, onStop, showStop, canSend, m
           }}
           rows={1}
           aria-label="输入消息"
-          placeholder="随心输入"
+          placeholder="随心输入（≤200字）"
+          maxLength={200}
           className="border-0 px-4 pt-3.5 pb-1 min-h-[44px] max-h-40 bg-transparent focus:ring-0 focus:border-0"
         />
+        {/* G-1：接近上限时显示字数提示 */}
+        {value.length > 180 && (
+          <div className="flex justify-end px-4 pb-1">
+            <span className={cn('text-xs', value.length >= 200 ? 'text-red-500 font-medium' : 'text-ink-faint')}>
+              {value.length}/200
+            </span>
+          </div>
+        )}
         <div className="flex items-center justify-between gap-1 px-3 pb-2.5 pt-1">
           {/* M23（E1）：左下角锚定圆钮（+右侧预留偏好按钮位） */}
           <div className="flex items-center gap-1">

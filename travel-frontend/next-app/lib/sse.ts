@@ -58,8 +58,40 @@ export interface SseStreamHandlers {
 /**
  * 消费一条 SSE 流；HTTP 非 2xx 时抛出带 `response.data` 的错误（供 40904 重试识别）。
  * 业务错误事件通过 handlers.onError 抛出（由调用方统一捕获）。
+ * G-5：网络中断（TypeError）自动重连——指数退避 1s/2s/4s 最多 3 次。
  */
 export async function consumeSseStream(
+  url: string,
+  body: Record<string, unknown>,
+  headers: Record<string, string>,
+  signal: AbortSignal,
+  handlers: SseStreamHandlers,
+): Promise<void> {
+  let retryCount = 0;
+  const MAX_RETRIES = 3;
+
+  const attempt = async (): Promise<void> => {
+    try {
+      return await consumeSseStreamOnce(url, body, headers, signal, handlers);
+    } catch (err) {
+      // G-5：仅网络中断（TypeError = fetch 网络层错误）重连，业务错误/主动中止不重试
+      if (retryCount < MAX_RETRIES && err instanceof TypeError && !signal.aborted) {
+        retryCount++;
+        const delay = Math.min(1000 * Math.pow(2, retryCount), 8000);
+        console.warn(`[SSE] 连接中断，${delay}ms 后第 ${retryCount}/${MAX_RETRIES} 次重连...`);
+        await new Promise((r) => setTimeout(r, delay));
+        if (signal.aborted) return; // 重连等待期间被用户中止
+        return attempt();
+      }
+      throw err;
+    }
+  };
+
+  return attempt();
+}
+
+/** 单次 SSE 连接（原 consumeSseStream 主体，由 G-5 重连包装器调用） */
+async function consumeSseStreamOnce(
   url: string,
   body: Record<string, unknown>,
   headers: Record<string, string>,

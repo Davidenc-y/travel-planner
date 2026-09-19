@@ -153,6 +153,13 @@ public class ChatController {
         String message = body.getMessage();
         String clientMessageId = body.getClientMessageId();
         String model = body.getModel();
+        // G-2：流式消息输入护栏（与同步端点 200 字上限对齐，空/超长友好拒绝）
+        if (message == null || message.isBlank()) {
+            return ResponseEntity.ok().body(R.fail(40001, "消息内容为空"));
+        }
+        if (message.trim().length() > 200) {
+            return ResponseEntity.ok().body(R.fail(40001, "消息过长（≤200字），请精简后重试"));
+        }
         // M28-12：偏好标签/锚定快照透传——此前流式链路只放 model，body 的
         // preferences/anchoredItineraryIds 被丢弃（ChatStreamService 读不到，
         // 面板设置与消息内锚定在流式路径静默失效）

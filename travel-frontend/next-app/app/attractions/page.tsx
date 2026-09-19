@@ -11,6 +11,7 @@ import { ListState } from '@/components/ui/list-state';
 import { PagedSelect, PagedSingleSelect } from '@/components/ui/paged-options';
 import { takePrefetch } from '@/lib/prefetch';
 import { useApiQuery } from '@/lib/use-api-query';
+import { isRepetitiveSpam } from '@/lib/input-guard';
 import { SmartImage } from '@/components/ui/smart-image';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -190,10 +191,20 @@ export default function AttractionsPage() {
   }, []);
 
   const handleSearch = async () => {
-    if (!query.trim()) return;
+    const q = query.trim();
+    if (!q) return;
+    // G-6：搜索输入护栏（与后端 RagController 500 字上限+前端 input-guard 对齐）
+    if (q.length > 500) {
+      toast.error('搜索词过长，请精简至500字以内');
+      return;
+    }
+    if (isRepetitiveSpam(q)) {
+      toast.warning('检测到大量重复内容，请输入有意义的搜索词');
+      return;
+    }
     setSearchLoading(true);
     try {
-      const res = await attractionApi.search(query, ragType, 10);
+      const res = await attractionApi.search(q, ragType, 10);
       setResults(res.data.data || []);
       toast.success(`检索到 ${res.data.data?.length || 0} 条结果`);
     } catch (err) {
