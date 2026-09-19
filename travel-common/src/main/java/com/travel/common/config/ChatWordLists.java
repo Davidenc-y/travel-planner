@@ -1,8 +1,7 @@
 package com.travel.planning.config;
 
-import com.travel.common.config.ChatIntent;
 import com.travel.common.util.JsonUtils;
-
+import com.travel.planning.memory.chat.ChatIntent;
 import lombok.Data;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.context.properties.ConfigurationProperties;

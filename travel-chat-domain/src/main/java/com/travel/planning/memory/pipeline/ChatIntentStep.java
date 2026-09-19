@@ -1,6 +1,6 @@
 package com.travel.planning.memory.pipeline;
 
-import com.travel.planning.memory.chat.ChatIntent;
+import com.travel.common.config.ChatIntent;
 import com.travel.planning.memory.chat.ChatIntentClassifier;
 import com.travel.planning.trace.TraceContext;
 import lombok.RequiredArgsConstructor;

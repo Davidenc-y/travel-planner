@@ -1,7 +1,7 @@
 package com.travel.planning.memory.focus;
 
 import com.travel.planning.config.ChatWordLists;
-import com.travel.planning.memory.chat.ChatIntent;
+import com.travel.common.config.ChatIntent;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 

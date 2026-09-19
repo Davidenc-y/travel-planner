@@ -102,3 +102,4 @@ travel-frontend/next-app/vitest.config.ts
 
 __pycache__/
 scripts/regression/*.log
+coverage/

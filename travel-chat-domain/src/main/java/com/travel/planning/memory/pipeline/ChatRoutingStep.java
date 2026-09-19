@@ -7,7 +7,7 @@ import com.travel.planning.agent.support.AttractionGroundingChecker;
 import com.travel.planning.agent.support.ChatWeatherContextPort;
 import com.travel.planning.agent.support.ItineraryConflictPort;
 import com.travel.planning.agent.support.ItineraryVersionPort;
-import com.travel.planning.memory.chat.ChatIntent;
+import com.travel.common.config.ChatIntent;
 import com.travel.planning.memory.knowledge.SessionContextChunker;
 import com.travel.planning.memory.knowledge.SessionKnowledgeWriter;
 import com.travel.planning.service.ModelQuotaExceptionSupport;

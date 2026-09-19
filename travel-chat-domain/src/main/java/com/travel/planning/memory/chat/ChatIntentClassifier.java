@@ -1,5 +1,7 @@
 package com.travel.planning.memory.chat;
 
+import com.travel.common.config.ChatIntent;
+
 import com.travel.common.util.JsonUtils;
 import com.travel.planning.config.ChatWordLists;
 import com.travel.memory.prompt.PromptTemplates;

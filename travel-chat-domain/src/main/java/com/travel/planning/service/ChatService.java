@@ -18,7 +18,7 @@ import com.travel.stream.service.TurnCancellation;
 import com.travel.stream.service.TurnInterruptedException;
 import com.travel.stream.service.ChatStreamExecutor;
 import com.travel.stream.service.TurnCancellationRegistry;
-import com.travel.planning.memory.chat.ChatIntent;
+import com.travel.common.config.ChatIntent;
 import com.travel.memory.sessionstore.SessionStorePort;
 import com.travel.planning.memory.pipeline.ChatBreakpointStore;
 import com.travel.planning.memory.pipeline.ChatGuardStep;

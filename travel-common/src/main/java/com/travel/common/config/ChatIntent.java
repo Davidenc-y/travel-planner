@@ -1,4 +1,4 @@
-package com.travel.planning.memory.chat;
+package com.travel.common.config;
 
 /**
  * 对话意图（F85 第二步，入口意图分类）。

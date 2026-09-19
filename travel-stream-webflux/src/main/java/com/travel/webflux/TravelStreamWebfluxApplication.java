@@ -26,13 +26,15 @@ import org.springframework.context.annotation.Import;
         WebfluxModuleMarker.class,  // travel-stream-webflux 本模块
         ChatDomainMarker.class,     // travel-chat-domain（com.travel.planning，跨 jar）
         ChatStreamMarker.class,     // travel-chat-stream（com.travel.stream）
-        MemoryModuleMarker.class})  // travel-memory（com.travel.memory，E-1c 新增：V1 契约/治理件）
+        MemoryModuleMarker.class,   // travel-memory（com.travel.memory，E-1c 新增：V1 契约/治理件）
+        })  // K-4：不用 CommonMarker（全扫 common 会拉入不必要 Bean），ChatWordLists 经 @Import
 @MapperScan({"com.travel.planning.repository", "com.travel.memory.repository"})
 @EnableFeignClients(basePackages = "com.travel.planning.client")
 // M6-33：MyBatis-Plus 分页 + createdAt/updatedAt 自动填充（planning 经
 // com.travel.common 扫描获得；WebFlux 不扫描 common，需显式导入）
 // M7：模型网关装配（travel.ai.model-registry.enabled=true 时提供 chatModel/lightModel）
 @Import({com.travel.common.config.MybatisPlusConfig.class,
+        com.travel.planning.config.ChatWordLists.class,  // K-4：ChatWordLists 迁移至 common 后精确导入
         com.travel.aigateway.config.GatewayAutoConfig.class})
 public class TravelStreamWebfluxApplication {
 
