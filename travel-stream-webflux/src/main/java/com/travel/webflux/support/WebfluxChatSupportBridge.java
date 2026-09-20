@@ -2,15 +2,12 @@ package com.travel.webflux.support;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.travel.common.config.GrayFlags;
 import com.travel.planning.agent.support.ChatWeatherContextPort;
 import com.travel.memory.anchor.ItineraryBrief;
 import com.travel.memory.anchor.ItineraryBriefPort;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Value;
-import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
-import org.springframework.web.reactive.function.client.WebClient;
+import org.springframework.web.util.UriComponentsBuilder;
 
 import java.time.Duration;
 import java.util.List;
@@ -37,15 +34,12 @@ import java.util.Optional;
 @Component
 public class WebfluxChatSupportBridge implements ItineraryBriefPort, ChatWeatherContextPort {
 
-    private final WebClient webClient;
-    private final String internalToken;
-    private final ObjectMapper mapper = new ObjectMapper();
+    private final InternalBridgeClient bridgeClient;
+    private final ObjectMapper mapper;
 
-    public WebfluxChatSupportBridge(
-            @Value("${travel.planning-base-url:http://localhost:8081}") String planningBaseUrl,
-            @Value("${travel.internal.token:}") String internalToken) {
-        this.webClient = WebClient.builder().baseUrl(planningBaseUrl).build();
-        this.internalToken = internalToken;
+    public WebfluxChatSupportBridge(InternalBridgeClient bridgeClient) {
+        this.bridgeClient = bridgeClient;
+        this.mapper = bridgeClient.objectMapper();
     }
 
     // ---------------- ItineraryBriefPort ----------------
@@ -64,13 +58,9 @@ public class WebfluxChatSupportBridge implements ItineraryBriefPort, ChatWeather
         }
         log.info("[BriefBridge] brief 回退经 HTTP 桥: id={}, userId={}", itineraryId, userId);
         try {
-            String raw = webClient.get()
-                    .uri(uri -> uri.path("/api/v1/itineraries/chat-brief")
-                            .queryParam("itineraryId", itineraryId)
-                            .queryParam("userId", userId)
-                            .build())
-                    .headers(h -> auth(h))
-                    .retrieve().bodyToMono(String.class)
+            // RK-17/E-8：链段收敛 client（itineraryId/userId 为 Long，拼接与 UriBuilder 编码等价）；5s 超时保留
+            String raw = bridgeClient.getJson("/api/v1/itineraries/chat-brief?itineraryId=" + itineraryId
+                            + "&userId=" + userId)
                     .block(Duration.ofSeconds(5));
             JsonNode data = mapper.readTree(raw).path("data");
             if (data == null || data.isNull() || data.isMissingNode()) {
@@ -114,11 +104,10 @@ public class WebfluxChatSupportBridge implements ItineraryBriefPort, ChatWeather
             return List.of();
         }
         try {
-            String raw = webClient.get()
-                    .uri(uri -> uri.path("/api/v1/itineraries/chat-session-itineraries")
-                            .queryParam("sessionId", sessionId).build())
-                    .headers(this::auth)
-                    .retrieve().bodyToMono(String.class)
+            // RK-17/E-8：sessionId 为外部字符串——UriComponentsBuilder 同源编码保字节等价（R30）；5s 超时保留
+            String uri = UriComponentsBuilder.fromPath("/api/v1/itineraries/chat-session-itineraries")
+                    .queryParam("sessionId", sessionId).encode().toUriString();
+            String raw = bridgeClient.getJson(uri)
                     .block(Duration.ofSeconds(5));
             JsonNode data = mapper.readTree(raw).path("data");
             if (!data.isArray()) {
@@ -145,24 +134,14 @@ public class WebfluxChatSupportBridge implements ItineraryBriefPort, ChatWeather
             return "";
         }
         try {
-            String raw = webClient.post()
-                    .uri("/api/v1/itineraries/chat-weather")
-                    .contentType(MediaType.APPLICATION_JSON)
-                    .headers(this::auth)
-                    .bodyValue(Map.of("composed", composed))
-                    .retrieve().bodyToMono(String.class)
+            // RK-17/E-8：链段收敛 client；8s 超时保留
+            String raw = bridgeClient.postJson("/api/v1/itineraries/chat-weather", Map.of("composed", composed))
                     .block(Duration.ofSeconds(8));
             JsonNode data = mapper.readTree(raw).path("data");
             return data.isTextual() ? data.asText("") : "";
         } catch (Exception e) {
             log.debug("[ChatSupportBridge] weather 桥失败（降级空）: {}", e.getMessage());
             return "";
-        }
-    }
-
-    private void auth(org.springframework.http.HttpHeaders h) {
-        if (internalToken != null && !internalToken.isBlank()) {
-            h.set(GrayFlags.HEADER_INTERNAL_TOKEN, internalToken);
         }
     }
 }

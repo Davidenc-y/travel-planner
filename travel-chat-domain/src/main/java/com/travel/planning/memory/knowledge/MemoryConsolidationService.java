@@ -7,10 +7,13 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.model.ChatModel;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
+
+import io.micrometer.core.instrument.MeterRegistry;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -22,6 +25,7 @@ import java.util.Deque;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -62,6 +66,8 @@ public class MemoryConsolidationService {
     private final ChatModel lightModel;
     private final PromptTemplates promptTemplates;
     private final MemoryFacade memoryFacade;
+    /** RK-12/D-3：巩固可观测（可空 provider，测试直构传 null=无指标零影响） */
+    private final ObjectProvider<MeterRegistry> meterRegistryProvider;
     private final boolean enabled;
     private final int batchSize;
     private final boolean distillEnabled;
@@ -76,6 +82,7 @@ public class MemoryConsolidationService {
                                       @Qualifier("lightModel") ChatModel lightModel,
                                       PromptTemplates promptTemplates,
                                       MemoryFacade memoryFacade,
+                                      ObjectProvider<MeterRegistry> meterRegistryProvider,
                                       @Value("${travel.memory.consolidation.enabled:false}") boolean enabled,
                                       @Value("${travel.memory.consolidation.batch-size:20}") int batchSize,
                                       @Value("${travel.memory.consolidation.distill.enabled:false}") boolean distillEnabled) {
@@ -83,6 +90,7 @@ public class MemoryConsolidationService {
         this.lightModel = lightModel;
         this.promptTemplates = promptTemplates;
         this.memoryFacade = memoryFacade;
+        this.meterRegistryProvider = meterRegistryProvider;
         this.enabled = enabled;
         this.batchSize = Math.max(1, batchSize);
         this.distillEnabled = distillEnabled;
@@ -120,22 +128,27 @@ public class MemoryConsolidationService {
                     .limit(batchSize)
                     .toList();
         }
+        long dedupDeleted = 0;
+        long distillWritten = 0;
         for (String sessionId : sessionIds) {
             try {
-                consolidateSession(sessionId);
+                dedupDeleted += consolidateSession(sessionId);
             } catch (Exception e) {
                 log.warn("[MemoryConsolidation] 会话整合失败（跳过）: sessionId={}, error={}",
                         sessionId, e.getMessage());
             }
             if (distillEnabled) {
                 try {
-                    distillSession(sessionId);
+                    distillWritten += distillSession(sessionId);
                 } catch (Exception e) {
                     log.warn("[MemoryConsolidation] 会话蒸馏失败（跳过）: sessionId={}, error={}",
                             sessionId, e.getMessage());
                 }
             }
         }
+        // RK-12/D-3：批扫收尾日志契约
+        log.info("[MemoryConsolidation] sessions={} dedupDeleted={} distillWritten={}",
+                sessionIds.size(), dedupDeleted, distillWritten);
     }
 
     /**
@@ -166,6 +179,9 @@ public class MemoryConsolidationService {
         }
         if (deleted > 0) {
             log.info("[MemoryConsolidation] session={} dedup={}", sessionId, deleted);
+            // RK-12/D-3：去重删除计数（终态快照供 lambda 捕获）
+            final long deletedCount = deleted;
+            registryIfPresent().ifPresent(r -> r.counter("memory.consolidation.dedup.deleted").increment(deletedCount));
         }
         return deleted;
     }
@@ -304,7 +320,15 @@ public class MemoryConsolidationService {
                     "实体：" + String.join("、", entities), createdAt));
         }
         log.info("[MemoryConsolidation] session={} distill=1 entities={}", sessionId, entities.size());
+        // RK-12/D-3：蒸馏写入计数
+        registryIfPresent().ifPresent(r -> r.counter("memory.consolidation.distill.written").increment());
         return 1;
+    }
+
+    /** RK-12/D-3：registry provider 契约封装（可空/缺失=空 Optional，全流程零 NPE） */
+    private Optional<MeterRegistry> registryIfPresent() {
+        MeterRegistry registry = meterRegistryProvider != null ? meterRegistryProvider.getIfAvailable() : null;
+        return registry == null ? Optional.empty() : Optional.of(registry);
     }
 
     /** 组装蒸馏写入体（chunkId=sessionId:type:contentHash，与 SessionKnowledgeWriter 同口径） */

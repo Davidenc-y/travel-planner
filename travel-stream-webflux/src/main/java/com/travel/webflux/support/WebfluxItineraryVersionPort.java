@@ -2,13 +2,9 @@ package com.travel.webflux.support;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.travel.common.config.GrayFlags;
 import com.travel.planning.agent.support.ItineraryVersionPort;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Value;
-import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
-import org.springframework.web.reactive.function.client.WebClient;
 
 import java.time.Duration;
 import java.util.LinkedHashMap;
@@ -18,20 +14,20 @@ import java.util.Optional;
 /**
  * M13-2f：WebFlux(8083) 侧的 ItineraryVersionPort 实现——HTTP 桥接到
  * planning(8081) {@code /api/v1/itineraries/chat-writeback}。
+ *
+ * <p>RK-17/E-8：WebClient 构建段收敛至 {@link InternalBridgeClient}（头注入/序列化共享），
+ * 方法体仅保留 URI/超时(15s)/解析差异；对外行为字节等价。</p>
  */
 @Slf4j
 @Component
 public class WebfluxItineraryVersionPort implements ItineraryVersionPort {
 
-    private final WebClient webClient;
-    private final String internalToken;
-    private final ObjectMapper objectMapper = new ObjectMapper();
+    private final InternalBridgeClient bridgeClient;
+    private final ObjectMapper objectMapper;
 
-    public WebfluxItineraryVersionPort(
-            @Value("${travel.planning-base-url:http://localhost:8081}") String planningBaseUrl,
-            @Value("${travel.internal.token:}") String internalToken) {
-        this.webClient = WebClient.builder().baseUrl(planningBaseUrl).build();
-        this.internalToken = internalToken;
+    public WebfluxItineraryVersionPort(InternalBridgeClient bridgeClient) {
+        this.bridgeClient = bridgeClient;
+        this.objectMapper = bridgeClient.objectMapper();
     }
 
     @Override
@@ -49,18 +45,8 @@ public class WebfluxItineraryVersionPort implements ItineraryVersionPort {
         payload.put("routePlanJson", routePlanJson);
         payload.put("budgetJson", budgetJson);
         try {
-            String raw = webClient.post()
-                    .uri("/api/v1/itineraries/chat-writeback")
-                    .contentType(MediaType.APPLICATION_JSON)
-                    .headers(h -> {
-                        // M21-2（SEC-02-02）：进程间共享内部令牌（与 planning 侧 travel.internal.token 同源）
-                        if (internalToken != null && !internalToken.isBlank()) {
-                            h.set(GrayFlags.HEADER_INTERNAL_TOKEN, internalToken);
-                        }
-                    })
-                    .bodyValue(payload)
-                    .retrieve()
-                    .bodyToMono(String.class)
+            // RK-17/E-8：链段收敛 client（contentType/头注入/bodyValue 同链；15s 超时保留本方法体）
+            String raw = bridgeClient.postJson("/api/v1/itineraries/chat-writeback", payload)
                     .block(Duration.ofSeconds(15));
             JsonNode root = objectMapper.readTree(raw);
             if (root == null || root.path("code").asInt(0) != 200

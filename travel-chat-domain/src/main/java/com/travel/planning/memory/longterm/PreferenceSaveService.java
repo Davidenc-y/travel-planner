@@ -32,13 +32,13 @@ public class PreferenceSaveService {
     // M3-20：Prompt 模板外置（P1-17）
     private final PromptTemplates promptTemplates;
     // M18-1：词表单源
-    private final com.travel.planning.config.ChatWordLists wordLists;
+    private final com.travel.common.config.ChatWordLists wordLists;
 
     public PreferenceSaveService(@Qualifier("lightModel") ChatModel lightModel,
                                  ProfilePort profilePort,
                                  LlmGovernor llmGovernor,
                                  PromptTemplates promptTemplates,
-                                 com.travel.planning.config.ChatWordLists wordLists) {
+                                 com.travel.common.config.ChatWordLists wordLists) {
         this.lightModel = lightModel;
         this.profilePort = profilePort;
         this.llmGovernor = llmGovernor;

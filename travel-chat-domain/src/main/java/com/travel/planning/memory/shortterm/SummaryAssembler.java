@@ -4,6 +4,7 @@ import com.travel.common.entity.ChatMessage;
 import com.travel.common.util.JsonUtils;
 import com.travel.memory.shortterm.SessionMemoryPort;
 import com.travel.memory.shortterm.ShortTermMemoryProperties;
+import com.travel.memory.shortterm.SummaryStorePort;
 import com.travel.memory.shortterm.WindowComposer;
 import com.travel.memory.config.LlmGovernor;
 import com.travel.memory.prompt.PromptTemplates;
@@ -11,9 +12,6 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
-import org.springframework.core.io.ClassPathResource;
-import org.springframework.data.redis.core.StringRedisTemplate;
-import org.springframework.data.redis.core.script.DefaultRedisScript;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
@@ -39,7 +37,7 @@ import java.util.function.Supplier;
 public class SummaryAssembler {
 
     private final ChatModel chatModel;
-    private final StringRedisTemplate redisTemplate;
+    private final SummaryStorePort summaryStore;
     private final ShortTermMemoryProperties props;
     // F75/B3-5：LLM 调用统一治理（后台摘要纳入并发许可）
     private final LlmGovernor llmGovernor;
@@ -55,13 +53,13 @@ public class SummaryAssembler {
     private com.travel.planning.memory.focus.DetourWordMatcher detourWordMatcher;
 
     public SummaryAssembler(@Qualifier("lightModel") ChatModel chatModel,
-                            StringRedisTemplate redisTemplate,
+                            SummaryStorePort summaryStore,
                             ShortTermMemoryProperties props,
                             LlmGovernor llmGovernor,
                             PromptTemplates promptTemplates,
                             WindowComposer windowComposer) {
         this.chatModel = chatModel;
-        this.redisTemplate = redisTemplate;
+        this.summaryStore = summaryStore;
         this.props = props;
         this.llmGovernor = llmGovernor;
         this.promptTemplates = promptTemplates;
@@ -72,15 +70,6 @@ public class SummaryAssembler {
      * M4-1a/P0-1：摘要双 key CAS 原子写入脚本（版本冲突放弃，滚动/收口共用）。
      * 语义见 resources/lua/save_summary_cas.lua。
      */
-    private static final DefaultRedisScript<Long> SAVE_SUMMARY_CAS = buildCasScript();
-
-    private static DefaultRedisScript<Long> buildCasScript() {
-        DefaultRedisScript<Long> script = new DefaultRedisScript<>();
-        script.setLocation(new ClassPathResource("lua/save_summary_cas.lua"));
-        script.setResultType(Long.class);
-        return script;
-    }
-
     /** M24（E3）闸门 3：摘要输入剔除 DETOUR 轮（确定性重评：用户消息命中→该轮 user+紧随 assistant 一并剔除）。 */
     static java.util.List<ChatMessage> filterDetourTurns(java.util.List<ChatMessage> messages,
                                                          java.util.function.Predicate<String> detourPredicate) {
@@ -115,8 +104,8 @@ public class SummaryAssembler {
         if (sessionId == null || sessionId.isBlank()) {
             return new SessionMemoryPort.SummaryInfo("", null, 0);
         }
-        String text = redisTemplate.opsForValue().get(summaryKey(sessionId));
-        String metaJson = redisTemplate.opsForValue().get(summaryMetaKey(sessionId));
+        String text = summaryStore.loadSummaryText(sessionId);
+        String metaJson = summaryStore.loadSummaryMeta(sessionId);
         Long lastMessageId = null;
         int version = 0;
         if (metaJson != null) {
@@ -380,10 +369,9 @@ public class SummaryAssembler {
             meta.put("summaryType", summaryType);
         }
         long ttlSeconds = TimeUnit.DAYS.toSeconds(props.getSummaryTtlDays());
-        Long r = redisTemplate.execute(SAVE_SUMMARY_CAS,
-                List.of(summaryKey(sessionId), summaryMetaKey(sessionId)),
-                String.valueOf(expectedVersion), text, JsonUtils.toJson(meta), String.valueOf(ttlSeconds));
-        if (r == null || r != 1L) {
+        boolean written = summaryStore.saveSummaryCas(sessionId, expectedVersion, text,
+                JsonUtils.toJson(meta), ttlSeconds);
+        if (!written) {
             log.warn("[SessionMemory] 摘要版本冲突放弃写入: sessionId={}, expectedVersion={}",
                     sessionId, expectedVersion);
             return false;
@@ -395,26 +383,15 @@ public class SummaryAssembler {
         Map<String, Object> meta = new LinkedHashMap<>();
         meta.put("lastMessageId", lastMessageId);
         meta.put("version", version);
-        redisTemplate.opsForValue().set(summaryKey(sessionId), text,
-                props.getSummaryTtlDays(), TimeUnit.DAYS);
-        redisTemplate.opsForValue().set(summaryMetaKey(sessionId), JsonUtils.toJson(meta),
-                props.getSummaryTtlDays(), TimeUnit.DAYS);
+        summaryStore.saveSummaryPair(sessionId, text, JsonUtils.toJson(meta),
+                props.getSummaryTtlDays());
     }
 
     private void refreshTtl(String sessionId) {
         String text = getSummaryInfo(sessionId).text();
         if (!text.isBlank()) {
-            redisTemplate.expire(summaryKey(sessionId), props.getSummaryTtlDays(), TimeUnit.DAYS);
-            redisTemplate.expire(summaryMetaKey(sessionId), props.getSummaryTtlDays(), TimeUnit.DAYS);
+            summaryStore.refreshTtl(sessionId, props.getSummaryTtlDays());
         }
-    }
-
-    private String summaryKey(String sessionId) {
-        return "session:" + sessionId + ":summary";
-    }
-
-    private String summaryMetaKey(String sessionId) {
-        return "session:" + sessionId + ":summary:meta";
     }
 
     private String buildFullText(List<ChatMessage> messages, int maxChars) {

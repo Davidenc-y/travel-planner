@@ -1,4 +1,4 @@
-package com.travel.memory.repository;
+package com.travel.common.repository;
 
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
 import com.travel.common.entity.AgentTrace;
@@ -10,7 +10,12 @@ import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
 
-/** Agent 追溯 Mapper（t_agent_trace，F89） */
+/**
+ * RK-15：t_agent_trace 唯一 Mapper（原 memory/knowledge 双副本收敛）。
+ *
+ * <p>方法面=原 memory 副本超集逐字搬移（BaseMapper + E-5b 两 @Select；
+ * knowledge 副本原为纯 BaseMapper 子集）；E-5 由三应用 @MapperScan 增补本包。</p>
+ */
 @Mapper
 public interface AgentTraceMapper extends BaseMapper<AgentTrace> {
 

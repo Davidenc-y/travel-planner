@@ -1,6 +1,6 @@
 package com.travel.planning.service;
 
-import com.travel.memory.repository.AgentTraceMapper;
+import com.travel.common.repository.AgentTraceMapper;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 

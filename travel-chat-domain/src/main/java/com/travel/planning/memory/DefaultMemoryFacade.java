@@ -3,6 +3,7 @@ package com.travel.planning.memory;
 import com.travel.common.entity.TravelProfile;
 import com.travel.common.entity.UserBehaviorProfile;
 import com.travel.memory.anchor.SessionAnchorStore;
+import com.travel.memory.knowledge.FactConsolidatorPort;
 import com.travel.memory.knowledge.dto.ConsensusEntry;
 import com.travel.planning.memory.knowledge.SessionFactConsolidator;
 import com.travel.memory.longterm.behavior.BehaviorProfileService;
@@ -37,7 +38,8 @@ public class DefaultMemoryFacade implements MemoryFacade {
     private final SessionAnchorStore sessionAnchorStore;
     private final TravelProfileService travelProfileService;
     private final SessionMemoryPort sessionMemoryPort;
-    private final SessionFactConsolidator sessionFactConsolidator;
+    /** RK-11/D-2：类型改 Port（实现仍为 SessionFactConsolidator，@RequiredArgsConstructor 按类型注入） */
+    private final FactConsolidatorPort sessionFactConsolidator;
     private final BehaviorProfileService behaviorProfileService;
 
     @Override

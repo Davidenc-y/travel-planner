@@ -1,19 +1,21 @@
-package com.travel.planning.config;
+package com.travel.common.config;
 
 import com.travel.common.config.ChatIntent;
 import com.travel.common.util.JsonUtils;
 
 import lombok.Data;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnResource;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.boot.context.properties.bind.Binder;
 import org.springframework.boot.env.YamlPropertySourceLoader;
 import org.springframework.core.env.PropertySource;
 import org.springframework.core.env.StandardEnvironment;
-import org.springframework.core.io.ClassPathResource;
+import org.springframework.core.io.ByteArrayResource;
 import org.springframework.stereotype.Component;
 
 import jakarta.annotation.PostConstruct;
+import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.EnumMap;
 import java.util.HashSet;
@@ -38,6 +40,11 @@ import java.util.regex.PatternSyntaxException;
 @Slf4j
 @Data
 @Component
+// RK-14 审计修复（2026-09-20）：该词表单源 yml 物理位于 travel-chat-domain jar
+// （application-chat.yml）。迁移入 common 后落入 knowledge 的 com.travel.common 组件扫描范围，
+// 而 knowledge 不依赖 chat-domain（类路径无该 yml → 绑定空词表 → fail-fast 拒启，K-4 镜像场景）。
+// 以资源在类路径存在为装配条件：planning/webflux（依赖 chat-domain）成立，knowledge 自动跳过。
+@ConditionalOnResource(resources = "classpath:application-chat.yml")
 @ConfigurationProperties(prefix = "travel.chat.word-lists")
 public class ChatWordLists {
 
@@ -156,8 +163,15 @@ public class ChatWordLists {
     public static ChatWordLists fromShippedYml() {
         try {
             YamlPropertySourceLoader loader = new YamlPropertySourceLoader();
-            List<PropertySource<?>> sources = loader.load(
-                    "application-chat", new ClassPathResource("application-chat.yml"));
+            // RK-14/E-0：ClassPathResource（文件语义）在嵌套 fat-jar（BOOT-INF/lib/*.jar）内不可解析，
+            // 改类路径流读取 + ByteArrayResource（先例 PromptFiles.getResourceAsStream）；loader/键名/后续逻辑不变
+            List<PropertySource<?>> sources;
+            try (InputStream in = ChatWordLists.class.getResourceAsStream("/application-chat.yml")) {
+                if (in == null) {
+                    throw new IllegalStateException("application-chat.yml 不在 classpath（流读取路径）");
+                }
+                sources = loader.load("application-chat", new ByteArrayResource(in.readAllBytes()));
+            }
             StandardEnvironment env = new StandardEnvironment();
             sources.forEach(ps -> env.getPropertySources().addFirst(ps));
             ChatWordLists lists = Binder.get(env)

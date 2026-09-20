@@ -73,16 +73,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setUserId(Number(savedUserId));
         setUsername(savedUsername);
         // F121：登录态下异步拉取用户资料（含头像），失败静默（保持首字占位）
-        userApi.me()
-          .then((res) => {
-            const d = res.data.data;
-            if (d) {
-              setAvatar(d.avatar || null);
-              if (d.username) setUsername(d.username);
-              setIsAdmin(!!d.admin);
-            }
-          })
-          .catch(() => {});
+        applyMe();
         // F93：老会话（cookie 双写前登录）只有 localStorage，无 accessToken cookie，
         // middleware 读不到 cookie 会把 /itinerary 等 307 到登录页；挂载时同步补写 cookie。
         setAuthCookie(savedToken);
@@ -107,29 +98,27 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setUsername(username);
       setIsAdmin(false);
       setAvatar(null);
-    userApi.me()
-      .then((res) => {
-        const d = res.data.data;
-        if (d) {
-          setAvatar(d.avatar || null);
-          if (d.username) setUsername(d.username);
-          setIsAdmin(!!d.admin);
-        }
-      })
-      .catch(() => {});
+    applyMe();
   };
 
-  const refreshUser = async () => {
+  // RK-18/E-11：三处 userApi.me() 收敛单源（mount/login/refreshUser 共用；
+  // refreshUser 收敛后 setIsAdmin 随之刷新——原仅 avatar/username，属收敛一致化 R31）
+  const applyMe = async () => {
     try {
       const res = await userApi.me();
       const d = res.data.data;
       if (d) {
         setAvatar(d.avatar || null);
         if (d.username) setUsername(d.username);
+        setIsAdmin(!!d.admin);
       }
     } catch {
       // 静默：刷新失败保持现状
     }
+  };
+
+  const refreshUser = async () => {
+    await applyMe();
   };
 
   const logout = () => {

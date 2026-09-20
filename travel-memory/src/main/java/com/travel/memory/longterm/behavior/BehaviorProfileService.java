@@ -4,7 +4,7 @@ import com.travel.common.entity.UserBehaviorProfile;
 import com.travel.common.entity.AgentTrace;
 import com.travel.common.entity.ChatSession;
 import com.travel.common.util.JsonUtils;
-import com.travel.memory.repository.AgentTraceMapper;
+import com.travel.common.repository.AgentTraceMapper;
 import com.travel.memory.repository.ChatSessionMapper;
 import com.travel.memory.repository.UserBehaviorProfileMapper;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;

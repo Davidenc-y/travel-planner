@@ -115,6 +115,7 @@ travel:
       top-k: 8
     attraction-candidates:
       top-k: 5
+      low-confidence-policy: filter   # filter=滤除低置信并拒答；keep=回退旧行为（全量注入）
     # M4-5a：在线相关性 Judge（默认关；fail-open：异常/超时/解析失败一律放行）
     judge:
       enabled: false

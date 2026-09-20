@@ -3,6 +3,7 @@ package com.travel.planning.controller;
 import com.travel.common.config.GrayReleaseManager;
 import com.travel.common.exception.BusinessException;
 import com.travel.common.result.R;
+import com.travel.planning.memory.knowledge.RagQualityCounters;
 import com.travel.planning.service.AdminAccessService;
 import com.travel.planning.service.DataQualityService;
 import com.travel.planning.service.ReliabilityStatsService;
@@ -10,6 +11,7 @@ import com.travel.planning.service.TurnLatencyService;
 import com.travel.planning.util.AuthUtils;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PutMapping;
@@ -17,6 +19,10 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.time.LocalDate;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -36,6 +42,8 @@ public class AdminReliabilityController {
     private final DataQualityService dataQualityService;
     /** E-5b：慢轮次端点聚合（t_agent_trace 按模型百分位+Top 明细）。 */
     private final TurnLatencyService turnLatencyService;
+    /** RK-13/D-5：RAG 质量指标 Redis 读（键前缀=chat-domain RagQualityCounters.KEY_PREFIX 唯一权威源）。 */
+    private final StringRedisTemplate stringRedisTemplate;
 
     @GetMapping("/stats")
     public R<Map<String, Object>> stats(@RequestParam(defaultValue = "7") Integer days) {
@@ -44,6 +52,49 @@ public class AdminReliabilityController {
             throw new BusinessException(40302, "无权访问可靠性看板");
         }
         return R.ok(reliabilityStatsService.stats(days == null ? 7 : days));
+    }
+
+    /** RK-13/D-5：RAG 线上质量指标（近 7 日三指标聚合，Redis 日分片键 0 缺省；只读）。 */
+    @GetMapping("/rag-quality")
+    public R<Map<String, Object>> ragQuality() {
+        Long userId = AuthUtils.resolveUserId();
+        if (!adminAccessService.isAdmin(userId)) {
+            throw new BusinessException(40302, "无权访问可靠性看板");
+        }
+        LocalDate today = LocalDate.now();
+        List<String> days = new ArrayList<>();
+        Map<String, List<Long>> metrics = new LinkedHashMap<>();
+        for (String metric : List.of("abstain", "lowconf", "degraded")) {
+            metrics.put(metric, new ArrayList<>());
+        }
+        for (int i = 6; i >= 0; i--) {
+            String day = today.minusDays(i).toString();
+            days.add(day);
+            for (Map.Entry<String, List<Long>> e : metrics.entrySet()) {
+                String v = stringRedisTemplate.opsForValue()
+                        .get(RagQualityCounters.KEY_PREFIX + day + ":" + e.getKey());
+                e.getValue().add(parse0(v));
+            }
+        }
+        Map<String, Object> totals = new LinkedHashMap<>();
+        metrics.forEach((k, v) -> totals.put(k, v.stream().mapToLong(Long::longValue).sum()));
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("days", days);
+        body.put("metrics", metrics);
+        body.put("totals", totals);
+        return R.ok(body);
+    }
+
+    /** 0 缺省解析（键缺失=0；非数值容错 0） */
+    private static long parse0(String v) {
+        if (v == null || v.isBlank()) {
+            return 0L;
+        }
+        try {
+            return Long.parseLong(v.trim());
+        } catch (NumberFormatException e) {
+            return 0L;
+        }
     }
 
     /** MI-6：灰度开关快照（只读，不含动态写——动态切换留人工批次）。 */

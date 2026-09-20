@@ -78,4 +78,7 @@ public class SearchResult {
 
     /** 数据源（amap/manual/enrich；M8-4 后可含 web_enrich） */
     private String dataSource;
+
+    /** RK-8：确定性冲突检测提示（可空；null=零行为，检测开关 conflict-detect-enabled 控制写入） */
+    private String conflictNote;
 }

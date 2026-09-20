@@ -11,6 +11,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
 
 /**
  * 知识库预检索服务（F63）。
@@ -37,6 +38,12 @@ public class KnowledgeRetrievalService {
 
     private final KnowledgeSearchPort knowledgeClient;
 
+    /** RK-1：low-confidence-policy 注入策略（filter=滤除低置信候选；keep=旧全量注入行为） */
+    private final RagInjectionPolicy injectionPolicy;
+
+    /** RK-13/D-5：线上质量计数器（abstain/lowconf/degraded，fail-open） */
+    private final RagQualityCounters ragQualityCounters;
+
     /**
      * 检索候选景点并返回紧凑 JSON 数组（结构化事实卡片）；
      * 失败/空返回 "[]"，不阻断流程。
@@ -51,7 +58,14 @@ public class KnowledgeRetrievalService {
                 return "[]";
             }
             List<Map<String, Object>> compact = new ArrayList<>();
+            int lowConfidenceDropped = 0;
             for (Map<String, Object> item : resp.getData()) {
+                // RK-1：filter 策略丢弃 RerankGate 标记的低置信候选（keep=旧全量注入行为）
+                if (injectionPolicy.isFilterEnabled() && Boolean.TRUE.equals(item.get("lowConfidence"))) {
+                    lowConfidenceDropped++;
+                    ragQualityCounters.recordLowConfidenceDropped(1);
+                    continue;
+                }
                 Map<String, Object> c = new LinkedHashMap<>();
                 c.put("docId", item.get("docId"));
                 c.put("name", item.get("title"));
@@ -62,6 +76,8 @@ public class KnowledgeRetrievalService {
                 putIfNotNull(c, "recommendedDuration", item.get("recommendedDuration"));
                 putIfNotNull(c, "rating", item.get("rating"));
                 putIfNotNull(c, "dataSource", item.get("dataSource"));
+                // RK-8：冲突标注透传（null=无冲突不注入）
+                putIfNotNull(c, "conflictNote", item.get("conflictNote"));
                 // freeEntry=true 显式计 0 元，避免 LLM 对免费景点编造价格
                 if (Boolean.TRUE.equals(item.get("freeEntry"))) {
                     c.put("ticketPrice", 0);
@@ -73,6 +89,18 @@ public class KnowledgeRetrievalService {
                         ? snippet.substring(0, SNIPPET_MAX) + "…" : snippet);
                 compact.add(c);
             }
+            // RK-1：低置信过滤统计与全滤拒答语义（模板 rag_abstain_note 由 RK-2/A-3 落盘，同批推送）
+            if (injectionPolicy.isFilterEnabled() && lowConfidenceDropped > 0) {
+                log.info("[RagInjection] lowConfidenceDropped={} kept={}", lowConfidenceDropped, compact.size());
+                if (compact.isEmpty()) {
+                    // 全部低置信 → 拒答语义：空资料 + 拒答指引，并按既有降级方式记录原因
+                    if (TraceContext.active()) {
+                        TraceContext.current().degradedReason = "rag_all_low_confidence";
+                    }
+                    ragQualityCounters.recordAbstain();
+                    return com.travel.common.util.PromptFiles.get("rag_abstain_note");
+                }
+            }
             log.info("[KnowledgeRetrieval] 候选景点 {} 条: query={}", compact.size(), query);
             // M8-2：候选 JSON 前追加数据来源说明（一次改动同时覆盖聊天与行程图注入路径）
             String json = JsonUtils.toJson(compact);
@@ -83,10 +111,20 @@ public class KnowledgeRetrievalService {
                 // M18-2：低置信提示外置 prompts/web_enrich_notice.st
                 json += com.travel.common.util.PromptFiles.get("web_enrich_notice");
             }
+            // RK-8：存在冲突标注时追加冲突呈现段（rag_conflict_note，{conflicts}="名称：提示"逐行）
+            String conflicts = compact.stream()
+                    .filter(c -> c.get("conflictNote") != null)
+                    .map(c -> c.get("name") + "：" + c.get("conflictNote"))
+                    .collect(Collectors.joining("\n"));
+            if (!conflicts.isEmpty()) {
+                json += com.travel.common.util.PromptFiles.get("rag_conflict_note")
+                        .replace("{conflicts}", conflicts);
+            }
             return SOURCE_NOTE + "\n" + json;
         } catch (Exception e) {
             log.warn("[KnowledgeRetrieval] 检索失败，降级空候选: {}", e.getMessage());
             markDegraded("knowledge_feign_fail", query);
+            ragQualityCounters.recordDegraded();
             return "[]";
         }
     }

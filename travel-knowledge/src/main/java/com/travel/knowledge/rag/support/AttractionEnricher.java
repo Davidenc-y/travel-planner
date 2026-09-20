@@ -128,6 +128,12 @@ public class AttractionEnricher {
                 r.setDataSource(a.getSource());
                 filled++;
             }
+            // RK-8：记录内确定性矛盾检测（零 LLM；conflict-detect-enabled 开关，false=不检测全 null）
+            if (properties.isConflictDetectEnabled()) {
+                for (SearchResult r : results) {
+                    r.setConflictNote(detectConflict(r));
+                }
+            }
             log.info("[Enrich] 结构化补全完成: 候选={} 条, 命中事实源={} 条", results.size(), filled);
             // M8-4：本地字段缺失时的联网兜底（仅 openHours/ticketPrice；默认关）
             if (webSearchPort != null && webSearchProperties != null
@@ -142,6 +148,25 @@ public class AttractionEnricher {
             }
         }
         return results;
+    }
+
+    /**
+     * RK-8：记录内确定性矛盾检测（零 LLM）。规则：
+     * 1) freeEntry=true 且 ticketPrice&gt;0；2) description 含"免费"且 ticketPrice&gt;0；
+     * 3) description 含"闭馆/维修/暂停"字样。命中即写 conflictNote（一句话）。
+     */
+    private String detectConflict(SearchResult r) {
+        String desc = r.getSnippet() == null ? "" : r.getSnippet();
+        if (Boolean.TRUE.equals(r.getFreeEntry()) && r.getTicketPrice() != null && r.getTicketPrice() > 0) {
+            return "免费标记与票价(" + r.getTicketPrice() + "元)不一致";
+        }
+        if (desc.contains("免费") && r.getTicketPrice() != null && r.getTicketPrice() > 0) {
+            return "描述称免费与票价(" + r.getTicketPrice() + "元)不一致";
+        }
+        if (desc.contains("闭馆") || desc.contains("维修中") || desc.contains("暂停开放")) {
+            return "描述含闭馆/维修/暂停开放字样，出行前需核实";
+        }
+        return null;
     }
 
     /** docId → t_attraction.id；非数字容错返回 null（该条跳过补全） */

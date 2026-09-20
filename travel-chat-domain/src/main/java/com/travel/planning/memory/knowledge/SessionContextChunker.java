@@ -1,7 +1,7 @@
 package com.travel.planning.memory.knowledge;
 
 import com.travel.common.util.JsonUtils;
-import com.travel.planning.config.ChatWordLists;
+import com.travel.common.config.ChatWordLists;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 

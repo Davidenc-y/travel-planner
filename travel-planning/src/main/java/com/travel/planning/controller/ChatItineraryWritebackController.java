@@ -1,12 +1,11 @@
 package com.travel.planning.controller;
 
 import com.travel.common.config.GrayFlags;
-import com.travel.common.exception.BusinessException;
 import com.travel.common.result.R;
+import com.travel.common.web.support.InternalTokenSupport;
 import com.travel.planning.agent.support.ItineraryVersionPort;
 import com.travel.planning.service.ItineraryVersionPortImpl;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
@@ -28,12 +27,13 @@ import java.util.Map;
 public class ChatItineraryWritebackController {
 
     private final ItineraryVersionPort itineraryVersionPort;
-    private final String internalToken;
+    /** RK-16：内部令牌校验单点（原内联校验块收敛，语义逐字） */
+    private final InternalTokenSupport internalTokenSupport;
 
     public ChatItineraryWritebackController(ItineraryVersionPort itineraryVersionPort,
-                                            @Value("${travel.internal.token:}") String internalToken) {
+                                            InternalTokenSupport internalTokenSupport) {
         this.itineraryVersionPort = itineraryVersionPort;
-        this.internalToken = internalToken;
+        this.internalTokenSupport = internalTokenSupport;
     }
 
     @PostMapping("/chat-writeback")
@@ -41,10 +41,7 @@ public class ChatItineraryWritebackController {
                                  @RequestBody Map<String, Object> body) {
         // M21-2（SEC-02-02）：桥端点仅接受携带共享内部令牌的进程间调用（fail-closed：
         // 服务端未配置或请求头缺失/不匹配一律拒绝），不再对任意登录用户开放、不再信任 body.userId 身份。
-        if (internalToken == null || internalToken.isBlank()
-                || headerToken == null || !internalToken.equals(headerToken)) {
-            throw new BusinessException(40101, "内部调用凭证缺失或不匹配");
-        }
+        internalTokenSupport.requireValid(headerToken);
         Long userId = body.get("userId") instanceof Number n ? n.longValue() : null;
         String sessionId = asString(body.get("sessionId"));
         String userInput = asString(body.get("userInput"));

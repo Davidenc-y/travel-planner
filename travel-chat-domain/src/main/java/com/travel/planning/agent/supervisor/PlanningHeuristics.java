@@ -1,6 +1,6 @@
 package com.travel.planning.agent.supervisor;
 
-import com.travel.planning.config.ChatWordLists;
+import com.travel.common.config.ChatWordLists;
 import com.travel.common.prompt.Markers;
 import org.springframework.stereotype.Component;
 

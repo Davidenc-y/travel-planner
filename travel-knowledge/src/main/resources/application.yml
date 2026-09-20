@@ -194,6 +194,9 @@ travel:
       amap: 0.9
       manual: 0.8
       web_enrich: 0.5
+      # RK-9：权威裁决 tie-break（默认关=E-33 字节等价；epsilon=相邻并列相对差阈值）
+      tie-break-enabled: false
+      tie-break-epsilon: 0.05
     # B1.2：RAG 查询级进程内 TTL 缓存（默认开可关；hit 直接返回，miss 走原逻辑后写入）
     query-cache:
       enabled: true
@@ -221,6 +224,8 @@ travel:
     # M8-1：检索结果结构化补全（false 时 AttractionEnricher 直通，行为回到 M8-1 之前）
     enrichment:
       enabled: true
+      # RK-8：确定性冲突检测（E-40 授权默认开+低置信契约同理由；false=一键回退零行为）
+      conflict-detect-enabled: true
     # M8-4：MCP 联网搜索兜底（默认关；灰度开启后仅本地缺失字段触发，限频+熔断+超时）
     web-search:
       enabled: false
@@ -281,6 +286,11 @@ travel:
     parallelism: 4                 # F119：ETL 并行度（1~8）
     embedding-qps: 4               # F119：DashScope Embedding 全局节流（次/秒）
     timeout-ms: 60000              # F119：单条 ETL 节流等待兜底（毫秒）
+    # RK-4：内容 hash 对账扫描（默认关，E-33 纯净；RK-5 重灌时临时置 true，验证完回关）
+    change-scan:
+      enabled: false
+      batch-size: 500
+      interval-ms: 86400000
   # F90：用户面端点限流（按 userId+接口，每分钟）
   rate-limit:
     per-minute: 100

@@ -3,7 +3,7 @@ package com.travel.planning.memory.chat;
 import com.travel.common.config.ChatIntent;
 
 import com.travel.common.util.JsonUtils;
-import com.travel.planning.config.ChatWordLists;
+import com.travel.common.config.ChatWordLists;
 import com.travel.memory.prompt.PromptTemplates;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.model.ChatModel;

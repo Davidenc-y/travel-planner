@@ -258,7 +258,7 @@ public class AttractionEtlService {
     /**
      * 构建景点内容文本（用于 Embedding）
      */
-    private String buildContent(Attraction a) {
+    String buildContent(Attraction a) {
         return String.format("""
                 名称：%s
                 城市：%s
@@ -273,6 +273,19 @@ public class AttractionEtlService {
                 a.getName(), a.getCity(), a.getType(), a.getDescription(),
                 a.getAddress(), a.getOpenHours(), a.getTicketPrice(),
                 a.getRating(), a.getRecommendedDuration(), a.getTags());
+    }
+
+    /** RK-4：ETL 内容指纹（与 buildContent 同基准），写入 ES 动态字段 contentHash 供变更对账。 */
+    static String contentHashOf(String content) {
+        try {
+            java.security.MessageDigest md = java.security.MessageDigest.getInstance("SHA-256");
+            byte[] d = md.digest(content.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            StringBuilder sb = new StringBuilder();
+            for (byte b : d) sb.append(String.format("%02x", b));
+            return sb.toString();
+        } catch (java.security.NoSuchAlgorithmException e) {
+            throw new IllegalStateException(e);
+        }
     }
 
     /**
@@ -318,6 +331,8 @@ public class AttractionEtlService {
         doc.put("imageUrl", a.getImageUrl() == null ? "" : a.getImageUrl());
         // F-1（P0）：写入 source 权威度标记，与 MR2 重灌脚本口径一致
         doc.put("source", mapSource(a.getSource()));
+        // RK-4：内容指纹入 ES（Milvus 不加字段——collection 无法加列，重灌时由 etlOne 一并刷新）
+        doc.put("contentHash", contentHashOf(content));
 
         // M3-3：统一经 EsDocumentStore 写入
         esStore.index(ES_INDEX, docId, doc);

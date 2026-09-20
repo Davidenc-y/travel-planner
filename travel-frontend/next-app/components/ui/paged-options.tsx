@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { ChevronDown, ChevronLeft, ChevronRight } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { DEFAULT_PAGE_SIZE_OPTIONS } from '@/lib/constants';
 
 export interface PagedOption {
   value: string;
@@ -38,7 +39,7 @@ export function PagedOptions({
   onToggle,
   placeholder = '请选择',
   defaultPageSize = 10,
-  pageSizeOptions = [10, 20, 50],
+  pageSizeOptions = DEFAULT_PAGE_SIZE_OPTIONS,
   multiple = true,
   dropUp = false,
   compact = false,

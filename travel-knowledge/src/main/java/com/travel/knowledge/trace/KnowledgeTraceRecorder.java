@@ -2,7 +2,7 @@ package com.travel.knowledge.trace;
 
 import com.travel.aigateway.route.ModelRoutingContext;
 import com.travel.common.entity.AgentTrace;
-import com.travel.knowledge.repository.AgentTraceMapper;
+import com.travel.common.repository.AgentTraceMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;

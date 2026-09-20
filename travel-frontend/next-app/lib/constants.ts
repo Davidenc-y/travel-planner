@@ -58,3 +58,9 @@ export const STREAM_MARKDOWN_PREF_KEY = 'travel.chat.stream-markdown';
 
 /** R3（02-11 §10.2-R4）：行程列表 GENERATING 轮询间隔（M6-54 语义：仅生成中轮询，完成即停） */
 export const ITINERARY_POLL_INTERVAL_MS = 3000;
+
+/** RK-18/E-11：分页可选页幅（itinerary 页现状 [8,10,20,50] 具名化） */
+export const PAGE_SIZE_OPTIONS = [8, 10, 20, 50];
+
+/** RK-18/E-11：分页组件默认页幅（paged-options 现状 [10,20,50] 具名化；与上者现状默认不同，按 03 两具名常量保留） */
+export const DEFAULT_PAGE_SIZE_OPTIONS = [10, 20, 50];

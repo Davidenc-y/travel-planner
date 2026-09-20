@@ -18,4 +18,7 @@ public class RagEnrichmentProperties {
 
     /** 检索结果结构化补全开关（false 时 enrich 直通） */
     private boolean enabled = true;
+
+    /** RK-8：记录内确定性矛盾检测开关（E-40 授权默认开；false=一键回退零行为，conflictNote 全 null） */
+    private boolean conflictDetectEnabled = true;
 }

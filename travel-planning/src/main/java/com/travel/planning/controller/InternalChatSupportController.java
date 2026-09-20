@@ -1,14 +1,13 @@
 package com.travel.planning.controller;
 
 import com.travel.common.config.GrayFlags;
-import com.travel.common.exception.BusinessException;
+import com.travel.common.web.support.InternalTokenSupport;
 import com.travel.common.result.R;
 import com.travel.planning.agent.support.ChatWeatherContextPort;
 import com.travel.memory.anchor.ItineraryBrief;
 import com.travel.memory.anchor.ItineraryBriefPort;
 import com.travel.planning.service.ItineraryService;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -46,23 +45,17 @@ public class InternalChatSupportController {
     private final ItineraryService itineraryService;
     private final ItineraryBriefPort itineraryBriefPort;
     private final ChatWeatherContextPort chatWeatherContextPort;
-    private final String internalToken;
+    /** RK-16：内部令牌校验单点（原 requireInternalToken 私有方法收敛，语义逐字） */
+    private final InternalTokenSupport internalTokenSupport;
 
     public InternalChatSupportController(ItineraryService itineraryService,
                                          ItineraryBriefPort itineraryBriefPort,
                                          ChatWeatherContextPort chatWeatherContextPort,
-                                         @Value("${travel.internal.token:}") String internalToken) {
+                                         InternalTokenSupport internalTokenSupport) {
         this.itineraryService = itineraryService;
         this.itineraryBriefPort = itineraryBriefPort;
         this.chatWeatherContextPort = chatWeatherContextPort;
-        this.internalToken = internalToken;
-    }
-
-    private void requireInternalToken(String headerToken) {
-        if (internalToken == null || internalToken.isBlank()
-                || headerToken == null || !internalToken.equals(headerToken)) {
-            throw new BusinessException(40101, "内部调用凭证缺失或不匹配");
-        }
+        this.internalTokenSupport = internalTokenSupport;
     }
 
     /**
@@ -80,7 +73,7 @@ public class InternalChatSupportController {
     public R<ItineraryBrief> brief(@RequestParam Long itineraryId,
                                    @RequestParam Long userId,
                                    @RequestHeader(value = GrayFlags.HEADER_INTERNAL_TOKEN, required = false) String headerToken) {
-        requireInternalToken(headerToken);
+        internalTokenSupport.requireValid(headerToken);
         return R.ok(itineraryBriefPort.briefOf(userId, itineraryId).orElse(null));
     }
 
@@ -88,7 +81,7 @@ public class InternalChatSupportController {
     @GetMapping("/chat-session-itineraries")
     public R<List<Long>> sessionItineraries(@RequestParam String sessionId,
                                             @RequestHeader(value = GrayFlags.HEADER_INTERNAL_TOKEN, required = false) String headerToken) {
-        requireInternalToken(headerToken);
+        internalTokenSupport.requireValid(headerToken);
         return R.ok(itineraryService.findSessionItineraryIds(sessionId));
     }
 
@@ -96,7 +89,7 @@ public class InternalChatSupportController {
     @PostMapping("/chat-weather")
     public R<String> weather(@RequestBody Map<String, String> body,
                              @RequestHeader(value = GrayFlags.HEADER_INTERNAL_TOKEN, required = false) String headerToken) {
-        requireInternalToken(headerToken);
+        internalTokenSupport.requireValid(headerToken);
         return R.ok(chatWeatherContextPort.build(body.get("composed")));
     }
 }

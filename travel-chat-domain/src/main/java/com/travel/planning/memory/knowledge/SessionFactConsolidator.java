@@ -1,6 +1,7 @@
 package com.travel.planning.memory.knowledge;
 
 import com.travel.common.dto.PreferenceVocabulary;
+import com.travel.memory.knowledge.FactConsolidatorPort;
 import com.travel.memory.knowledge.dto.ConsensusEntry;
 import com.travel.memory.knowledge.dto.Topic;
 import org.springframework.stereotype.Component;
@@ -20,12 +21,12 @@ import java.util.regex.Pattern;
  * <p>只读视图：不写库、不改画像；无命中或解析失败时不输出，不影响其它注入。</p>
  */
 @Component
-public class SessionFactConsolidator {
+public class SessionFactConsolidator implements FactConsolidatorPort {
 
     // M18-1：主题词表单源 travel.chat.word-lists.fact（cities 与 knowledge 18 城对齐）
-    private final com.travel.planning.config.ChatWordLists wordLists;
+    private final com.travel.common.config.ChatWordLists wordLists;
 
-    public SessionFactConsolidator(com.travel.planning.config.ChatWordLists wordLists) {
+    public SessionFactConsolidator(com.travel.common.config.ChatWordLists wordLists) {
         this.wordLists = wordLists;
     }
 

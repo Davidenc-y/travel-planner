@@ -8,6 +8,7 @@ import com.travel.knowledge.rag.rerank.RerankProperties;
 import com.travel.knowledge.rag.support.RRFusion;
 import com.travel.knowledge.rag.support.RagRoutingMetrics;
 import com.travel.knowledge.rag.model.QueryIntent;
+import com.travel.knowledge.rag.support.AuthorityTieBreaker;
 import com.travel.knowledge.rag.support.RagFilterBuilder;
 import com.travel.knowledge.rag.model.SearchResult;
 import com.travel.knowledge.store.EsDocumentStore;
@@ -53,6 +54,8 @@ public class HybridRagStrategy extends AbstractRagStrategy {
     private final RerankGate rerankGate;
     /** MR-D1：HyDE 假设答案改写器（travel.rag.query.hyde.enabled 默认 false=原 query） */
     private final HydeQueryRewriter hydeQueryRewriter;
+    /** RK-9：权威裁决 tie-break（tie-break-enabled 默认 false=原样返回，rerank 后 RerankGate 前） */
+    private final AuthorityTieBreaker authorityTieBreaker;
     /** MR-D2：LLM 多 Query 扩展器（llm-expand.enabled=true 才有 bean；未注入=现状单路） */
     private LlmQueryExpander llmQueryExpander;
 
@@ -70,7 +73,8 @@ public class HybridRagStrategy extends AbstractRagStrategy {
                               Reranker reranker,
                               RerankProperties rerankProperties,
                               RagRoutingMetrics routingMetrics,
-                              HydeQueryRewriter hydeQueryRewriter) {
+                              HydeQueryRewriter hydeQueryRewriter,
+                              AuthorityTieBreaker authorityTieBreaker) {
         this.esStore = esStore;
         this.embeddingModel = embeddingModel;
         this.milvusStore = milvusStore;
@@ -80,6 +84,7 @@ public class HybridRagStrategy extends AbstractRagStrategy {
         this.routingMetrics = routingMetrics;
         this.rerankGate = new RerankGate(rerankProperties);
         this.hydeQueryRewriter = hydeQueryRewriter;
+        this.authorityTieBreaker = authorityTieBreaker;
     }
 
     @Override
@@ -110,8 +115,10 @@ public class HybridRagStrategy extends AbstractRagStrategy {
         long rerankStart = System.currentTimeMillis();
         List<SearchResult> reranked = reranker.rerank(intent.rawQuery(), merged);
         routingMetrics.recordRerank(System.currentTimeMillis() - rerankStart);
+        // RK-9：权威裁决 tie-break（默认关=原样返回字节等价；rerank 后、RerankGate 前）
+        List<SearchResult> tieBroken = authorityTieBreaker.apply(reranked);
         // MR-B1：阈值门控（默认 0.0=关闭，apply 原样返回零路径变更）
-        return rerankGate.apply(reranked);
+        return rerankGate.apply(tieBroken);
     }
 
     /**

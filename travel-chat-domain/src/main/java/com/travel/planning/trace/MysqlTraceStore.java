@@ -2,7 +2,7 @@ package com.travel.planning.trace;
 
 import com.travel.common.entity.AgentTrace;
 import com.travel.common.trace.TraceStore;
-import com.travel.memory.repository.AgentTraceMapper;
+import com.travel.common.repository.AgentTraceMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;

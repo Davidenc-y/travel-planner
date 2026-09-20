@@ -4,7 +4,7 @@ import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.travel.common.entity.AgentTrace;
 import com.travel.common.util.JsonUtils;
 import com.travel.planning.map.guard.MapQuotaGuardService;
-import com.travel.memory.repository.AgentTraceMapper;
+import com.travel.common.repository.AgentTraceMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 

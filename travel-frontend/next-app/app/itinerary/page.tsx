@@ -6,7 +6,7 @@ import Link from 'next/link';
 import { toast } from 'sonner';
 import { Plus } from 'lucide-react';
 import { itineraryApi, getErrorMessage } from '@/lib/api';
-import { ITINERARY_STATUS, ITINERARY_POLL_INTERVAL_MS } from '@/lib/constants';
+import { ITINERARY_STATUS, ITINERARY_POLL_INTERVAL_MS, PAGE_SIZE_OPTIONS } from '@/lib/constants';
 import { useAuth } from '@/lib/auth-context';
 import { useApiQuery } from '@/lib/use-api-query';
 import type { DialogOriginRect } from '@/components/ui/dialog';
@@ -22,7 +22,7 @@ import { Button } from '@/components/ui/button';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 
 // F99：行程列表每页条数可选（默认 8）
-const PAGE_SIZE_OPTIONS = [8, 10, 20, 50];
+
 
 function ItineraryListContent() {
   const router = useRouter();
