@@ -27,6 +27,13 @@ import java.util.stream.Collectors;
 @Component
 public class AttractionGroundingChecker {
 
+    /** S-D2：标注后缀常量（ChatRoutingStep 计数口径同源） */
+    public static final String UNKNOW_SOURCE_MARK = "（非知识库来源，请核实）";
+
+    /** S-D1：strict-attraction 开关（方案 01 §S-D/D-2；默认 true，回退 false=关闭标注） */
+    @org.springframework.beans.factory.annotation.Value("${travel.rag.grounding.strict-attraction:true}")
+    private boolean strictAttraction;
+
     /** 归一化时移除的常见后缀（剩余长度 &lt; 2 时不移除，避免“故宫”被误删） */
     private static final List<String> SUFFIXES = List.of(
             "博物院", "博物馆", "风景区", "景区", "公园", "寺", "塔");
@@ -91,6 +98,36 @@ public class AttractionGroundingChecker {
             }
         }
         return new GroundingReport(unmatched, names.size(), matched, true);
+    }
+
+    /**
+     * S-D1：未命中标注——逐行扫描（复用行提取与 matches 归一化），行内景点名存在
+     * 未命中候选集者行尾追加"（非知识库来源，请核实）"。跳过行（备注/交通/门票等）
+     * 与已标注行不重复处理。strict-attraction=false 或候选空/文本空 → 原样返回。
+     */
+    public String annotate(Set<String> candidateNames, String outputText) {
+        if (!strictAttraction || candidateNames == null || candidateNames.isEmpty()
+                || outputText == null || outputText.isBlank()) {
+            return outputText;
+        }
+        String[] lines = outputText.split("\n", -1);
+        StringBuilder out = new StringBuilder(outputText.length() + 64);
+        boolean changed = false;
+        for (String line : lines) {
+            String trimmed = line.strip();
+            boolean skippable = trimmed.isEmpty()
+                    || SKIP_PREFIX.stream().anyMatch(trimmed::startsWith)
+                    || trimmed.endsWith("：") || trimmed.endsWith(":");
+            List<String> names = skippable ? List.of() : extractAttractionNames(line);
+            boolean hasUnmatched = names.stream().anyMatch(n -> !matchedAny(candidateNames, n));
+            out.append(line);
+            if (hasUnmatched && !line.contains(UNKNOW_SOURCE_MARK)) {
+                out.append(UNKNOW_SOURCE_MARK);
+                changed = true;
+            }
+            out.append('\n');
+        }
+        return changed ? out.substring(0, out.length() - 1) : outputText;
     }
 
     /**

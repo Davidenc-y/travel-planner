@@ -77,6 +77,15 @@ public class SessionAnchorStore {
             log.warn("[Anchor] 锚定集合序列化失败（按清空处理）: {}", e.getMessage());
             json = null;
         }
+        // S-E5（P3 收尾）：值不变跳过 UPDATE（消除同值重复写；changed 才落库）
+        ChatSession current = chatSessionMapper.selectOne(
+                new com.baomidou.mybatisplus.core.conditions.query.QueryWrapper<ChatSession>()
+                        .eq("session_id", sessionId));
+        if (current != null
+                && java.util.Objects.equals(current.getAnchoredItineraryIds(), json)) {
+            log.debug("[Anchor] 锚定集合未变化，跳过 UPDATE: sessionId={}", sessionId);
+            return valid;
+        }
         int updated = chatSessionMapper.update(null, new UpdateWrapper<ChatSession>()
                 .eq("session_id", sessionId)
                 .set("anchored_itinerary_ids", json));

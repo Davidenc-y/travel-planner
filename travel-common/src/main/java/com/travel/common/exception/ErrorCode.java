@@ -22,7 +22,8 @@ public enum ErrorCode {
     AUTH_TOKEN_INVALID(40102, 401, "refreshToken 无效或已过期"),
     AUTH_TOKEN_EXPIRED(40103, 401, "refreshToken 已失效，请重新登录"),
     RATE_LIMITED(40301, 429, "请求过于频繁"),
-    FORBIDDEN(40302, 403, "请求被拒绝"),
+    /** S-A3/A-5（P1-②）：模型不可用/无权限（DashScope 403 且错误体无额度码——原 FORBIDDEN 通用文案零使用，按方案改造） */
+    MODEL_UNAVAILABLE(40302, 403, "该模型当前不可用，请切换模型"),
     NOT_FOUND(40401, 404, "资源不存在"),
     NOT_FOUND_ITEM(40402, 404, "条目不存在"),
     SESSION_NOT_FOUND(40404, 404, "会话不存在"),

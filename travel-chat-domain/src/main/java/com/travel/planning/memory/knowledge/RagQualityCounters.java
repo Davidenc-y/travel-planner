@@ -37,6 +37,11 @@ public class RagQualityCounters {
         incr("degraded");
     }
 
+    /** S-D2：grounding 未命中标注次数（D-1 annotate 行级标注计数；端点 metric=hallucflag） */
+    public void recordHallucinationFlagged(int n) {
+        incrBy("hallucflag", n);
+    }
+
     private void incr(String metric) {
         incrBy(metric, 1);
     }

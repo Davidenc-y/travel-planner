@@ -8,6 +8,8 @@ import com.travel.planning.agent.support.ChatWeatherContextPort;
 import com.travel.planning.agent.support.ItineraryConflictPort;
 import com.travel.planning.agent.support.ItineraryVersionPort;
 import com.travel.common.config.ChatIntent;
+import com.travel.common.trace.SpanCollector;
+import org.springframework.beans.factory.annotation.Autowired;
 import com.travel.planning.memory.knowledge.SessionContextChunker;
 import com.travel.planning.memory.knowledge.SessionKnowledgeWriter;
 import com.travel.planning.service.ModelQuotaExceptionSupport;
@@ -35,6 +37,36 @@ import java.util.function.Consumer;
 @Component
 @RequiredArgsConstructor
 public class ChatRoutingStep implements ChatPipelineStep {
+
+    /** S-D2：幻觉标注计数（optional 注入，null=计数关闭） */
+    private com.travel.planning.memory.knowledge.RagQualityCounters ragQualityCounters;
+
+    @Autowired(required = false)
+    void setRagQualityCounters(com.travel.planning.memory.knowledge.RagQualityCounters ragQualityCounters) {
+        this.ragQualityCounters = ragQualityCounters;
+    }
+
+    private static int countOccurrences(String text, String mark) {
+        if (text == null || text.isEmpty()) {
+            return 0;
+        }
+        int count = 0, idx = 0;
+        while ((idx = text.indexOf(mark, idx)) >= 0) {
+            count++;
+            idx += mark.length();
+        }
+        return count;
+    }
+
+
+    /** S-B6c：Span 采集挂点（optional 注入，缺省自给=无 bean 也不影响路由主流程） */
+    private SpanCollector spanCollector = new SpanCollector();
+
+    @Autowired(required = false)
+    void setSpanCollector(SpanCollector spanCollector) {
+        this.spanCollector = spanCollector;
+    }
+
 
     /** B3.2：步骤顺序——M3-17 步骤 8「路由」（依据 R7-pipeline-mapping 现发送链步骤序 8，终步序号最大，ChatService :583/:588）。 */
     static final int STEP_ORDER = 8;
@@ -157,6 +189,10 @@ public class ChatRoutingStep implements ChatPipelineStep {
                     aiTokens = result.totalTokens();
                 }
                 default -> { // PLANNING / REFINE：F64/B2 把 userId 传入 Supervisor（metadata 供画像工具）
+                    // S-C2b：意图写入 trace 上下文——supervisor 墙钟按预算档收紧（只紧不松）
+                    if (com.travel.planning.trace.TraceContext.active()) {
+                        com.travel.planning.trace.TraceContext.current().budgetIntent = intent.name();
+                    }
                     TravelSupervisorAgent.PlanningResult result =
                             supervisorAgent.executePlanningWithUsage(
                                     withWeather(intent, composed), userId, cancel);
@@ -165,6 +201,16 @@ public class ChatRoutingStep implements ChatPipelineStep {
                     aiTokens = result.totalTokens();
                     // M8-2：组装回答后做确定性引用校验（候选名从 composed 提取）
                     SupervisorResponseSupport.recordGrounding(groundingChecker, composed, response);
+                    // S-D1：strict-attraction 未命中标注（鹤鸣茶社/南桥夜 scenery 类编造可见化）
+                    String beforeAnnotate = response;
+                    response = SupervisorResponseSupport.annotateGrounding(
+                            groundingChecker, composed, response);
+                    // S-D2：幻觉标注计数入 Redis metrics 族（RK-13 通道）
+                    String mark = com.travel.planning.agent.support.AttractionGroundingChecker.UNKNOW_SOURCE_MARK;
+                    int flagged = countOccurrences(response, mark) - countOccurrences(beforeAnnotate, mark);
+                    if (flagged > 0 && ragQualityCounters != null) {
+                        ragQualityCounters.recordHallucinationFlagged(flagged);
+                    }
                     // M8-6：REFINE 保留性观测（原行程 vs 新输出静默丢失率写 trace）
                     if (intent == ChatIntent.REFINE) {
                         SupervisorResponseSupport.recordRetention(
@@ -365,6 +411,10 @@ public class ChatRoutingStep implements ChatPipelineStep {
                     + "sessionId={}, intent={}, answer将不建版", sessionId, intent);
             return null;
         }
+        // S-B6c：回写桥 span（requestId 取自既有 TraceContext 同线程读——不新增 ThreadLocal）
+        String rid = com.travel.planning.trace.TraceContext.active()
+                ? com.travel.planning.trace.TraceContext.current().requestId : null;
+        SpanCollector.Span wbSpan = rid == null ? null : spanCollector.startSpan(rid, "writeback", "bridge");
         try {
             java.util.Optional<Long> itineraryId = itineraryVersionPort.syncAfterPlanning(
                     userId, sessionId, userInput, routePlanJson, budgetJson);
@@ -373,7 +423,15 @@ public class ChatRoutingStep implements ChatPipelineStep {
                 log.info("[ItineraryWriteback] 行程资产已同步: itineraryId={}, sessionId={}, intent={}",
                         id, sessionId, intent);
             });
+            if (wbSpan != null) {
+                spanCollector.endSpan(rid, wbSpan, "ok",
+                        Map.of("written", itineraryId.isPresent(),
+                               "itineraryId", itineraryId.orElse(-1L)));
+            }
         } catch (Exception e) {
+            if (wbSpan != null) {
+                spanCollector.endSpan(rid, wbSpan, "error", Map.of("error", String.valueOf(e.getMessage())));
+            }
             log.warn("[ItineraryWriteback] 同步失败（不影响主流程）: sessionId={}, error={}",
                     sessionId, e.getMessage());
         }

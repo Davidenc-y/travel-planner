@@ -16,4 +16,9 @@ export const adminApi = {
     planningApi.get<R<Record<string, unknown>>>('/api/v1/admin/reliability/turn-latency', {
       params: { days },
     }),
+  /** S-B8：latency-spans 聚合（ttft/routing 分布/hedge 胜率/检索五段 P95；§八⑤授权端点） */
+  latencySpans: (days = 7) =>
+    planningApi.get<R<Record<string, unknown>>>('/api/v1/admin/latency-spans', {
+      params: { days },
+    }),
 };

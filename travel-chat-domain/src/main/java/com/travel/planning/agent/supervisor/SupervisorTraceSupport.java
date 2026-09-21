@@ -24,6 +24,14 @@ final class SupervisorTraceSupport {
         h.totalTokens += usage[2];
     }
 
+    /** S-B7：首 token 耗时写入追溯上下文（null 安全村；非流式不写） */
+    static void applyTraceTtft(Long ttftMs) {
+        if (ttftMs == null || !TraceContext.active()) {
+            return;
+        }
+        TraceContext.current().ttftMs = ttftMs;
+    }
+
     /** F89：调用路径 [supervisor, preference_analysis, ...] 写入追溯上下文 */
     static void applyTracePath(OverAllState state) {
         if (!TraceContext.active()) {

@@ -86,8 +86,9 @@ public class RedisItineraryBriefPort implements ItineraryBriefPort {
             log.debug("[BriefRedisPort] hit key={}", KEY_PREFIX + sessionId);
             return Optional.of(hit);
         }
-        log.debug("[BriefRedisPort] miss 回退桥: id={}", itineraryId);
-        // B2.4：观察期内有意使用已 @Deprecated 的桥回退通道（自愈补写快照），见桥方法 javadoc
+        // S-E5（P3 收尾）：旁路未命中明示降级——INFO 可见（原 debug 静默）；桥回退自愈补写快照
+        log.info("[BriefRedisPort] bypass-miss 回退桥（Redis 旁路未命中/不一致，自愈补写在桥内）: id={}",
+                itineraryId);
         return bridge.briefOf(userId, itineraryId);
     }
 }

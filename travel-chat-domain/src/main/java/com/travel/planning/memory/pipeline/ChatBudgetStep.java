@@ -1,7 +1,9 @@
 package com.travel.planning.memory.pipeline;
 
 import com.travel.common.config.ChatIntent;
+import com.travel.common.trace.SpanCollector;
 import com.travel.memory.MemoryFacade;
+import org.springframework.beans.factory.annotation.Autowired;
 import com.travel.planning.memory.knowledge.KnowledgeRetrievalService;
 import com.travel.planning.memory.knowledge.RagInjectionProperties;
 import com.travel.planning.memory.knowledge.SessionKnowledgeWriter;
@@ -40,6 +42,14 @@ public class ChatBudgetStep implements ChatPipelineStep {
     @Override
     public int order() {
         return STEP_ORDER;
+    }
+
+    /** S-B6a：Span 采集挂点（optional 注入，缺省自给=无 bean 也不影响预算主流程） */
+    private SpanCollector spanCollector = new SpanCollector();
+
+    @Autowired(required = false)
+    void setSpanCollector(SpanCollector spanCollector) {
+        this.spanCollector = spanCollector;
     }
 
     /**
@@ -91,6 +101,34 @@ public class ChatBudgetStep implements ChatPipelineStep {
                                  String message, String profileContext, String historySection,
                                  String anchorSection, java.util.List<Long> anchorIds,
                                  String preferenceSection, String preferenceQuerySuffix) {
+        // S-B6a：预算/注入段 span（requestId 取自既有 TraceContext 同线程上下文——不新增 ThreadLocal）
+        String rid = com.travel.planning.trace.TraceContext.active()
+                ? com.travel.planning.trace.TraceContext.current().requestId : null;
+        SpanCollector.Span span = rid == null ? null : spanCollector.startSpan(rid, "budget", "pipeline");
+        try {
+            BudgetContext ctx = composeInternal(sessionId, userId, intent, message, profileContext,
+                    historySection, anchorSection, anchorIds, preferenceSection, preferenceQuerySuffix);
+            if (span != null) {
+                Map<String, Object> attrs = new LinkedHashMap<>();
+                attrs.put("intent", String.valueOf(intent));
+                attrs.put("inputTokens", ctx.inputTokens());
+                attrs.put("composedChars", ctx.composed() == null ? 0 : ctx.composed().length());
+                spanCollector.endSpan(rid, span, "ok", attrs);
+            }
+            return ctx;
+        } catch (RuntimeException e) {
+            if (span != null) {
+                spanCollector.endSpan(rid, span, "error", Map.of("intent", String.valueOf(intent)));
+            }
+            throw e;
+        }
+    }
+
+    /** S-B6a：原 compose 本体（包内可见提取，便于挂 span） */
+    BudgetContext composeInternal(String sessionId, Long userId, ChatIntent intent,
+                                  String message, String profileContext, String historySection,
+                                  String anchorSection, java.util.List<Long> anchorIds,
+                                  String preferenceSection, String preferenceQuerySuffix) {
         // F63：确定性预检索注入——把知识库候选景点放入上下文，确保聊天链消费知识库。
         // F66：非检索意图（画像/偏好/闲聊类）跳过预检索，避免无关候选污染上下文。
         // M4-2：topK 配置化（travel.rag.*，默认值等于 F63/F83 硬编码）

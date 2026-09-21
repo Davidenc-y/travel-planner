@@ -1,7 +1,9 @@
 package com.travel.planning.trace;
 
 import com.travel.common.entity.AgentTrace;
+import com.travel.common.trace.SpanCollector;
 import com.travel.common.trace.TraceStore;
+import org.springframework.beans.factory.annotation.Autowired;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
 import lombok.RequiredArgsConstructor;
@@ -30,6 +32,13 @@ public class AgentTraceCollector {
 
     private final TraceStore traceStore;
     private final TraceProperties properties;
+    /** S-B6a：Span 采集（optional 注入，缺省自给=无 bean 也不影响 trace 主流程） */
+    private SpanCollector spanCollector = new SpanCollector();
+
+    @Autowired(required = false)
+    void setSpanCollector(SpanCollector spanCollector) {
+        this.spanCollector = spanCollector;
+    }
     // M7：实际路由模型（requestId 侧信道；end 时消费）
     private final ModelRouteTracker modelRouteTracker;
 
@@ -104,6 +113,10 @@ public class AgentTraceCollector {
         if (model != null) {
             t.setModelName(model);
         }
+        // S-B6a：Span 树透传（B-4 采集器 drain 取走即清理；无 spans 时 null 不写）
+        t.setSpans(spanCollector.drainSpansJson(holder.requestId));
+        // S-B7：首 token 耗时透传（null=非流式/未采集，列可空）
+        t.setTtftMs(holder.ttftMs);
         t.setStatus(status);
         t.setErrorMsg(errorMsg);
         if (!queue.offer(t)) {

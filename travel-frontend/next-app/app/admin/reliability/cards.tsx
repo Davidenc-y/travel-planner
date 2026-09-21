@@ -118,3 +118,86 @@ export function TurnLatencyCard({ payload }: { payload: TurnLatencyPayload | nul
 function fmtMs(v: number): string {
   return v >= 1000 ? (v / 1000).toFixed(1) + 's' : Math.round(v) + 'ms';
 }
+
+
+// ==================== S-B8：latency-spans 看板卡 ====================
+
+export interface LatencySpansPayload {
+  days?: number;
+  samples?: number;
+  ttft?: { count?: number; p50?: number; p95?: number };
+  routing?: { total?: number; counts?: Record<string, number> };
+  hedge?: { decided?: number; wins?: number; winRate?: number };
+  stages?: Record<string, { count?: number; p50?: number; p95?: number }>;
+}
+
+export function LatencySpansCard({ payload }: { payload: LatencySpansPayload | null }) {
+  const ttft = payload?.ttft;
+  const routing = payload?.routing;
+  const hedge = payload?.hedge;
+  const stages = payload?.stages ?? {};
+  const stageNames = Object.keys(stages);
+  const fmt = (v?: number) => (v == null ? '—' : fmtMs(v));
+  return (
+    <section
+      className="rounded-xl border border-line bg-surface p-4"
+      aria-label="延迟分段"
+    >
+      <h2 className="mb-3 text-sm font-medium">
+        延迟分段（S-B8，近 {payload?.days ?? 7} 天，共 {payload?.samples ?? 0} 样本）
+      </h2>
+      <div className="grid gap-3 sm:grid-cols-3">
+        <div className="rounded-lg bg-surface-2 p-3">
+          <p className="text-xs text-ink-faint">首 token P50 / P95</p>
+          <p className="text-lg font-semibold">
+            {fmt(ttft?.p50)} <span className="text-xs text-ink-faint">/ {fmt(ttft?.p95)}</span>
+          </p>
+        </div>
+        <div className="rounded-lg bg-surface-2 p-3">
+          <p className="text-xs text-ink-faint">对冲胜出率</p>
+          <p className="text-lg font-semibold">
+            {hedge?.winRate == null ? '—' : `${(hedge.winRate * 100).toFixed(1)}%`}
+            <span className="text-xs text-ink-faint"> / 决策 {hedge?.decided ?? 0}</span>
+          </p>
+        </div>
+        <div className="rounded-lg bg-surface-2 p-3">
+          <p className="text-xs text-ink-faint">路由层分布</p>
+          <p className="text-sm">
+            {routing?.total
+              ? Object.entries(routing.counts ?? {})
+                  .map(([k, v]) => `${k} ${v}`)
+                  .join(' · ')
+              : '—'}
+          </p>
+        </div>
+      </div>
+      {stageNames.length > 0 ? (
+        <table className="mt-3 w-full text-sm">
+          <thead>
+            <tr className="text-left text-ink-faint">
+              <th className="py-1">检索段</th>
+              <th className="py-1 text-right">样本</th>
+              <th className="py-1 text-right">P50</th>
+              <th className="py-1 text-right">P95</th>
+            </tr>
+          </thead>
+          <tbody>
+            {stageNames.map((name) => {
+              const st = stages[name] ?? {};
+              return (
+                <tr key={name} className="border-t border-line">
+                  <td className="py-1.5">{name}</td>
+                  <td className="py-1.5 text-right">{st.count ?? 0}</td>
+                  <td className="py-1.5 text-right">{fmt(st.p50)}</td>
+                  <td className="py-1.5 text-right font-medium">{fmt(st.p95)}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      ) : (
+        <p className="mt-3 py-4 text-center text-sm text-ink-faint">暂无分段数据</p>
+      )}
+    </section>
+  );
+}

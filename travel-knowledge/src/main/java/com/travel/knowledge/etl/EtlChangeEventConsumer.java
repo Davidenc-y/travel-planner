@@ -37,6 +37,8 @@ public class EtlChangeEventConsumer {
     public static final String CONSUMER_NAME = "knowledge-1";
 
     private final StringRedisTemplate redisTemplate;
+    /** S-E4：建组一次性标志——成功（含 BUSYGROUP=组已存在）后不再逐轮 XGROUP CREATE */
+    private final java.util.concurrent.atomic.AtomicBoolean groupEnsured = new java.util.concurrent.atomic.AtomicBoolean(false);
     private final AttractionEtlService etlService;
     /** DG-3c-fix：消费成功后回写 outbox consumed 标记 */
     private final EtlOutboxMapper outboxMapper;
@@ -83,11 +85,18 @@ public class EtlChangeEventConsumer {
     }
 
     /** 幂等建组（BUSYGROUP 视为已存在；建组从 0 起读，兜底通道不漏早期事件） */
-    private void ensureGroup() {
+    /** S-E4：包内可见（单测直调） */
+    void ensureGroup() {
+        if (groupEnsured.get()) {
+            return; // 建组一次性：成功（含 BUSYGROUP）后轮询不再发 XGROUP CREATE
+        }
         try {
             redisTemplate.opsForStream().createGroup(STREAM_KEY, ReadOffset.from("0"), GROUP);
+            groupEnsured.set(true);
         } catch (Exception e) {
             log.debug("[EtlChangeEventConsumer] 建组跳过（通常为组已存在）: {}", e.getMessage());
+            // BUSYGROUP=组已存在，同样视为建组完成（S-E4）
+            groupEnsured.set(true);
         }
     }
 }

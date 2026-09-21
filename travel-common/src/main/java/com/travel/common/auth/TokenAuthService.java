@@ -47,6 +47,14 @@ public class TokenAuthService {
                     "[TokenAuthService] jwt.secret 未配置（受控配置不携带默认密钥，M21-1）："
                             + "请设置环境变量 JWT_SECRET，或在 application-local.yml 显式配置 jwt.secret（仅本地开发）");
         }
+        // S-E3（SEC D-04-001 清偿）：弱密钥强度门槛——<32 字符 fail-fast（HS256 需 ≥256 位熵）。
+        // 不自动轮换（人工流程）：轮换后旧 token 全失效，用户重新登录即可，无数据迁移面。
+        if (secret.length() < 32) {
+            throw new IllegalStateException(
+                    "[TokenAuthService] jwt.secret 强度不足（长度 " + secret.length() + " < 32 字符，D-04-001）："
+                            + "迁移指引：生成强随机密钥（如 openssl rand -base64 48）写入 .env 的 JWT_SECRET 后重启；"
+                            + "换钥后旧 token 全部失效，用户需重新登录（无数据迁移面）");
+        }
         this.secret = secret;
         this.expiration = expiration;
         this.refreshExpiration = refreshExpiration;

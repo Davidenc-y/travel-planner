@@ -112,7 +112,10 @@ final class SupervisorGraphExecutor {
                     TravelSupervisorAgent.SUPERVISOR_EXECUTOR);
             // M6-42：等待前检查（取消后不再等待结果）
             cancel.throwIfCancelled();
-            OverAllState finalState = future.orTimeout(TravelSupervisorAgent.MAX_EXECUTION_SECONDS,
+            String budgetIntent = TraceContext.active() ? TraceContext.current().budgetIntent : null;
+            long wallSeconds = com.travel.planning.config.ChatBudgetPresets.clampWallSeconds(
+                    budgetIntent, TravelSupervisorAgent.MAX_EXECUTION_SECONDS);
+            OverAllState finalState = future.orTimeout(wallSeconds,
                             TimeUnit.SECONDS)
                     .get()
                     .orElseThrow(() -> new IllegalStateException("Supervisor 未返回最终状态"));
@@ -150,7 +153,7 @@ final class SupervisorGraphExecutor {
                             TravelSupervisorAgent.SUPERVISOR_EXECUTOR);
                     cancel.throwIfCancelled();
                     Optional<OverAllState> retried =
-                            retryFuture.orTimeout(TravelSupervisorAgent.MAX_EXECUTION_SECONDS,
+                            retryFuture.orTimeout(wallSeconds,
                                     TimeUnit.SECONDS).get();
                     cancel.throwIfCancelled();
                     if (retried.isPresent() && SupervisorResponseSupport.hasSectionOutput(retried.get())) {

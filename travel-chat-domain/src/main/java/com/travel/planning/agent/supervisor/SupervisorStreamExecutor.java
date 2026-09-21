@@ -10,10 +10,12 @@ import com.travel.planning.memory.longterm.ProfileToolProvider;
 import com.travel.memory.prompt.PromptTemplates;
 import com.travel.stream.service.TurnCancellation;
 import com.travel.stream.service.TurnInterruptedException;
+import com.travel.planning.agent.supervisor.support.ActionFingerprinter;
 import com.travel.planning.trace.TraceContext;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.metadata.Usage;
 import org.springframework.ai.chat.model.ChatResponse;
+import org.springframework.beans.factory.annotation.Autowired;
 import reactor.core.publisher.Flux;
 
 import java.util.List;
@@ -59,6 +61,32 @@ final class SupervisorStreamExecutor {
         this.planningHeuristics = planningHeuristics;
     }
 
+    /** S-C1：动作指纹器（C-0；四维振荡裁决第一维数据源，缺省自给实例） */
+    private ActionFingerprinter fingerprinter = new ActionFingerprinter();
+
+    /** S-C2b：意图分级预算（缺省自给=未接线时等价内置档；墙钟 clamp 只紧不松） */
+    private com.travel.planning.config.ChatBudgetPresets budgetPresets = new com.travel.planning.config.ChatBudgetPresets();
+
+    @Autowired(required = false)
+    void setBudgetPresets(com.travel.planning.config.ChatBudgetPresets budgetPresets) {
+        this.budgetPresets = budgetPresets;
+    }
+
+    /** S-C2b：意图预算墙钟秒数——preset 与既有 MAX_EXECUTION_SECONDS 取小（只紧不松，E-33 式） */
+    private long budgetWallSeconds() {
+        String intent = TraceContext.active() ? TraceContext.current().budgetIntent : null;
+        if (intent == null || intent.isBlank()) {
+            return TravelSupervisorAgent.MAX_EXECUTION_SECONDS;
+        }
+        long presetSeconds = budgetPresets.resolve(intent).getWallMs() / 1000L;
+        return Math.min(presetSeconds, TravelSupervisorAgent.MAX_EXECUTION_SECONDS);
+    }
+
+    @Autowired(required = false)
+    void setFingerprinter(ActionFingerprinter fingerprinter) {
+        this.fingerprinter = fingerprinter;
+    }
+
     /**
      * M6-18：规划路径图级流式（默认由路由层关闭，开启前需 golden 验证）。
      *
@@ -98,6 +126,11 @@ final class SupervisorStreamExecutor {
                         requestId);
             }
             ReactiveBlockSupport.addCancellationMetadata(configBuilder, cancel);
+            // S-C2c：预算 token 门上限经 metadata 显式传递（拦截器跨线程读取，E-48 合规）
+            if (TraceContext.active() && TraceContext.current().budgetIntent != null) {
+                configBuilder.addMetadata(TokenUsageInterceptor.BUDGET_MAX_TOKENS_KEY,
+                        budgetPresets.resolve(TraceContext.current().budgetIntent).getMaxTokens());
+            }
             if (userId != null) {
                 configBuilder.addMetadata(ProfileToolProvider.USER_ID_METADATA_KEY, userId);
             }
@@ -109,9 +142,28 @@ final class SupervisorStreamExecutor {
                     "supervisor", () -> streamSupervisorSafely(supervisor, userInput, config));
             // M9-3c：同节点执行次数观测（图流成本治理第③层）
             Map<String, Integer> nodeExecutionCounts = new ConcurrentHashMap<>();
+            long[] firstOutputAt = {0}; // S-B7：首 node 输出事件=图流首 token 等价打点
+            // S-C1：四维振荡裁决状态（指纹窗口在 fingerprinter 内；其余三维按节点追踪）
+            Map<String, Integer> nodeVisits = new ConcurrentHashMap<>();
+            Map<String, Integer> nodeHashes = new ConcurrentHashMap<>();
+            Map<String, Integer> nodeKeyCounts = new ConcurrentHashMap<>();
+            Map<String, Integer> oscillationHits = new TreeMap<>();
             ReactiveBlockSupport.blockUntilDone(flux, out -> {
+                if (firstOutputAt[0] == 0) {
+                    firstOutputAt[0] = System.currentTimeMillis();
+                }
                 if (out.node() != null) {
                     nodeExecutionCounts.merge(out.node(), 1, Integer::sum);
+                    OverAllState os = out.state();
+                    if (os != null) {
+                        String outputText = SupervisorResponseSupport.toText(os.value(out.node()));
+                        int keyCount = os.data() == null ? 0 : os.data().size();
+                        boolean hit = isOscillating(fingerprinter, requestId, out.node(),
+                                nodeVisits, nodeHashes, nodeKeyCounts, outputText, keyCount);
+                        if (hit) {
+                            oscillationHits.merge(out.node(), 1, Integer::sum);
+                        }
+                    }
                 }
                 if (out.state() != null) {
                     lastState.set(out.state());
@@ -125,7 +177,7 @@ final class SupervisorStreamExecutor {
                     lastNodeLabel[0] = label;
                     nodeThinking.accept("routing", label);
                 }
-            }, cancel, TravelSupervisorAgent.MAX_EXECUTION_SECONDS);
+            }, cancel, budgetWallSeconds());
 
             OverAllState finalState = lastState.get();
             if (finalState == null) {
@@ -142,6 +194,9 @@ final class SupervisorStreamExecutor {
                         nodeTokens[0]);
             }
             SupervisorTraceSupport.applyTraceTokens(streamUsage);
+            if (firstOutputAt[0] > 0) {
+                SupervisorTraceSupport.applyTraceTtft(firstOutputAt[0] - start); // S-B7
+            }
             SupervisorTraceSupport.applyTracePath(finalState);
 
             // F77/B4-2：四键全空且疑似规划 → 整图重试一次；仍空走直答兜底（镜像阻塞路径语义）
@@ -179,7 +234,7 @@ final class SupervisorStreamExecutor {
                             retryNodeTokens[0] = Math.max(retryNodeTokens[0],
                                     out.tokenUsage().getTotalTokens());
                         }
-                    }, cancel, TravelSupervisorAgent.MAX_EXECUTION_SECONDS);
+                    }, cancel, budgetWallSeconds());
                     OverAllState retried = retryState.get();
                     if (retried != null && SupervisorResponseSupport.hasSectionOutput(retried)) {
                         finalState = retried;
@@ -224,7 +279,18 @@ final class SupervisorStreamExecutor {
                     }
                 }
             }
-            recordOscillationWarnings(nodeExecutionCounts);
+            // S-C1：四维合议告警（日志契约保留，附 reason 四元组；单纯 START×N 不再触发）
+            if (!oscillationHits.isEmpty()) {
+                List<String> warnings = oscillationHits.entrySet().stream()
+                        .map(e -> e.getKey() + "=" + nodeExecutionCounts.get(e.getKey()))
+                        .toList();
+                log.warn("[GraphFlow] 节点疑似路由震荡: {} reason=fpRepeat>=2&hashSame&keysStale&cycle",
+                        warnings);
+                if (TraceContext.active()) {
+                    TraceContext.current().graphFlowWarnings =
+                            com.travel.common.util.JsonUtils.toJson(warnings);
+                }
+            }
             if (tokenSink != null && result != null) {
                 tokenSink.accept(result);
             }
@@ -255,30 +321,28 @@ final class SupervisorStreamExecutor {
     }
 
     /**
-     * M9-3c：同节点执行次数超阈值（3）→ WARN 日志 + trace 扩展字段
-     * （经 AgentTraceCollector 编码进 callPath JSON，无 DDL）。
+     * S-C1：四维振荡合议（替换 M9-3c 朴素 >3 计数——START×N 正常多轮误报归零）。
+     * 四维同时成立才判振荡：①指纹窗口重复≥2 ②输出哈希一致 ③state outputKeys 无增长
+     * ④调用图动态重访（同节点第二次出现）。只读快照（F84：不读原始 state 对象引用）。
+     * 包内可见便于回放单测。
      */
-    private static void recordOscillationWarnings(Map<String, Integer> nodeExecutionCounts) {
-        if (nodeExecutionCounts == null || nodeExecutionCounts.isEmpty()) {
-            return;
-        }
-        Map<String, Integer> over = new TreeMap<>();
-        nodeExecutionCounts.forEach((node, count) -> {
-            if (count > 3) {
-                over.put(node, count);
-            }
-        });
-        if (over.isEmpty()) {
-            return;
-        }
-        List<String> warnings = over.entrySet().stream()
-                .map(e -> e.getKey() + "=" + e.getValue())
-                .toList();
-        log.warn("[GraphFlow] 节点疑似路由震荡: {}", warnings);
-        if (TraceContext.active()) {
-            TraceContext.current().graphFlowWarnings =
-                    com.travel.common.util.JsonUtils.toJson(warnings);
-        }
+    static boolean isOscillating(ActionFingerprinter fingerprinter, String requestId, String node,
+                                 Map<String, Integer> nodeVisits,
+                                 Map<String, Integer> nodeHashes,
+                                 Map<String, Integer> nodeStateKeyCounts,
+                                 String outputText, int stateKeyCount) {
+        String fp = fingerprinter.fingerprint(node, node, node, null);
+        boolean dim1FpRepeat = fingerprinter.record(requestId, fp) >= 2;
+        int hash = outputText == null ? 0 : outputText.hashCode();
+        Integer lastHash = nodeHashes.get(node);
+        boolean dim2HashSame = lastHash != null && lastHash == hash;
+        nodeHashes.put(node, hash);
+        Integer lastKeys = nodeStateKeyCounts.get(node);
+        boolean dim3KeysStale = lastKeys != null && lastKeys == stateKeyCount;
+        nodeStateKeyCounts.put(node, stateKeyCount);
+        int visits = nodeVisits.merge(node, 1, Integer::sum);
+        boolean dim4Cycle = visits >= 2;
+        return dim1FpRepeat && dim2HashSame && dim3KeysStale && dim4Cycle;
     }
 
     /** M6-21：把图节点名映射为友好 thinking；内部节点返回 null 跳过 */

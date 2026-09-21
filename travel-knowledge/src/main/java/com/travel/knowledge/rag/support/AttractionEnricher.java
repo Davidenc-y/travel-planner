@@ -169,6 +169,27 @@ public class AttractionEnricher {
         return null;
     }
 
+    /**
+     * S-E1：前置防抖查询——7 天内已 web_enrich（enrich_source + enrich_updated_at，
+     * 与 WebEnrichWritebackService 回写 WHERE 同口径）。fail-open：异常返回 false（不防抖）。
+     */
+    private boolean recentlyEnriched(Long attractionId) {
+        if (attractionId == null) {
+            return false;
+        }
+        try {
+            Long count = attractionMapper.selectCount(
+                    new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<Attraction>()
+                            .eq(Attraction::getId, attractionId)
+                            .eq(Attraction::getEnrichSource, "web_enrich")
+                            .ge(Attraction::getEnrichUpdatedAt,
+                                    java.time.LocalDateTime.now().minusDays(7)));
+            return count != null && count > 0;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
     /** docId → t_attraction.id；非数字容错返回 null（该条跳过补全） */
     private Long parseId(String docId) {
         if (docId == null || docId.isBlank()) {
@@ -198,6 +219,7 @@ public class AttractionEnricher {
         List<String> fields = webSearchProperties.getEnrichFields() == null
                 ? List.of() : webSearchProperties.getEnrichFields();
         Set<String> attempted = new HashSet<>();
+        int skippedDebounce = 0; // S-E1：防抖跳过计数
         for (SearchResult r : results) {
             String id = r.getDocId();
             if (id == null || !attempted.add(id)) {
@@ -206,6 +228,14 @@ public class AttractionEnricher {
             boolean needOpen = fields.contains("openHours") && r.getOpenHours() == null;
             boolean needPrice = fields.contains("ticketPrice") && r.getTicketPrice() == null;
             if (!needOpen && !needPrice) {
+                continue;
+            }
+            // S-E1（P2-⑤）：前置防抖——7 天内已 web_enrich 且目标字段仍空 → 跳过搜索（省配额）
+            Long debounceId = parseId(id);
+            if (debounceId != null && recentlyEnriched(debounceId)) {
+                skippedDebounce++;
+                log.info("[Enrich] 前置防抖跳过搜索（7 天内已 web_enrich）: docId={}, 累计跳过={}",
+                        id, skippedDebounce);
                 continue;
             }
             // M9-2：异步补全模式——本轮保持 null，投递后台搜索→抽取→回写

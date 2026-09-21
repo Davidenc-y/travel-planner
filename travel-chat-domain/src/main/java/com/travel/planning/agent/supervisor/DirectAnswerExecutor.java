@@ -183,6 +183,14 @@ public final class DirectAnswerExecutor {
         TurnCancellation cancel = cancellation == null ? TurnCancellation.NOOP : cancellation;
         cancel.throwIfCancelled();
         Consumer<String> sink = tokenSink == null ? t -> { } : tokenSink;
+        long t0 = System.currentTimeMillis();
+        long[] firstTokenAt = {0}; // S-B7：首个真实增量打点（兜底文本不计 TTFT）
+        Consumer<String> ttftSink = t -> {
+            if (firstTokenAt[0] == 0) {
+                firstTokenAt[0] = System.currentTimeMillis();
+            }
+            sink.accept(t);
+        };
         StringBuilder sb = new StringBuilder();
         long[] tokens = {0};
         ChatResponse[] lastResponse = new ChatResponse[1];
@@ -192,7 +200,7 @@ public final class DirectAnswerExecutor {
                     ? resp.getResult().getOutput().getText() : null;
             if (text != null && !text.isBlank()) {
                 sb.append(text);
-                sink.accept(text);
+                ttftSink.accept(text);
             }
             if (resp.getMetadata() != null && resp.getMetadata().getUsage() != null
                     && resp.getMetadata().getUsage().getTotalTokens() != null) {
@@ -202,6 +210,9 @@ public final class DirectAnswerExecutor {
         String text = sb.toString().trim();
         if (lastResponse[0] != null) {
             applyDirectTokens(lastResponse[0]);
+        }
+        if (firstTokenAt[0] > 0) {
+            SupervisorTraceSupport.applyTraceTtft(firstTokenAt[0] - t0); // S-B7
         }
         if (text.isBlank()) {
             sink.accept(blankFallback);

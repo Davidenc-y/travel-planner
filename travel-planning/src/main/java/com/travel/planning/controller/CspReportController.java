@@ -38,7 +38,34 @@ public class CspReportController {
             log.warn("[CspReport] 超长报告丢弃: len={}", body == null ? 0 : body.length());
             return;
         }
-        log.info("[CspReport] len={} uri={}", body.length(), extractDocumentUri(body));
+        log.info("[CspReport] len={} uri={} violated-directive={}", body.length(),
+                extractDocumentUri(body), extractViolatedDirective(body));
+    }
+
+    /**
+     * S-E2（P3-⑩）：提取 violated-directive（诊断口——只知被拦不知拦因无法收敛规则）。
+     * 与 extractDocumentUri 同款容错（缺失/畸形给占位不抛错；截断 100 字符）。
+     */
+    String extractViolatedDirective(String body) {
+        if (body == null) {
+            return "<no-body>";
+        }
+        String key = "\"violated-directive\"";
+        int k = body.indexOf(key);
+        if (k < 0) {
+            return "<not-present>";
+        }
+        int colon = body.indexOf(':', k + key.length());
+        if (colon < 0) {
+            return "<malformed>";
+        }
+        String rest = body.substring(colon + 1).trim();
+        if (rest.startsWith("\"")) {
+            int end = rest.indexOf('"', 1);
+            String value = end > 0 ? rest.substring(1, end) : rest.substring(1);
+            return truncate(value, 100);
+        }
+        return truncate(rest, 100);
     }
 
     /** 从报告 JSON 提取 document-uri 首个字段值（截断 200 字符；缺失/畸形给占位不抛错） */
@@ -62,6 +89,10 @@ public class CspReportController {
     }
 
     private String truncate(String value) {
-        return value.length() > 200 ? value.substring(0, 200) : value;
+        return truncate(value, 200);
+    }
+
+    private String truncate(String value, int max) {
+        return value.length() > max ? value.substring(0, max) : value;
     }
 }

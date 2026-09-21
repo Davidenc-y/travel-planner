@@ -3,6 +3,8 @@ package com.travel.knowledge.rag.service;
 import com.travel.common.util.JsonUtils;
 import com.travel.knowledge.rag.model.QueryIntent;
 import com.travel.knowledge.rag.config.QueryUnderstandingProperties;
+import com.travel.common.trace.SpanCollector;
+import org.springframework.beans.factory.annotation.Autowired;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -29,6 +31,14 @@ public class QueryUnderstandingService {
     /** 意图 LRU 缓存（access-order，容量由配置 cacheSize 控制） */
     private final Map<String, QueryIntent> cache;
 
+    /** S-B5b：Span 采集挂点（optional 注入，缺省自给=未绑定时挂点空安全跳过） */
+    private SpanCollector spanCollector = new SpanCollector();
+
+    @Autowired(required = false)
+    void setSpanCollector(SpanCollector spanCollector) {
+        this.spanCollector = spanCollector;
+    }
+
     // M7 Batch 4：高频短输出 → light 角色（注册表默认 qwen-turbo；RAG 评测硬门禁守护质量）
     public QueryUnderstandingService(@Qualifier("lightModel") ChatModel chatModel,
                                      QueryUnderstandingProperties properties) {
@@ -51,6 +61,8 @@ public class QueryUnderstandingService {
         if (cached != null) {
             return cached;
         }
+        // S-B5b：查询理解段 span（同线程上下文，未绑定空安全跳过）
+        SpanCollector.Span quSpan = spanCollector.start("qu", "understanding");
         QueryIntent result;
         if (properties.isEnabled()) {
             QueryIntent llm = extractByLlm(q);
@@ -59,6 +71,14 @@ public class QueryUnderstandingService {
         } else {
             result = heuristic(q);
             log.info("[QueryUnderstanding] LLM 已禁用，使用启发式: {}", result);
+        }
+        if (quSpan != null) {
+            Map<String, Object> quAttrs = new LinkedHashMap<>();
+            quAttrs.put("llmEnabled", properties.isEnabled());
+            quAttrs.put("city", result.city());
+            quAttrs.put("type", result.type());
+            quAttrs.put("keywords", result.keywords() == null ? 0 : result.keywords().size());
+            spanCollector.end(quSpan, "ok", quAttrs);
         }
         if (properties.getCacheSize() > 0) {
             cache.put(q, result);

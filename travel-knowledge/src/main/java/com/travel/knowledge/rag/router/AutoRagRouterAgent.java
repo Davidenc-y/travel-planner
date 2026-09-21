@@ -34,7 +34,8 @@ import java.util.concurrent.TimeUnit;
 @Component
 public class AutoRagRouterAgent {
 
-    private static final long TIMEOUT_SECONDS = 20;
+    /** S-A5/A-6（L1a）：墙钟 20s→6s——路由层预算低于 supervisor 执行层（8s），保证降级重试余量 */
+    private static final long TIMEOUT_SECONDS = 6;
     /** F46：与 RagSupervisorAgent 一致使用虚拟线程，避免公共 ForkJoinPool 争用 */
     private static final ExecutorService EXECUTOR = Executors.newVirtualThreadPerTaskExecutor();
 
@@ -81,17 +82,18 @@ public class AutoRagRouterAgent {
         if (agent == null) {
             return null;
         }
+        // S-B0/B-1（L1b，skill F23 清单）：与 RagSupervisorAgent 同构——future 提到 try 外持有引用，
+        // get 超时后任务仍滞留虚拟线程，超时/异常路径统一 cancel(true) 消除 zombie 管线。
+        // GraphRunnerException 为受检异常，lambda 内包装为 RuntimeException 再统一兜底。
+        CompletableFuture<AssistantMessage> future = CompletableFuture.supplyAsync(() -> {
+            try {
+                return agent.call(buildInput(intent, topK));
+            } catch (Exception e) {
+                throw new RuntimeException(e);
+            }
+        }, EXECUTOR);
         try {
-            String input = buildInput(intent, topK);
-            // GraphRunnerException 为受检异常，lambda 内包装为 RuntimeException 再统一兜底。
-            AssistantMessage message = CompletableFuture.supplyAsync(() -> {
-                        try {
-                            return agent.call(input);
-                        } catch (Exception e) {
-                            throw new RuntimeException(e);
-                        }
-                    }, EXECUTOR)
-                    .get(TIMEOUT_SECONDS, TimeUnit.SECONDS);
+            AssistantMessage message = future.get(TIMEOUT_SECONDS, TimeUnit.SECONDS);
             String text = message == null ? null : message.getText();
             String json = RagJsonExtractor.extract(text);
             if (json == null) {
@@ -106,6 +108,7 @@ public class AutoRagRouterAgent {
             log.info("[AutoRagRouter] Agent 路由成功, 结果 {} 条", results.size());
             return results;
         } catch (Exception e) {
+            future.cancel(true);
             log.warn("[AutoRagRouter] Agent 路由失败，回退启发式: {}", e.getMessage());
             return null;
         }

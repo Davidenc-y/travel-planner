@@ -115,8 +115,8 @@ public class TavilyWebSearchAdapter implements WebSearchPort {
                 return parsed;
             });
         } catch (Exception e) {
-            log.warn("[WebSearch] Tavily 搜索失败/超时，静默降级 empty: query={}, err={}",
-                    query, e.getMessage());
+            log.warn("[WebSearch] Tavily 搜索失败/超时，静默降级 empty: query={}, err={}: {}",
+                    query, e.getClass().getName(), e.getMessage());
             return Optional.empty();
         }
     }

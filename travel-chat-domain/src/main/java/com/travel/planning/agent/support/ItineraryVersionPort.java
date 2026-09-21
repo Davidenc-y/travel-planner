@@ -19,5 +19,23 @@ public interface ItineraryVersionPort {
      */
     Optional<Long> syncAfterPlanning(Long userId, String sessionId,
                                      String userInput, String routePlanJson,
-                                     String budgetJson);
+                                     String budgetJson, String clientRequestId);
+
+    /**
+     * S-D0（A 案，2026-09-21 审计实施）：5 参旧签名默认委托 6 参（clientRequestId=null
+     * → 实现方自行生成），既有调用方与直构测试零改动。
+     */
+    default Optional<Long> syncAfterPlanning(Long userId, String sessionId,
+                                             String userInput, String routePlanJson,
+                                             String budgetJson) {
+        return syncAfterPlanning(userId, sessionId, userInput, routePlanJson, budgetJson, null);
+    }
+
+    /**
+     * S-D0：按 clientRequestId 反查行程 id（回写"超时后查再决"通道，只读）。
+     * 默认 empty；planning 实现查库，webflux 桥实现经 HTTP 查询端点。
+     */
+    default Optional<Long> findItineraryIdByClientRequestId(String clientRequestId) {
+        return Optional.empty();
+    }
 }

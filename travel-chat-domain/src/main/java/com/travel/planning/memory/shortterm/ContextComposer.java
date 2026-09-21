@@ -1,7 +1,10 @@
 package com.travel.planning.memory.shortterm;
 
 import com.travel.common.prompt.Markers;
+import com.travel.common.trace.SpanCollector;
 import com.travel.memory.MemoryFacade;
+import org.springframework.beans.factory.annotation.Autowired;
+import java.util.Map;
 import com.travel.planning.memory.longterm.ProfileContextAssembler;
 import com.travel.memory.shortterm.ShortTermMemoryProperties;
 import lombok.RequiredArgsConstructor;
@@ -17,6 +20,15 @@ import org.springframework.stereotype.Component;
 @Component
 @RequiredArgsConstructor
 public class ContextComposer {
+
+    /** S-B6c：Span 采集挂点（optional 注入，缺省自给） */
+    private SpanCollector spanCollector = new SpanCollector();
+
+    @Autowired(required = false)
+    void setSpanCollector(SpanCollector spanCollector) {
+        this.spanCollector = spanCollector;
+    }
+
 
     private final ProfileContextAssembler profileContextAssembler;
     private final ShortTermMemoryProperties memoryProps;
@@ -49,6 +61,33 @@ public class ContextComposer {
                                    String consensus, String sessionContext,
                                    String candidates, String message, String anchorSection,
                                    String preferenceSection) {
+        // S-B6c：记忆组装段 span（requestId 取自既有 TraceContext 同线程读）
+        String rid = com.travel.planning.trace.TraceContext.active()
+                ? com.travel.planning.trace.TraceContext.current().requestId : null;
+        SpanCollector.Span span = rid == null ? null : spanCollector.startSpan(rid, "memory", "pipeline");
+        try {
+            ComposedContext ctx = composeInternal(sessionId, userId, profileContext, historySection,
+                    consensus, sessionContext, candidates, message, anchorSection, preferenceSection);
+            if (span != null) {
+                spanCollector.endSpan(rid, span, "ok",
+                        Map.of("inputTokens", ctx == null ? -1 : ctx.tokens(),
+                               "composedChars", ctx == null || ctx.text() == null ? 0 : ctx.text().length()));
+            }
+            return ctx;
+        } catch (RuntimeException e) {
+            if (span != null) {
+                spanCollector.endSpan(rid, span, "error", Map.of("error", String.valueOf(e.getMessage())));
+            }
+            throw e;
+        }
+    }
+
+    /** S-B6c：原 compose 本体提取（包内可见） */
+    ComposedContext composeInternal(String sessionId, Long userId,
+                                    String profileContext, String historySection,
+                                    String consensus, String sessionContext,
+                                    String candidates, String message, String anchorSection,
+                                    String preferenceSection) {
         ComposedInput ci = composeWithTokens(profileContext, historySection, consensus,
                 sessionContext, candidates, message, anchorSection, preferenceSection);
         String composed = ci.text();

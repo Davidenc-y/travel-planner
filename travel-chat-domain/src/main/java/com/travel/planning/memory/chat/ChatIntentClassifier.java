@@ -1,5 +1,7 @@
 package com.travel.planning.memory.chat;
 
+import com.travel.common.trace.SpanCollector;
+import org.springframework.beans.factory.annotation.Autowired;
 import com.travel.common.config.ChatIntent;
 
 import com.travel.common.util.JsonUtils;
@@ -40,6 +42,14 @@ public class ChatIntentClassifier {
     private final Map<String, ChatIntent> cache;
 
     // M7-6：意图分类为高频短输出 → light 角色（注册表默认 qwen-turbo），避免旗舰模型成本浪费
+    /** S-B6a：Span 采集挂点（optional 注入，缺省自给） */
+    private SpanCollector spanCollector = new SpanCollector();
+
+    @Autowired(required = false)
+    void setSpanCollector(SpanCollector spanCollector) {
+        this.spanCollector = spanCollector;
+    }
+
     public ChatIntentClassifier(@Qualifier("lightModel") ChatModel chatModel,
                                 ChatIntentProperties properties,
                                 PromptTemplates promptTemplates,
@@ -60,6 +70,26 @@ public class ChatIntentClassifier {
      * 意图分类入口：规则优先 →（可选）LLM 兜底 → 回退 PLANNING；结果 LRU 缓存
      */
     public ChatIntent classify(String message) {
+        // S-B6a：意图分类段 span（requestId 取自既有 TraceContext 同线程上下文）
+        String rid = com.travel.planning.trace.TraceContext.active()
+                ? com.travel.planning.trace.TraceContext.current().requestId : null;
+        SpanCollector.Span span = rid == null ? null : spanCollector.startSpan(rid, "intent", "pipeline");
+        try {
+            ChatIntent intent = doClassify(message);
+            if (span != null) {
+                spanCollector.endSpan(rid, span, "ok", Map.of("intent", String.valueOf(intent)));
+            }
+            return intent;
+        } catch (RuntimeException e) {
+            if (span != null) {
+                spanCollector.endSpan(rid, span, "error", Map.of("intent", "UNKNOWN"));
+            }
+            throw e;
+        }
+    }
+
+    /** S-B6a：原 classify 本体提取 */
+    private ChatIntent doClassify(String message) {
         String q = message == null ? "" : message.trim();
         if (q.isBlank()) {
             return ChatIntent.PLANNING;

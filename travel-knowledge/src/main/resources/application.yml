@@ -61,7 +61,8 @@ spring:
 mybatis-plus:
   mapper-locations: classpath:mapper/*.xml
   configuration:
-    log-impl: org.apache.ibatis.logging.stdout.StdOutImpl
+    # S-E2（P3-③）：生产收敛 STDOUT→Slf4j（local profile 保持 StdOutImpl；DEBUG 明细经 logging.level 管控）
+    log-impl: org.apache.ibatis.logging.slf4j.Slf4jImpl
     map-underscore-to-camel-case: true
   global-config:
     db-config:
@@ -178,8 +179,10 @@ travel:
   # RAG 默认策略
   rag:
     default-type: hybrid
-    # P3：auto 复杂查询首选路由（supervisor / agent / heuristic），用于 A/B 对比
-    auto-router: supervisor
+    # P3：auto 复杂查询首选路由（supervisor / agent / heuristic）；S-A5/A-6（L1a）：supervisor→agent（授权键值清单第 3 处）
+    auto-router: agent
+    # S-B2 审计修复：键路径与 @Value 对齐为平级 travel.rag.hedge-enabled
+    hedge-enabled: false
     # MR-D1：HyDE 假设答案改写（向量路专用；默认关=原 query 零变更，E-33）
     query:
       hyde:

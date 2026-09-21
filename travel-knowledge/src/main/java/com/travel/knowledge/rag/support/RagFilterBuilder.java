@@ -104,10 +104,11 @@ public class RagFilterBuilder {
         }
         List<String> parts = new ArrayList<>();
         if (StringUtils.hasText(intent.city())) {
-            parts.add("city == \"" + intent.city() + "\"");
+            // S-E0：参数化构建器（C-08-01 注入清偿）
+            parts.add(MilvusExprBuilder.eq("city", intent.city()));
         }
         if (StringUtils.hasText(intent.type())) {
-            parts.add("type == \"" + intent.type() + "\"");
+            parts.add(MilvusExprBuilder.eq("type", intent.type()));
         }
         if (intent.freeOnly()) {
             parts.add("free_entry == 1");

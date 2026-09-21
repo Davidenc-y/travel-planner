@@ -10,6 +10,7 @@ import com.travel.stream.service.TurnInterruptedException;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.metadata.Usage;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 import reactor.core.publisher.Flux;
 
@@ -47,10 +48,17 @@ public class TokenUsageInterceptor extends ModelInterceptor {
      */
     public static final String TURN_CANCELLATION_KEY = "travel_turn_cancellation_key";
 
+    /** S-C2c：意图预算 token 门上限（RunnableConfig metadata；executor 按意图档写入） */
+    public static final String BUDGET_MAX_TOKENS_KEY = "travel_budget_max_tokens";
+
     private final ConcurrentMap<String, Long> totals = new ConcurrentHashMap<>();
     private final ConcurrentMap<String, Long> promptTotals = new ConcurrentHashMap<>();
     private final ConcurrentMap<String, Long> completionTotals = new ConcurrentHashMap<>();
     private final TurnCancellationRegistry cancellationRegistry;
+
+    /** S-C2c：预算超限 trip 既有 QuotaShortCircuit wire（optional 注入，null=门关闭） */
+    @Autowired(required = false)
+    private QuotaTripwire quotaTripwire;
 
     public TokenUsageInterceptor(TurnCancellationRegistry cancellationRegistry) {
         this.cancellationRegistry = cancellationRegistry;
@@ -111,6 +119,7 @@ public class TokenUsageInterceptor extends ModelInterceptor {
         // 非流式：现有 F27 逻辑（getChatResponse() 携带完整 Usage）
         if (response.getChatResponse() != null) {
             accumulate(requestId, response.getChatResponse().getMetadata().getUsage());
+            enforceBudget(request, requestId);
             return response;
         }
 
@@ -120,10 +129,35 @@ public class TokenUsageInterceptor extends ModelInterceptor {
             AtomicReference<Usage> lastUsage = new AtomicReference<>();
             Flux<?> tapped = flux
                     .doOnNext(chunk -> captureLastUsage(chunk, lastUsage))
-                    .doOnComplete(() -> accumulate(requestId, lastUsage.get()));
+                    .doOnComplete(() -> {
+                        accumulate(requestId, lastUsage.get());
+                        enforceBudget(request, requestId);
+                    });
             return new ModelResponse(tapped);
         }
         return response;
+    }
+
+    /**
+     * S-C2c：意图预算 token 门——累计超过 metadata 上限（executor 按意图档写入）时
+     * trip 既有 QuotaShortCircuit wire（后续模型调用短路，超限语义=额度类）；不再新增日志前缀。
+     * 无 tripwire/无上限 一律静默跳过（关闭态等价）。
+     */
+    private void enforceBudget(ModelRequest request, String requestId) {
+        if (quotaTripwire == null || request.getContext() == null) {
+            return;
+        }
+        Object cap = request.getContext().get(BUDGET_MAX_TOKENS_KEY);
+        if (!(cap instanceof Number number)) {
+            return;
+        }
+        long[] usage = peek(requestId);
+        long total = usage == null ? 0L : usage[2];
+        if (total > number.longValue()) {
+            Object turnKey = request.getContext().get(TURN_CANCELLATION_KEY);
+            String scope = (turnKey instanceof String s && !s.isBlank()) ? s : requestId;
+            quotaTripwire.trip(scope);
+        }
     }
 
     /** 从 ModelRequest.context（= RunnableConfig metadata 拷贝）解析取消令牌。 */

@@ -53,13 +53,32 @@ public class RerankGate {
      * 开启且 gated 时对结果集逐条打 lowConfidence=true 标记。
      */
     public List<SearchResult> apply(List<SearchResult> results) {
+        return apply(results, false);
+    }
+
+    /**
+     * S 审计复合门控（2026-09-21）：live 分数域正负例重叠（正 0.0285~0.0328 / 负 0.0164~0.0320），
+     * 单一绝对阈值无法兼顾 T5/T6。意图结构为空（QU 未识别城市与类型=离域强信号）时改用
+     * 更高阈值 emptyIntentThreshold（0.0322，标定=负例上限 0.0320 之上、正例 p50 0.0323 之下）；
+     * 结构化有效查询（有城市/类型）仍走基础阈值，T6 不受影响。
+     */
+    public List<SearchResult> apply(List<SearchResult> results, boolean intentEmpty) {
         if (properties.getGateThreshold() <= 0.0 || results == null || results.isEmpty()) {
             return results;
         }
-        GateResult result = evaluate(results.stream().map(SearchResult::getScore).toList());
-        if (result.gated()) {
+        List<Double> scores = results.stream().map(SearchResult::getScore).toList();
+        double threshold = intentEmpty
+                ? Math.max(properties.getGateThreshold(), EMPTY_INTENT_THRESHOLD)
+                : properties.getGateThreshold();
+        double topScore = scores.stream().mapToDouble(Double::doubleValue).max().orElse(0.0);
+        boolean gated = topScore < threshold;
+        if (gated) {
+            log.info("[RerankGate] topScore={} threshold={} intentEmpty={} gated=true", topScore, threshold, intentEmpty);
             results.forEach(r -> r.setLowConfidence(Boolean.TRUE));
         }
         return results;
     }
+
+    /** 复合门控：离域（意图空）专用阈值——标定依据见 apply 复合注释 */
+    static final double EMPTY_INTENT_THRESHOLD = 0.0322;
 }

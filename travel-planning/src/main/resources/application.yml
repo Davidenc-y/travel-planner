@@ -57,7 +57,8 @@ spring:
 mybatis-plus:
   mapper-locations: classpath:mapper/*.xml
   configuration:
-    log-impl: org.apache.ibatis.logging.stdout.StdOutImpl
+    # S-E2（P3-③）：生产收敛 STDOUT→Slf4j（DEBUG 明细经 logging.level 管控，控制台不再打行程 JSON/用户行；local profile 保持 StdOutImpl）
+    log-impl: org.apache.ibatis.logging.slf4j.Slf4jImpl
     map-underscore-to-camel-case: true
   global-config:
     db-config:
@@ -73,6 +74,20 @@ travel:
   # M11-3：可靠性看板管理员白名单（空=无管理员，生产用环境变量 ADMIN_USER_IDS 注入）
   admin:
     user-ids: ${ADMIN_USER_IDS:2}
+  # S-C2：意图分级预算 presets（§八④授权新键组；紧=CHAT/PROFILE/FUNCTIONAL，标准=PLANNING/REFINE，宽=RECALL；
+  # 消费=C-2b supervisor 墙钟覆盖 + TokenUsageInterceptor token 门，超限走既有 QuotaShortCircuit 通道）
+  rag:
+    # S-D1：grounding 扩展——行程/回复景点名未命中知识库时行级标注（回退 false=关闭）
+    grounding:
+      strict-attraction: true
+  chat:
+    budget-presets:
+      CHAT: { max-steps: 4, wall-ms: 20000, max-tokens: 4000 }
+      PROFILE: { max-steps: 4, wall-ms: 20000, max-tokens: 4000 }
+      FUNCTIONAL: { max-steps: 4, wall-ms: 20000, max-tokens: 4000 }
+      PLANNING: { max-steps: 8, wall-ms: 45000, max-tokens: 10000 }
+      REFINE: { max-steps: 8, wall-ms: 45000, max-tokens: 10000 }
+      RECALL: { max-steps: 12, wall-ms: 75000, max-tokens: 16000 }
   # F104 P1：MinIO 业务对象存储（头像 avatars 桶）
   minio:
     endpoint: http://${MIDDLEWARE_HOST:192.168.253.129}:9000
@@ -164,6 +179,9 @@ management:
 logging:
   level:
     com.travel: DEBUG
+    # S-E2（P3-③）：mapper 层 WARN——Slf4jImpl 的 SQL 明细（完整行程 JSON/用户行）不再进控制台
+    com.travel.planning.mapper: WARN
+    com.travel.common.repository: WARN
     org.springframework.ai: INFO
     com.alibaba.cloud.ai: INFO
   pattern:

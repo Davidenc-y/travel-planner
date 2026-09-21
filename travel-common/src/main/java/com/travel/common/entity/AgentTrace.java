@@ -79,5 +79,17 @@ public class AgentTrace implements Serializable {
 
     private String errorMsg;
 
+    /** S-B3：Span 树 JSON（SpanCollector 批量刷盘；截断策略=单 span attrs ≤2KB、总 ≤16KB） */
+    private String spans;
+
+    /** S-B4：首 token 耗时 ms（流式首包打点；null=非流式/未采集） */
+    private Long ttftMs;
+
+    /** S-B3：auto 路由层耗时 ms（含对冲等待；null=非 auto） */
+    private Long routingMs;
+
+    /** S-B3：对冲胜出 1 / 路由胜出 0（null=hedge 未启用或非 auto） */
+    private Integer hedgeWon;
+
     private LocalDateTime createdAt;
 }

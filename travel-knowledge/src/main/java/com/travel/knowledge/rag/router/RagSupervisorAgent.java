@@ -42,7 +42,8 @@ import java.util.concurrent.TimeUnit;
 @SuppressWarnings("deprecation")
 public class RagSupervisorAgent {
 
-    private static final long TIMEOUT_SECONDS = 30;
+    /** S-A5/A-6（L1a）：墙钟 30s→8s——复杂查询 auto 路由 p99 对齐 llm 层预算（F-1 45s 管线修正；cancel 补齐在 S-B/B-1） */
+    private static final long TIMEOUT_SECONDS = 8;
     private static final int RECURSION_LIMIT = 12;
     private static final ExecutorService EXECUTOR = Executors.newVirtualThreadPerTaskExecutor();
 
@@ -108,10 +109,12 @@ public class RagSupervisorAgent {
         if (supervisor == null) {
             return null;
         }
+        // S-B0/B-1（L1b，skill F23 清单）：future 提到 try 外持有引用，超时/异常路径统一 cancel(true)——
+        // orTimeout/get 超时后任务仍滞留虚拟线程（zombie 管线与 ParallelNode 池滞留）。
+        // 打断安全性已证：state 整体丢弃 + threadId 隔离（invokeSafely UUID）+ 无共享可变状态。
+        CompletableFuture<Optional<OverAllState>> future = CompletableFuture.supplyAsync(
+                () -> invokeSafely(supervisor, buildInput(intent, topK)), EXECUTOR);
         try {
-            String input = buildInput(intent, topK);
-            CompletableFuture<Optional<OverAllState>> future = CompletableFuture.supplyAsync(
-                    () -> invokeSafely(supervisor, input), EXECUTOR);
             OverAllState state = future.orTimeout(TIMEOUT_SECONDS, TimeUnit.SECONDS)
                     .get()
                     .orElse(null);
@@ -129,6 +132,7 @@ public class RagSupervisorAgent {
             log.info("[RagSupervisor] 多步组合完成, 结果 {} 条", results == null ? 0 : results.size());
             return results;
         } catch (Exception e) {
+            future.cancel(true);
             log.warn("[RagSupervisor] 执行失败，回退单步 Agent/启发式: {}", e.getMessage());
             return null;
         }

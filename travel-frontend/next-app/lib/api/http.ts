@@ -283,13 +283,17 @@ export function getErrorMessage(err: unknown): string {
     return e?.response?.data?.message
       || '模型额度不足：当前模型不可用，请切换其他可用模型，或在 DashScope 控制台充值/关闭”仅免费额度”后重试';
   }
+  // S-A4/A-5（P1-②）：模型不可用/无权限（403 无额度码）——与额度不足区分的独立文案
+  if (e?.response?.data?.code === 40302) {
+    return e?.response?.data?.message || '该模型当前不可用，请切换模型';
+  }
   const msg = e?.response?.data?.message || e?.message || '';
   const code = e?.response?.data?.code;
   // G-3：已知友好文案白名单（正则匹配前缀，覆盖后端各业务异常消息）
   const KNOWN_SAFE = [
     /^提示内容为空或超长/, /^查询内容/, /^会话不存在/, /^无权访问/,
     /^请求过于频繁/, /^登录已过期/, /^消息过长/, /^消息内容为空/,
-    /^模型不存在/, /^模型额度不足/, /^行程/, /^用户名/, /^邮箱/,
+    /^模型不存在/, /^模型额度不足/, /^该模型当前不可用/, /^行程/, /^用户名/, /^邮箱/,
     /^知识库无相关/, /^非法控制字符/, /^暂停/, /^无权/,
   ];
   if (msg && KNOWN_SAFE.some((re) => re.test(msg))) {

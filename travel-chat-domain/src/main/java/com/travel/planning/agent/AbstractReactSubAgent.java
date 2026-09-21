@@ -2,6 +2,7 @@ package com.travel.planning.agent;
 
 import com.alibaba.cloud.ai.graph.agent.ReactAgent;
 import com.alibaba.cloud.ai.graph.agent.interceptor.ModelInterceptor;
+import com.travel.planning.agent.supervisor.SpanModelInterceptor;
 import com.travel.planning.agent.supervisor.ModelRouteInterceptor;
 import com.travel.planning.agent.supervisor.QuotaShortCircuitInterceptor;
 import com.travel.planning.agent.supervisor.TokenUsageInterceptor;
@@ -9,6 +10,7 @@ import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.tool.ToolCallback;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 
 import java.util.ArrayList;
@@ -59,6 +61,11 @@ public abstract class AbstractReactSubAgent {
             if (quotaInterceptor != null) {
                 interceptors.add(quotaInterceptor);
             }
+            // S-B6b：Span 拦截器挂最内层（index 0=最贴 handler）——量纯模型调用耗时；
+            // requestId 经 ModelRequest context 显式传递（跨线程合规，见 SpanModelInterceptor）
+            if (spanModelInterceptor != null) {
+                interceptors.add(0, spanModelInterceptor);
+            }
             if (!interceptors.isEmpty()) {
                 builder.interceptors(interceptors.toArray(new ModelInterceptor[0]));
             }
@@ -105,4 +112,8 @@ public abstract class AbstractReactSubAgent {
     protected QuotaShortCircuitInterceptor quotaShortCircuitInterceptor() {
         return null;
     }
+
+    /** S-B6b：图流子代理 Span 拦截器（optional 字段注入，bean 缺省=不挂载）。 */
+    @Autowired(required = false)
+    private SpanModelInterceptor spanModelInterceptor;
 }

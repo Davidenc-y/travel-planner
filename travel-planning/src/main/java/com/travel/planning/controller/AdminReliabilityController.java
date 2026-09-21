@@ -64,7 +64,7 @@ public class AdminReliabilityController {
         LocalDate today = LocalDate.now();
         List<String> days = new ArrayList<>();
         Map<String, List<Long>> metrics = new LinkedHashMap<>();
-        for (String metric : List.of("abstain", "lowconf", "degraded")) {
+        for (String metric : List.of("abstain", "lowconf", "degraded", "hallucflag")) {
             metrics.put(metric, new ArrayList<>());
         }
         for (int i = 6; i >= 0; i--) {

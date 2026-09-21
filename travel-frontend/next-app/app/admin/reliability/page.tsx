@@ -8,8 +8,10 @@ import { useApiQuery } from '@/lib/use-api-query';
 import { formatTokenCount } from '@/lib/usage-format';
 import {
   DataQualityCard,
+  LatencySpansCard,
   TurnLatencyCard,
   type DataQualityPayload,
+  type LatencySpansPayload,
   type TurnLatencyPayload,
 } from './cards';
 
@@ -106,6 +108,12 @@ export default function ReliabilityPage() {
     () => adminApi.turnLatency(days).then((res) => res.data.data as TurnLatencyPayload),
     [adminQueryEnabled, days],
     { enabled: adminQueryEnabled, cacheKey: `admin:turn-latency:${days}` },
+  );
+  // S-B8：latency-spans 聚合（同 FE-P3.1 模式；卡片零图表依赖，shared 红线不受影响）
+  const latencySpans = useApiQuery<LatencySpansPayload>(
+    () => adminApi.latencySpans(days).then((res) => res.data.data as LatencySpansPayload),
+    [adminQueryEnabled, days],
+    { enabled: adminQueryEnabled, cacheKey: `admin:latency-spans:${days}` },
   );
 
   // M27（S6）：非管理员直访防御（后端 40302 为权威；此处避免无谓请求与闪烁）
@@ -285,6 +293,7 @@ export default function ReliabilityPage() {
           <div className="grid gap-4 lg:grid-cols-2">
             <DataQualityCard payload={dataQuality.data} />
             <TurnLatencyCard payload={turnLatency.data} />
+            <LatencySpansCard payload={latencySpans.data} />
           </div>
         </>
       )}

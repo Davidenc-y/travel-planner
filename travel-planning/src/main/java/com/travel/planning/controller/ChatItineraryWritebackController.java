@@ -6,7 +6,9 @@ import com.travel.common.web.support.InternalTokenSupport;
 import com.travel.planning.agent.support.ItineraryVersionPort;
 import com.travel.planning.service.ItineraryVersionPortImpl;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -47,10 +49,22 @@ public class ChatItineraryWritebackController {
         String userInput = asString(body.get("userInput"));
         String routePlanJson = asString(body.get("routePlanJson"));
         String budgetJson = asString(body.get("budgetJson"));
+        // S-D0：桥侧生成的幂等键透传（空则 planning 实现自行生成，语义不变）
+        String clientRequestId = asString(body.get("clientRequestId"));
         Long itineraryId = itineraryVersionPort.syncAfterPlanning(
-                userId, sessionId, userInput, routePlanJson, budgetJson).orElse(null);
+                userId, sessionId, userInput, routePlanJson, budgetJson, clientRequestId).orElse(null);
         log.info("[ItineraryWritebackBridge] sessionId={}, itineraryId={}", sessionId, itineraryId);
         return R.ok(itineraryId);
+    }
+
+    /**
+     * S-D0（A 案）：按幂等键反查行程 id（webflux 桥"超时后查再决"通道，只读）。
+     */
+    @GetMapping("/chat-writeback")
+    public R<Long> chatWritebackLookup(@RequestHeader(value = GrayFlags.HEADER_INTERNAL_TOKEN, required = false) String headerToken,
+                                       @RequestParam(value = "clientRequestId", required = false) String clientRequestId) {
+        internalTokenSupport.requireValid(headerToken);
+        return R.ok(itineraryVersionPort.findItineraryIdByClientRequestId(clientRequestId).orElse(null));
     }
 
     private static String asString(Object value) {

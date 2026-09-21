@@ -41,6 +41,10 @@ public final class TraceContext {
         public String focusKind;
         /** M27（S5/E3 观测支撑）：DETOUR 隔离是否生效（null=开关关/未命中） */
         public Boolean detourSkipped;
+        /** S-B7：首 token 耗时 ms（流监听首事件打点；null=非流式/未采集） */
+        public Long ttftMs;
+        /** S-C2：意图名（预算档解析键；ChatRoutingStep 分类后写入，null=未分类） */
+        public String budgetIntent;
 
         public void addPath(String node) {
             path.add(node);

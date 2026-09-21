@@ -152,6 +152,29 @@ public final class SupervisorResponseSupport {
      * 本方法在调用线程执行（SupervisorGraphExecutor 的 future.get() 返回后），
      * TraceContext ThreadLocal 可用。</p>
      */
+    /**
+     * S-D1：未命中标注桥——与 recordGrounding 同源候选提取（composed 知识库候选 JSON），
+     * 对"推荐景点"段（缺失则全文）做 strict-attraction 行级标注，返回标注后全文。
+     * 观测模式不阻断：checker 空候选/开关关 → 原样返回。
+     */
+    public static String annotateGrounding(AttractionGroundingChecker checker,
+                                           String composed, String response) {
+        if (checker == null || response == null || response.isBlank()) {
+            return response;
+        }
+        Set<String> candidates = extractCandidateNames(composed);
+        if (candidates.isEmpty()) {
+            return response;
+        }
+        String attractionsText = extractSection(response, "推荐景点");
+        if (attractionsText == null) {
+            String marked = checker.annotate(candidates, response);
+            return marked;
+        }
+        String marked = checker.annotate(candidates, attractionsText);
+        return marked.equals(attractionsText) ? response : response.replace(attractionsText, marked);
+    }
+
     public static void recordGrounding(AttractionGroundingChecker checker,
                                        String composed, String response) {
         if (checker == null || !TraceContext.active()) {

@@ -171,8 +171,8 @@ public class ContextRetriever {
         try {
             milvusClient.delete(DeleteParam.newBuilder()
                     .withCollectionName(MILVUS_COLLECTION)
-                    .withExpr("sessionId == \"" + sessionId
-                            + "\" and seq like \"" + seqPrefix + "%\"")
+                    .withExpr(com.travel.knowledge.rag.support.MilvusExprBuilder
+                            .sessionSeqPrefixExpr(sessionId, seqPrefix))
                     .build());
         } catch (Exception e) {
             log.warn("[SessionContext] 按前缀删除(Milvus)失败: sessionId={}, seqPrefix={}, error={}",
@@ -224,7 +224,7 @@ public class ContextRetriever {
                     .withVectors(List.of(queryVectorList))
                     .withTopK(size)
                     .withMetricType(MetricType.L2)
-                    .withExpr("sessionId == \"" + sessionId + "\"")
+                    .withExpr(com.travel.knowledge.rag.support.MilvusExprBuilder.eq("sessionId", sessionId))
                     .withOutFields(List.of("sessionId", "type", "seq", "content", "role", "sourceNode", "createdAt"))
                     .build();
             R<SearchResults> response = milvusClient.search(searchParam);

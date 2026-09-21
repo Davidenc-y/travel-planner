@@ -35,7 +35,10 @@ import org.springframework.context.annotation.Import;
 // M7：模型网关装配（travel.ai.model-registry.enabled=true 时提供 chatModel/lightModel）
 @Import({com.travel.common.config.MybatisPlusConfig.class,
         com.travel.common.config.ChatWordLists.class,  // K-4/E-2：ChatWordLists 已迁至 common（E-3 改指新包）
-        com.travel.aigateway.config.GatewayAutoConfig.class})
+        com.travel.aigateway.config.GatewayAutoConfig.class,
+        // S-B6 审计修复（2026-09-21）：SpanModelInterceptor 依赖 SpanCollector——webflux 不扫 common
+        // （K-4 惯例），按 ChatWordLists 同款显式 @Import 注册，否则全上下文装配失败
+        com.travel.common.trace.SpanCollector.class})
 public class TravelStreamWebfluxApplication {
 
     public static void main(String[] args) {

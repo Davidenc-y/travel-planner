@@ -64,6 +64,7 @@ public class CorrectiveRagStrategy implements RagStrategy {
         // Step 2: 检查质量
         // MR-B2：lowConfidence 标记纳入降级判定输入——B1 阈值门控 gated 时结果集带标记，
         // 视为质量不达标走既有纠错路径（重写→重检索→合并）；门控关（默认）无标记零变更（E-33）。
+        // S-A1：gate-threshold 经 A-0 标定为 0.19（原 0.5 全量误标），本判定触发频率随之回归真实低置信语义。
         if (checkQuality(initialResults) && !hasLowConfidence(initialResults)) {
             log.info("[CorrectiveRAG] 质量达标，直接返回");
             initialResults.forEach(r -> r.setSource("corrective_rag"));

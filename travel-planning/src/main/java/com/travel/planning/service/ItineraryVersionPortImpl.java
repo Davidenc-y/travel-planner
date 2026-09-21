@@ -78,6 +78,18 @@ public class ItineraryVersionPortImpl implements ItineraryVersionPort {
         this.writebackEventPublisher = writebackEventPublisher;
     }
 
+    /** S-D0（A 案）：按桥传幂等键反查行程 id（uk_client_request_id 唯一，只读 LIMIT 1）。 */
+    @Override
+    public Optional<Long> findItineraryIdByClientRequestId(String clientRequestId) {
+        if (clientRequestId == null || clientRequestId.isBlank()) {
+            return Optional.empty();
+        }
+        Itinerary hit = itineraryMapper.selectOne(new QueryWrapper<Itinerary>()
+                .eq("client_request_id", clientRequestId)
+                .last("LIMIT 1"));
+        return hit == null ? Optional.empty() : Optional.of(hit.getId());
+    }
+
     /** R1.1：显式构造器（MM-1b.1 收编：原末两参 SessionAnchorStore/BehaviorProfileService 合并为 MemoryFacade）。 */
     public ItineraryVersionPortImpl(ItineraryMapper itineraryMapper,
                                     ItineraryPersistenceService persistenceService,
@@ -115,7 +127,7 @@ public class ItineraryVersionPortImpl implements ItineraryVersionPort {
     @Override
     public Optional<Long> syncAfterPlanning(Long userId, String sessionId,
                                             String userInput, String routePlanJson,
-                                            String budgetJson) {
+                                            String budgetJson, String clientRequestId) {
         if (sessionId == null || sessionId.isBlank()
                 || routePlanJson == null || routePlanJson.isBlank()
                 || !validRoutePlan(routePlanJson)) {
@@ -143,7 +155,7 @@ public class ItineraryVersionPortImpl implements ItineraryVersionPort {
             if (!createOnChat) {
                 return Optional.empty();
             }
-            Optional<Long> created = createFromChat(userId, sessionId, explicitInput, routePlanJson, budgetJson);
+            Optional<Long> created = createFromChat(userId, sessionId, explicitInput, routePlanJson, budgetJson, clientRequestId);
             created.ifPresent(id -> triggerBehaviorRecompute(userId));
             return created;
         } catch (Exception e) {
@@ -201,9 +213,9 @@ public class ItineraryVersionPortImpl implements ItineraryVersionPort {
         return Optional.of(current.getId());
     }
 
-    private Optional<Long> createFromChat(Long userId, String sessionId,
-                                          String userInput, String routePlanJson,
-                                          String budgetJson) {
+    private Optional<Long> createFromChat(Long userId, String sessionId, String userInput,
+                                          String routePlanJson, String budgetJson,
+                                          String clientRequestId) {
         String destination = explicitInputParser.parseDestination(userInput);
         Integer days = explicitInputParser.parseDays(userInput);
         if (destination == null || days == null || days <= 0) {
@@ -231,7 +243,9 @@ public class ItineraryVersionPortImpl implements ItineraryVersionPort {
         entity.setContent(content.content());
         entity.setMindmapData(buildMindmap(entity, content.content()));
         entity.setEstimatedCost(content.estimatedCost());
-        entity.setClientRequestId("chat-" + UUID.randomUUID());
+        // S-D0：桥传键优先（webflux 生成后可在超时后按此键查再决）；空则保持原生成语义
+        entity.setClientRequestId(clientRequestId != null && !clientRequestId.isBlank()
+                ? clientRequestId : "chat-" + UUID.randomUUID());
         entity.setSessionId(sessionId);
         persistenceService.insert(entity);
         if (versionService != null) {
