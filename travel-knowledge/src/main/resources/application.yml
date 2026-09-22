@@ -321,6 +321,10 @@ management:
 logging:
   level:
     com.travel: DEBUG
+    # U-6：mapper SQL 控制台噪声收敛（对齐 E-2 planning 侧先例）——mapper 接口
+    # 全量 SQL 不再打印；com.travel.common.repository 为共享 AgentTraceMapper 包
+    com.travel.knowledge.repository: WARN
+    com.travel.common.repository: WARN
     # F33：Milvus SDK 内部重试告警收敛。SDK 在 gRPC 瞬时断流/参数校验失败时会打印
     # ERROR + 全栈（如 DescribeCollectionRequest ... end-of-stream mid-frame），
     # 随后由 SDK retry 自动恢复并成功写入。数据完整性由业务侧 ETL 成功/失败统计兜底，

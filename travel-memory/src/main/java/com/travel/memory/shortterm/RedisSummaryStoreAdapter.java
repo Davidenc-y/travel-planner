@@ -1,4 +1,4 @@
-package com.travel.planning.memory.shortterm;
+package com.travel.memory.shortterm;
 
 import com.travel.memory.shortterm.SummaryStorePort;
 import org.springframework.core.io.ClassPathResource;

@@ -31,7 +31,7 @@ import com.travel.planning.memory.pipeline.ChatBudgetStep;
 import com.travel.planning.memory.pipeline.ChatRoutingStep;
 import com.travel.planning.memory.pipeline.ChatSessionGuardProperties;
 import com.travel.planning.memory.pipeline.ChatTitleProperties;
-import com.travel.planning.memory.shortterm.SessionFinalizer;
+import com.travel.memory.shortterm.SessionFinalizer;
 import com.travel.planning.trace.ModelRouteTracker;
 import com.travel.planning.trace.TraceContext;
 import io.lettuce.core.RedisCommandInterruptedException;

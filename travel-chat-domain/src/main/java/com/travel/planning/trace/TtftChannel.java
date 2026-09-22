@@ -29,7 +29,9 @@ public final class TtftChannel {
         if (TTFTS.size() > MAX_ENTRIES) {
             TTFTS.clear();
         }
-        TTFTS.put(requestId, ttftMs);
+        // U-1b 分支B：putIfAbsent=first-ttft-wins——多节点重复 record 不覆盖首次值，
+        // 与"首 token"语义对齐（交叉审查③语义修正）
+        TTFTS.putIfAbsent(requestId, ttftMs);
     }
 
     /** 取走即移除（无则 null）；仅 AgentTraceCollector.end 消费。 */

@@ -74,7 +74,7 @@ This is a **personal thesis project** developed iteratively under a milestone-dr
 | **Spring AI**                           | 1.1.2                 | Unified LLM abstraction (`ChatClient`, `ChatModel`)                                                                 |
 | **Spring AI Alibaba**                   | 1.1.2.0               | **Agent Framework** (supervisor agents) + **Graph Core** (StateGraph workflow) — the core AI orchestration backbone |
 | **Spring AI Alibaba Starter DashScope** | 1.1.2.0               | Connects to Alibaba Cloud DashScope (Qwen LLM series)                                                               |
-| **Spring WebFlux / Reactor**            | 6.2.x / 3.7.x         | Reactive transport pilot (`travel-stream-webflux` :8083) and the `Flux<StreamEvent>` streaming pipeline (M6)        |
+| **Spring WebFlux / Reactor**            | 6.2.x / 3.7.x         | Reactor `Flux<StreamEvent>` streaming pipeline (M6); the `:8083` reactive transport pilot was retired in v2.0.7.10  |
 | **MyBatis-Plus**                        | 3.5.7                 | ORM with rich CRUD, pagination, and codegen support                                                                 |
 | **Redisson**                            | 3.28.0                | Reserved for distributed locks/rate limiting: version-managed only in the parent POM since M3-19; not enabled (P3 evolution item) |
 | **Spring Data Redis**                   | 3.5.0                 | Redis read/write for refresh tokens and session summaries (explicitly introduced in planning since M3-19)                 |
@@ -204,27 +204,22 @@ Streaming transport (M6) — the chat pipeline is transport-agnostic:
                         │  events: thinking / token / done / error / id│
                         └───────────────┬──────────────────────────────┘
                                         │
-              ┌─────────────────────────┼─────────────────────────┐
-              ▼                                                 ▼
-┌───────────────────────────┐                  ┌──────────────────────────────┐
-│  MVC path — travel-       │                  │  Reactive path — travel-      │
-│  planning (:8081)         │                  │  stream-webflux (:8083,       │
-│  ChatController →         │                  │  optional gray switch)        │
-│  SseStreamAdapter →       │                  │  ReactiveJwtAuthFilter →       │
-│  SseEmitter               │                  │  ChatStreamWebfluxController  │
-└─────────────┬─────────────┘                  └───────────────┬──────────────┘
-              │                                                │
-              │   internal HTTP bridge (X-Internal-Token)      │
-              └──────────────▶ brief / weather / anchors ◀─────┘
+                                        ▼
+┌──────────────────────────────────────────────────────────────────────────┐
+│  MVC path — travel-planning (:8081)                                      │
+│  ChatController → SseStreamAdapter → SseEmitter                          │
+│  (the reactive :8083 transport pilot was retired in v2.0.7.10)           │
+└─────────────┬────────────────────────────────────────────────────────────┘
+              │   internal HTTP bridge (X-Internal-Token)
+              └──────────────▶ brief / weather / anchors
                                SSE text/event-stream
-                               frontend: NEXT_PUBLIC_STREAM_BASE
 ```
 
 ---
 
 ## 4. Module Breakdown
 
-The backend is a **Maven multi-module** project (`pom.xml`, Java 21). Ten backend modules + one frontend app:
+The backend is a **Maven multi-module** project (`pom.xml`, Java 21). Nine backend modules + one frontend app:
 
 ```
 travel-planner/
@@ -232,11 +227,10 @@ travel-planner/
 ├── docker-compose.yml      # All middleware services
 ├── travel-core/            # Pure-Java shared kernel (circuit breaker/rate limiter/RRFusion/normalizers)
 ├── travel-common/          # Shared entities, DTOs, enums, utils, exceptions
+├── travel-memory/          # Memory domain: shortterm/longterm/knowledge/session-store (V3 home)
 ├── travel-ai-gateway/      # Model registry + factory + routing proxy (M7)
 ├── travel-chat-stream/     # Transport-agnostic chat streaming pipeline (Flux<StreamEvent>, M6)
-├── travel-chat-domain/     # Chat domain: 9-step pipeline / agents / memory / guards / trace (M6-31)
-├── travel-web-mvc/         # MVC cross-cutting: global exception, rate-limit interceptor, SseStreamAdapter
-├── travel-stream-webflux/  # Reactive transport (:8083): JWT filter + ChatStream WebFlux controller (M6-30)
+├── travel-chat-domain/     # Chat domain: 9-step pipeline / agents / guards / trace (M6-31)
 ├── travel-crawl/           # Web crawler for attraction data
 ├── travel-knowledge/       # ETL + RAG knowledge engine
 ├── travel-planning/        # Core agentic planning service (main app, :8081)
@@ -313,7 +307,7 @@ Transport-agnostic chat streaming domain (M6-6-R1 Step 0):
 
 - `ChatStreamService` / `ChatStreamProperties` — stream lifecycle and timeout configuration;
 - `StreamingPipeline` — turns the chat-domain reply into a `Flux<StreamEvent>` (thinking / token / done / error / id);
-- `StreamEvent` / `StreamErrorCode` — shared wire protocol consumed by both the MVC and WebFlux adapters;
+- `StreamEvent` / `StreamErrorCode` — shared wire protocol consumed by the MVC adapter;
 - `TurnCancellation` / `TurnInterruptedException` — cancellation-token primitives shared by all transports.
 
 ### 4.6 travel-chat-domain
@@ -334,39 +328,17 @@ Chat domain, independent of any web transport (M6-31, ChatService sink-down):
   values canonicalized (M28-10);
 - **Guards & trace** — PromptGuard, rate limiter, circuit breaker, per-request agent trace;
 - **Runtime reliability (M7-8)** — `TraceAspect` covers `ChatService.runStream` so
-  the per-request message snapshot ThreadLocal is cleared on the SSE/WebFlux path
+  the per-request message snapshot ThreadLocal is cleared on the SSE path
   (no cross-request history leakage); Redis commands interrupted by thread
   cancellation are treated as turn cancellation (`INTERRUPTED`, resumable) instead of
   generic `FAILED`; rolling-summary validation checks the full generation input
   (old summary + new messages).
 
-### 4.7 travel-web-mvc
+### 4.7 travel-planning (`:8081`)
 
-MVC-only cross-cutting components (M6-9 P2):
-
-- `GlobalExceptionHandler` — transport-safe error handling (avoids writing JSON bodies into `text/event-stream`);
-- `RateLimitInterceptor` — MVC rate limiting;
-- `SseStreamAdapter` — `Flux<StreamEvent>` → Spring `SseEmitter` (keepalive,
-  cancellation, graceful SSE-disconnect handling; after a broken response it skips
-  `complete()` and just disposes, M7-8).
-
-### 4.8 travel-stream-webflux (`:8083`)
-
-Reactive transport pilot (M6-30~35):
-
-- `ReactiveJwtAuthFilter` — JWT-only user resolution (the `X-User-Id` header fallback was removed, M6-57 T8);
-- `ChatStreamWebfluxController` — reactive SSE endpoint backed by the same chat domain,
-  threading `preferences` / `anchoredItineraryIds` from the request body into
-  `StreamRequest.attributes` (M28-12);
-- `WebfluxChatSupportBridge` — internal HTTP bridge to planning (:8081) for
-  itinerary briefs / weather context, authenticated with the shared
-  `X-Internal-Token` (M26-2);
-- Global WebFlux exception handling + CORS; the frontend gray-switches to it with `NEXT_PUBLIC_STREAM_BASE=http://localhost:8083`.
-- `StreamBeansConfig` — explicit beans for the pilot (JWT auth, `StreamMetrics` Noop
-  fallback via `@ConditionalOnMissingBean`, Feign `HttpMessageConverters`, pilot
-  executor); imports `GatewayAutoConfig` so the same model registry serves 8083.
-
-### 4.9 travel-planning (`:8081`)
+> The former §4.7 `travel-web-mvc` (never a Maven module) and §4.8 `travel-stream-webflux`
+> (`:8083` reactive transport pilot) sections were removed in v2.0.7.10 — the pilot module
+> was retired and chat SSE is served exclusively by the MVC path in `travel-planning`.
 
 The **core service** where agents collaborate:
 
@@ -397,7 +369,7 @@ The **core service** where agents collaborate:
 - **Guard Layer** (`guard/`) — `PromptGuard` (prompt injection detection), rate limiting, and circuit breaker protecting LLM calls.
 - **Trace** (`trace/`) — per-request agent trace: every node execution, tool call, and LLM exchange is recorded for explainability and debugging.
 
-### 4.10 travel-frontend (`next-app`)
+### 4.8 travel-frontend (`next-app`)
 
 Next.js 14 App Router application (`npm run dev` serves :3000; `npm run dev:alt`
 serves :3100 — the port used throughout development):
@@ -547,8 +519,7 @@ Memory is **explicitly injected** into the supervisor's context window, and upda
 - **Rate Limiter** — Redis/Redisson-based token-bucket rate limiting per user/IP on chat & RAG endpoints.
 - **Circuit Breaker** — protects the LLM provider (DashScope) from cascading failures; falls back to cached responses.
 - **JWT Auth** — stateless token auth; passwords stored hashed.
-- **JWT-only identity on the reactive transport** — `ReactiveJwtAuthFilter`; the `X-User-Id` header fallback was removed (M6-57 T8).
-- **Internal-token auth** — inter-service HTTP bridges (webflux → planning) require the
+- **Internal-token auth** — inter-service HTTP bridges (planning/knowledge/crawl) require the
   shared `X-Internal-Token` secret and fail closed when unset (M21).
 - **Input validation** — zod (frontend) + Bean Validation (backend).
 
@@ -596,9 +567,10 @@ Each planning request produces a **trace record**: node ID, agent invoked, tool 
 
 ### 5.11 Streaming Transport & Turn Cancellation (M6)
 
-- **Dual transport**: chat SSE is served by MVC (`SseEmitter`, :8081) and WebFlux (:8083);
-  both consume the same `travel-chat-stream` `Flux<StreamEvent>` (thinking / token / done /
-  error / id). The frontend gray-switches with `NEXT_PUBLIC_STREAM_BASE`.
+- **Single transport (v2.0.7.10)**: chat SSE is served by MVC (`SseEmitter`, :8081), consuming
+  the `travel-chat-stream` `Flux<StreamEvent>` (thinking / token / done / error / id). The
+  former WebFlux `:8083` reactive pilot and its `NEXT_PUBLIC_STREAM_BASE` gray switch were
+  retired in v2.0.7.10.
 - **Frontend reveal**: per-session `streamStates` + a 24 ms × 3-char reveal queue; switching
   sessions never aborts the backend stream; background sessions accumulate and notify via a
   red dot on the session list (M6-5 / M6-48 / M6-49).
@@ -867,7 +839,7 @@ name starting with `M26-20260907`).
 ```
 1. User logs in → JWT issued (AuthController)
 2. User chats: "Plan a 5-day trip to Chengdu on a 3000 CNY budget"
-   └─▶ ChatController (or WebFlux controller) → SupervisorAgent
+   └─▶ ChatController → SupervisorAgent
         └─▶ 9-step MessagePipeline: Guard→Persist(idempotency key)→Preference→Knowledge→Intent→Memory→Budget→Route→Reply persist
         └─▶ Preference tags (per-turn) + anchored-itinerary sections rendered into the prompt
         └─▶ PreferenceAgent extracts constraints (5 days, Chengdu, ¥3000)
@@ -878,7 +850,7 @@ name starting with `M26-20260907`).
         └─▶ Output node produces structured JSON + markdown
         └─▶ Itinerary writeback: create-on-chat / REFINE + constraint columns + version snapshot
         └─▶ Trace recorder writes the full audit trail
-        └─▶ SSE transport streams thinking → token → done (MVC SseEmitter :8081 or WebFlux :8083)
+        └─▶ SSE transport streams thinking → token → done (MVC SseEmitter :8081)
              done carries preferenceSync (itinerary constraint read-back) for the frontend tags
         └─▶ stop → interrupt endpoint → INTERRUPTED; retry reuses the same idempotency key
    (recovery: FAILED/zombie-GENERATING itineraries can resume from breakpoints; chat streams can
@@ -927,7 +899,7 @@ The MySQL data is the **source of truth**; Elasticsearch and Milvus are derived 
   `TAVILY_API_KEY` (web-search enrichment) — both quota-guarded and optional
 - **Required security env vars (M21-1/2/3)**: `JWT_SECRET` (no default since M21-1 —
   startup fails when missing) and `TRAVEL_INTERNAL_TOKEN` (shared secret across
-  planning/webflux/knowledge/crawl; internal endpoints fail-closed when unset).
+  planning/knowledge/crawl; internal endpoints fail-closed when unset).
   Local development may set them in `application-local.yml` (gitignored).
 
 ### 9.2 Step 1 — Start Middleware
@@ -996,17 +968,14 @@ mvn -pl travel-knowledge spring-boot:run
 # terminal 2 — planning service (:8081)
 mvn -pl travel-planning spring-boot:run
 
-# terminal 3 — reactive chat stream transport (:8083, optional; requires travel-chat-domain)
-mvn -pl travel-stream-webflux spring-boot:run
-
-# terminal 4 — crawl service (:8087, optional)
+# terminal 3 — crawl service (:8087, optional)
 mvn -pl travel-crawl spring-boot:run
 ```
 
 When running from IDEA, add the `local` profile to every Run Configuration (see
 9.4b). After code changes that touch `travel-chat-domain` (the shared domain
 module), **Rebuild the module in IDEA** (or `mvn install` it) before restarting
-the webflux transport — it consumes the domain classes from its classpath.
+the planning service — it consumes the domain classes from its classpath.
 
 API contract doc: `docs/test/backend-api-postman-testing-2026-08-23.md` (Knife4j removed)
 
@@ -1018,9 +987,6 @@ npm install
 npm run dev                  # http://localhost:3000
 npm run dev:alt              # http://localhost:3100 (port used during development)
 # production: npm run build && npm start
-
-# optional: gray-switch chat SSE to the reactive transport (:8083)
-# NEXT_PUBLIC_STREAM_BASE=http://localhost:8083 npm run dev:alt
 ```
 
 ### 9.7 Hybrid Deployment (as used in development)

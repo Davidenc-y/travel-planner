@@ -124,6 +124,10 @@ final class SupervisorStreamExecutor {
             Map<String, String> resumeSeed) throws Exception {
         log.info("开始执行行程规划(图流): input={}, userId={}", userInput, userId);
         long start = System.currentTimeMillis();
+        // U-1b 分支A：thinking 回调首响等价打点（firstOutputAt 恒 0 时的 fallback 源）。
+        // 包装空安全——nodeThinking 缺位时仍打点：TTFT 属内部进度度量，不依赖 SSE 消费者在否
+        long[] thinkingFirstAt = {0};
+        BiConsumer<String, String> wrappedThinking = wrapThinkingStamp(nodeThinking, thinkingFirstAt);
         TurnCancellation cancel = cancellation == null ? TurnCancellation.NOOP : cancellation;
         String requestId = TraceContext.active() ? TraceContext.current().requestId
                 : UUID.randomUUID().toString();
@@ -132,7 +136,7 @@ final class SupervisorStreamExecutor {
                 ? cancel.clientMessageId() : requestId;
         // T-5d：复用 thinking 事件（流起始逐复用代理发，前端思考流与实际跳过对齐——
         // 用户点名的展示不一致修复点；文案=E-47 授权新增"复用中断前结果："）
-        emitReuseThinking(nodeThinking, resumeSeed);
+        emitReuseThinking(wrappedThinking, resumeSeed);
         tokenUsageInterceptor.begin(requestId);
         try {
             RunnableConfig.Builder configBuilder = RunnableConfig.builder()
@@ -206,9 +210,10 @@ final class SupervisorStreamExecutor {
                     nodeTokens[0] = Math.max(nodeTokens[0], out.tokenUsage().getTotalTokens());
                 }
                 String label = friendlyNode(out.node());
-                if (label != null && !label.equals(lastNodeLabel[0]) && nodeThinking != null) {
+                if (label != null && !label.equals(lastNodeLabel[0])) {
                     lastNodeLabel[0] = label;
-                    nodeThinking.accept("routing", label);
+                    // U-1b：经包装消费者发射（首响打点）；wrapped 恒非空且空安全，原 nodeThinking!=null 守卫内移
+                    wrappedThinking.accept("routing", label);
                 }
             }, cancel, budgetWallSeconds());
 
@@ -227,9 +232,15 @@ final class SupervisorStreamExecutor {
                         nodeTokens[0]);
             }
             SupervisorTraceSupport.applyTraceTokens(streamUsage);
-            if (firstOutputAt[0] > 0) {
-                SupervisorTraceSupport.applyTraceTtft(firstOutputAt[0] - start); // S-B7
-                TtftChannel.record(requestId, firstOutputAt[0] - start); // T-3a：通道兜底双写
+            // U-1a：图流 TTFT 恒空诊断——审计实弹解读 firstOutputAt 是否恒 0（恒 0=流未发任何 NodeOutput 事件）；
+            // 置于 record 判定块之前，firstOutputAt=0 的失败形态也会打出日志
+            log.info("[TTFT-DIAG] firstOutputAt={}, start={}, elapsed={}",
+                    firstOutputAt[0], start, System.currentTimeMillis() - start);
+            // U-1b：TTFT 双源兜底（NodeOutput 优先 + thinking 首回调 fallback；-1=双源皆缺不写）
+            long ttft = resolveTtft(firstOutputAt[0], thinkingFirstAt[0], start);
+            if (ttft >= 0) {
+                SupervisorTraceSupport.applyTraceTtft(ttft); // S-B7 holder 写保留（T-3a 双写设计不变）
+                TtftChannel.record(requestId, ttft); // T-3a：通道兜底双写（putIfAbsent first-wins）
             }
             SupervisorTraceSupport.applyTracePath(finalState);
 
@@ -410,6 +421,36 @@ final class SupervisorStreamExecutor {
                 nodeThinking.accept("routing", "复用中断前结果：" + name);
             }
         }
+    }
+
+    /**
+     * U-1b：TTFT 三态解析——NodeOutput 首事件优先，其次 thinking 首回调 fallback，
+     * 双源皆缺=-1（调用方 ttft>=0 才写）。包级=单测直连（S-C1 isOscillating 先例）。
+     */
+    static long resolveTtft(long firstOutputAt, long thinkingFirstAt, long start) {
+        if (firstOutputAt > 0) {
+            return firstOutputAt - start;
+        }
+        if (thinkingFirstAt > 0) {
+            return thinkingFirstAt - start;
+        }
+        return -1;
+    }
+
+    /**
+     * U-1b：thinking 首响打点包装——首次 accept 记 thinkingFirstAt（first-wins 不被后续覆盖），
+     * 委托空安全（nodeThinking 缺位时仅打点不外发）。包级=单测直连。
+     */
+    static BiConsumer<String, String> wrapThinkingStamp(BiConsumer<String, String> delegate,
+                                                        long[] thinkingFirstAt) {
+        return (stage, msg) -> {
+            if (thinkingFirstAt[0] == 0) {
+                thinkingFirstAt[0] = System.currentTimeMillis();
+            }
+            if (delegate != null) {
+                delegate.accept(stage, msg);
+            }
+        };
     }
 
     /** T-5d：outputKey→中文友好名（未知键返回 null 跳过）。 */

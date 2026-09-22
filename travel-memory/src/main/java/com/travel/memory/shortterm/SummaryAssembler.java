@@ -1,4 +1,4 @@
-package com.travel.planning.memory.shortterm;
+package com.travel.memory.shortterm;
 
 import com.travel.common.entity.ChatMessage;
 import com.travel.common.util.JsonUtils;
@@ -47,10 +47,9 @@ public class SummaryAssembler {
     private final WindowComposer windowComposer;
 
     // M24（E3）：DETOUR 摘要过滤（闸门 3）——可选依赖（测试直构时为 null=不过滤）
+    // U-3b 审计实施（B 案）：原行内 FQN 双字段改经中立端口注入（DetourSessionFilterAdapter 委托）
     @Autowired(required = false)
-    private com.travel.planning.config.DetourIsolationProperties detourIsolationProperties;
-    @Autowired(required = false)
-    private com.travel.planning.memory.focus.DetourWordMatcher detourWordMatcher;
+    private com.travel.memory.detour.SessionDetourFilterPort detourFilterPort;
 
     public SummaryAssembler(@Qualifier("lightModel") ChatModel chatModel,
                             SummaryStorePort summaryStore,
@@ -71,7 +70,7 @@ public class SummaryAssembler {
      * 语义见 resources/lua/save_summary_cas.lua。
      */
     /** M24（E3）闸门 3：摘要输入剔除 DETOUR 轮（确定性重评：用户消息命中→该轮 user+紧随 assistant 一并剔除）。 */
-    static java.util.List<ChatMessage> filterDetourTurns(java.util.List<ChatMessage> messages,
+    public static java.util.List<ChatMessage> filterDetourTurns(java.util.List<ChatMessage> messages,
                                                          java.util.function.Predicate<String> detourPredicate) {
         if (messages == null || messages.isEmpty()) {
             return messages;
@@ -96,8 +95,7 @@ public class SummaryAssembler {
 
     /** M24（E3）：闸门 3 生效判定（配置/匹配器缺失 = 不过滤）。 */
     private boolean summaryFilterActive() {
-        return detourIsolationProperties != null && detourWordMatcher != null
-                && detourIsolationProperties.isEnabled() && detourIsolationProperties.isSummaryFilter();
+        return detourFilterPort != null; // U-3b：开关+匹配已封装于 Port 实现（关闭时 Port.shouldFilter 恒 false）
     }
 
     public SessionMemoryPort.SummaryInfo getSummaryInfo(String sessionId) {
@@ -156,7 +154,7 @@ public class SummaryAssembler {
             // M24（E3）闸门 3：收口摘要同样剔除 DETOUR 轮
             if (summaryFilterActive()) {
                 messages = filterDetourTurns(messages,
-                        content -> detourWordMatcher.isLikelyDetour(content));
+                        content -> detourFilterPort != null && detourFilterPort.shouldFilter(content));
             }
             String fullText = buildFullText(messages, props.getSummaryMaxChars());
             String summary = callSummarize(fullText, props.getSummaryHardMaxTokens());
@@ -227,7 +225,7 @@ public class SummaryAssembler {
             // M24（E3）闸门 3：摘要输入剔除 DETOUR 轮（确定性重评；默认关=零变化）
             if (summaryFilterActive()) {
                 newMessages = filterDetourTurns(newMessages,
-                        content -> detourWordMatcher.isLikelyDetour(content));
+                        content -> detourFilterPort != null && detourFilterPort.shouldFilter(content));
             }
             String incremental = buildFullText(newMessages, props.getSummaryMaxChars());
             if (incremental.isBlank()) {

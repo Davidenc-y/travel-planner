@@ -35,8 +35,8 @@ export const ERROR_CODE = {
   UNAUTHORIZED: 40101,
   /** 限流 */
   RATE_LIMITED: 40301,
-  /** 越权 / 注入拦截 */
-  FORBIDDEN: 40302,
+  /** 模型不可用（对齐后端 ErrorCode.MODEL_UNAVAILABLE 403/40302，S-A3 语义拆分；U-6 键名漂移收口） */
+  MODEL_UNAVAILABLE: 40302,
   /** 消息处理中（同 clientMessageId 在途） */
   MESSAGE_PROCESSING: 40904,
   /** 行程生成中（同 clientRequestId） */

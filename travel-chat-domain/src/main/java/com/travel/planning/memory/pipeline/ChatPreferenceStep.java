@@ -1,6 +1,6 @@
 package com.travel.planning.memory.pipeline;
 
-import com.travel.planning.memory.longterm.PreferenceSaveService;
+import com.travel.memory.longterm.PreferenceSaveService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 

@@ -1,4 +1,4 @@
-package com.travel.planning.memory.shortterm;
+package com.travel.memory.shortterm;
 
 import com.travel.common.entity.ChatSession;
 import com.travel.memory.config.LlmGovernor;

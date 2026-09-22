@@ -1,4 +1,4 @@
-package com.travel.planning.memory.shortterm;
+package com.travel.memory.shortterm;
 
 import com.travel.common.entity.ChatMessage;
 import com.travel.memory.sessionstore.SessionStorePort;

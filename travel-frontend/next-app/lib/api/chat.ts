@@ -1,26 +1,8 @@
 import type { R } from '@/types';
 import { consumeSseStream, type SseStreamHandlers } from '../sse';
-import { PLANNING_BASE, isAbortError, planningApi } from './http';
+import { PLANNING_BASE, planningApi } from './http';
 
-// M6-34：聊天 SSE 基址——NEXT_PUBLIC_STREAM_BASE 未配置时默认 WebFlux(8083)
-// （B2.3 灰度转正；显式设置仍可覆盖）；其余会话/消息 JSON API 仍走 planning(8081)；
-// 8083 网络级失败自动降级 8081（sseFallbackToLocal 会话级记忆，下方逻辑原样保留）
-const STREAM_BASE = process.env.NEXT_PUBLIC_STREAM_BASE || 'http://localhost:8083';
-// R3（02-11 §10.2-R7）：灰度目标网络级失败后的降级记忆（会话级，刷新后重试灰度）
-let sseFallbackToLocal = false;
-
-/**
- * R3/M8-9j：业务码错误视为正常响应语义，不触发灰度降级。
- *
- * <p>兼容两种形态：HTTP 非 2xx 的 axios 错误（err.response.data.code）与
- * SSE error 事件抛出的错误（useChatStream.onError 仅设置 err.code，无
- * response.data）——后者此前被误判为网络错误，导致 40303/40904 等业务错误
- * 被重复发送到 planning(8081)，同一消息双端执行。</p>
- */
-function isBusinessError(err: unknown): boolean {
-  const e = err as { response?: { data?: { code?: number } }; code?: number } | undefined;
-  return typeof e?.response?.data?.code === 'number' || typeof e?.code === 'number';
-}
+// U-4a：webflux 退役——聊天 SSE 恒用 planning(8081)（8083 基址与灰度回退分支随模块删除）
 
 // ==================== Chat ====================
 export const chatApi = {
@@ -65,8 +47,7 @@ export const chatApi = {
     planningApi.get<R<import('@/types').LatestInterruptedTurn>>(
       `/api/v1/chat/sessions/${sessionId}/interrupted-turn`),
   /** M6：流式发送（SSE）——POST /messages/stream，事件回调驱动思考气泡与流式文本。
-   *  R3（02-11 §10.2-R7）：灰度目标网络级失败时自动回退 planning(8081) 并记忆降级
-   *  （仅网络错误/5xx，业务码 40904/40005 等属于正常响应语义，不触发降级）。 */
+   *  U-4a：webflux 已退役，SSE 恒用 planning(8081)（原 R3 灰度/回退分支删除）。 */
   sendMessageStream: (
     sessionId: string,
     message: string,
@@ -101,17 +82,7 @@ export const chatApi = {
         handlers,
     );
 
-    // R3：未配置灰度目标、或已降级记忆 → 直接走 planning（无回退逻辑参与）
-    if (STREAM_BASE === PLANNING_BASE || sseFallbackToLocal) {
-      return attempt(PLANNING_BASE);
-    }
-    return attempt(STREAM_BASE).catch(async (err: unknown) => {
-      if (signal.aborted || isAbortError(err)) throw err; // 主动取消不回退
-      if (isBusinessError(err)) throw err; // 业务码=正常响应语义（40904 重试/40005 换模型等）
-      // 网络级失败（连接拒绝/DNS/非 2xx 无业务码）→ 记忆降级并回退 planning
-      console.warn('[api] SSE 灰度目标不可用，本次及后续聊天流回退 planning(8081)');
-      sseFallbackToLocal = true;
-      return attempt(PLANNING_BASE);
-    });
+    // U-4a：webflux 已退役，SSE 恒用 planning(8081)（原 8083 灰度/回退分支删除）
+    return attempt(PLANNING_BASE);
   },
 };

@@ -1,4 +1,4 @@
-package com.travel.planning.memory.longterm;
+package com.travel.memory.longterm;
 
 import com.travel.common.util.JsonUtils;
 import com.travel.memory.config.LlmGovernor;
