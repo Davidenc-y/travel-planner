@@ -115,8 +115,10 @@ public class AgentTraceCollector {
         }
         // S-B6a：Span 树透传（B-4 采集器 drain 取走即清理；无 spans 时 null 不写）
         t.setSpans(spanCollector.drainSpansJson(holder.requestId));
-        // S-B7：首 token 耗时透传（null=非流式/未采集，列可空）
-        t.setTtftMs(holder.ttftMs);
+        // S-B7：首 token 耗时透传（null=非流式/未采集，列可空）；T-3a：holder 优先、
+        // 通道兜底（消费式 take 防泄漏——双写场景下条目随之清理）
+        Long channeledTtft = TtftChannel.take(holder.requestId);
+        t.setTtftMs(holder.ttftMs != null ? holder.ttftMs : channeledTtft);
         t.setStatus(status);
         t.setErrorMsg(errorMsg);
         if (!queue.offer(t)) {

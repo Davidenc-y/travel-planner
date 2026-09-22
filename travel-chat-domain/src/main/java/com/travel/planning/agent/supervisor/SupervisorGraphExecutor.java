@@ -4,6 +4,7 @@ import com.alibaba.cloud.ai.graph.OverAllState;
 import com.alibaba.cloud.ai.graph.RunnableConfig;
 import com.alibaba.cloud.ai.graph.agent.flow.agent.SupervisorAgent;
 import com.travel.core.guard.CircuitBreaker;
+import com.travel.planning.agent.support.DestinationContext;
 import com.travel.planning.memory.longterm.ProfileToolProvider;
 import com.travel.memory.prompt.PromptTemplates;
 import com.travel.stream.service.TurnCancellation;
@@ -28,6 +29,10 @@ import java.util.concurrent.TimeoutException;
  * <p>行为与迁移前逐字节等价：F26 整图 + 硬超时 + 唯一 threadId、F27 拦截器 token
  * 采集、F77/B4-2 整图重试、F66 直答兜底、M6-42 取消链（入口检查/拦截器短路/
  * 等待前后检查/根因解包上抛）、熔断三态降级均原样保留。</p>
+ *
+ * <p>T-5b 降级注明：阻塞路径<b>不接</b>子代理结果台账捕获——中断时阻塞执行无逐节点
+ * 状态访问点，台账为空 → 同键重试回退整图重跑（现状行为，已设计降级）；流式为
+ * 默认路径（planning-graph-stream-enabled=true），捕获在 {@link SupervisorStreamExecutor}。</p>
  */
 @Slf4j
 final class SupervisorGraphExecutor {
@@ -104,6 +109,11 @@ final class SupervisorGraphExecutor {
             if (userId != null) {
                 configBuilder.addMetadata(ProfileToolProvider.USER_ID_METADATA_KEY, userId);
             }
+            // T-1：锚定目的地经 metadata 跨线程传递（调用线程读 DestinationContext，E-48 合规）
+            String destination = DestinationContext.routed();
+            if (destination != null && !destination.isBlank()) {
+                configBuilder.addMetadata(DestinationContext.DESTINATION_METADATA_KEY, destination);
+            }
             RunnableConfig config = configBuilder.build();
             future = CompletableFuture.supplyAsync(
                     () -> circuitBreakerRegistry.of("supervisor").call("supervisor",
@@ -143,6 +153,11 @@ final class SupervisorGraphExecutor {
                 ReactiveBlockSupport.addCancellationMetadata(retryBuilder, cancel);
                 if (userId != null) {
                     retryBuilder.addMetadata(ProfileToolProvider.USER_ID_METADATA_KEY, userId);
+                }
+                String retryDestination = DestinationContext.routed();
+                if (retryDestination != null && !retryDestination.isBlank()) {
+                    retryBuilder.addMetadata(DestinationContext.DESTINATION_METADATA_KEY,
+                            retryDestination);
                 }
                 try {
                     CompletableFuture<Optional<OverAllState>> retryFuture = CompletableFuture.supplyAsync(

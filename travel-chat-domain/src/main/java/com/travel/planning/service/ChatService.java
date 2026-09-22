@@ -92,6 +92,20 @@ public class ChatService implements ChatStreamExecutor {
     /** M23（E1）：锚定存储（brief 渲染 + 会话锚定集合）——MM-1a.4 收编改走记忆门面。 */
     private final com.travel.memory.MemoryFacade memoryFacade;
     private final com.travel.memory.anchor.ItineraryBriefPort itineraryBriefPort;
+
+    /** T-5c：恢复注入开关（默认关=E-33 纯净；审计相灰度开启） */
+    @org.springframework.beans.factory.annotation.Value(
+            "${travel.chat.supervisor.resume-ledger.enabled:false}")
+    private boolean resumeLedgerEnabled = false;
+
+    /** T-5c：子代理结果台账（optional 注入，null=零决策零注入） */
+    private com.travel.planning.memory.knowledge.SupervisorResultLedger supervisorResultLedger;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    void setSupervisorResultLedger(
+            com.travel.planning.memory.knowledge.SupervisorResultLedger supervisorResultLedger) {
+        this.supervisorResultLedger = supervisorResultLedger;
+    }
     /** M23b（E4）：偏好段渲染器（确定性；含目的地冲突提示行）。 */
     private final com.travel.planning.memory.preference.PreferenceSectionRenderer preferenceSectionRenderer;
     /** M23b（E3）：注意力焦点判定器（观测模式：仅日志，不隔离）。 */
@@ -178,6 +192,8 @@ public class ChatService implements ChatStreamExecutor {
                 .response(result.response())
                 .tokens((int) result.aiTokens())
                 .sessionTitle(result.sessionTitle())
+                // T-2：JSON 路径 itineraryId 透传（规划/REFINE 回写成功轮非空；replay 分支不填=null 保持）
+                .itineraryId(result.itineraryId())
                 .build();
     }
 
@@ -239,7 +255,8 @@ public class ChatService implements ChatStreamExecutor {
             updatedSessionTitle = chatTurnTitlePolicy.firstMessageTitle(
                     sessionStorePort, titleProps, sessionId, message);
             chatGateSupport.clearBreakpointsAndTerminate(gate, breakpointStore, chatPersistenceStep,
-                    cancellationRegistry, cancellationBroadcaster, sessionId, clientMessageId);
+                    cancellationRegistry, cancellationBroadcaster, sessionId, clientMessageId,
+                    resumeLedgerEnabled ? supervisorResultLedger : null);
         }
         return new ChatStreamExecutor.ChatStreamPrepared(
                 sessionId, message, userId, clientMessageId, gate, updatedSessionTitle, model,
@@ -272,6 +289,10 @@ public class ChatService implements ChatStreamExecutor {
     public void clearBreakpoint(Long userId, String sessionId, String clientMessageId) {
         ChatSession session = requireOwnedSession(userId, sessionId);
         breakpointStore.clearBreakpoint(sessionId, clientMessageId);
+        // T-5e：单清同步——断点与台账同生共死（开关开时）
+        if (resumeLedgerEnabled && supervisorResultLedger != null) {
+            supervisorResultLedger.clear(sessionId, clientMessageId);
+        }
         cancellationRegistry.cancel(clientMessageId);
         cancellationBroadcaster.publishCancel(sessionId, clientMessageId);
         log.info("[ChatInterrupt] 断点已清除: sessionId={}, key={}", sessionId, clientMessageId);
@@ -383,6 +404,52 @@ public class ChatService implements ChatStreamExecutor {
             return;
         }
         modelRouteTracker.record(TraceContext.current().requestId, routed);
+    }
+
+    /** T-5c：三路决策结果（decision=seeded|full-rerun|stale-skipped；seed 仅 seeded 非空）。 */
+    record ResumeDecision(String decision, java.util.Map<String, String> seed) {
+    }
+
+    /**
+     * T-5c：三路决策纯函数——断点不在=stale-skipped（非重试轮，不注入）；
+     * 断点在+台账空=full-rerun（冻结上下文整图重跑=现状行为）；断点在+台账非空=seeded。
+     * 包级 static=单测直连。
+     */
+    static ResumeDecision decideResume(boolean breakpointPresent,
+                                       java.util.Map<String, String> loaded) {
+        if (!breakpointPresent) {
+            return new ResumeDecision("stale-skipped", null);
+        }
+        if (loaded == null || loaded.isEmpty()) {
+            return new ResumeDecision("full-rerun", null);
+        }
+        return new ResumeDecision("seeded", loaded);
+    }
+
+    /**
+     * T-5c：composed 插入【已完成的子任务结果（中断前复用）】段——位置强制
+     * 【当前问题】标记之前（冲突①：标记之后会被 ExplicitInputParser lastIndexOf
+     * 尾段解析吞入，污染 destination/days 确定性解析）；每键一行=文本前 100 字摘要
+     * （完整文本在 state 种子里，摘要仅供主代理路由参考）；marker 缺失则原样返回
+     * （不注入，仅 state 种子兜底——段为软引导）。public static=planning 回归测试直连。
+     */
+    public static String insertResumeSection(String composed,
+                                             java.util.Map<String, String> resumeSeed) {
+        if (composed == null || resumeSeed == null || resumeSeed.isEmpty()) {
+            return composed;
+        }
+        StringBuilder section = new StringBuilder("\n【已完成的子任务结果（中断前复用）】\n");
+        resumeSeed.forEach((key, text) -> {
+            String t = text == null ? "" : text.trim();
+            section.append(key).append('=')
+                    .append(t.length() > 100 ? t.substring(0, 100) : t)
+                    .append('\n');
+        });
+        int qIdx = composed.indexOf(com.travel.common.prompt.Markers.CURRENT_QUESTION);
+        if (qIdx < 0) {
+            return composed;
+        }
+        return composed.substring(0, qIdx) + section + composed.substring(qIdx);
     }
 
     private ChatStreamExecutor.ChatStreamResult runStreamInternal(
@@ -562,6 +629,29 @@ public class ChatService implements ChatStreamExecutor {
             }
 
             l.onThinking("routing", "正在生成回答…");
+            // T-5c：恢复注入三路决策（台账仅流式路径捕获，种子仅流式路径消费——
+            // NOOP 阻塞路径按设计 full-rerun，见 SupervisorGraphExecutor 降级注明）
+            java.util.Map<String, String> resumeSeed = null;
+            if (resumeLedgerEnabled && supervisorResultLedger != null
+                    && l != ChatProgressListener.NOOP) {
+                ResumeDecision decision = decideResume(
+                        !breakpointStore.loadBreakpoint(sessionId, clientMessageId).isEmpty(),
+                        supervisorResultLedger.loadAll(sessionId, clientMessageId));
+                if ("seeded".equals(decision.decision())) {
+                    resumeSeed = decision.seed();
+                    log.info("[ResumeLedger] decision=seeded keys={} sessionId={}",
+                            resumeSeed.keySet(), sessionId);
+                } else if ("full-rerun".equals(decision.decision())) {
+                    log.info("[ResumeLedger] decision=full-rerun reason=断点在台账空（整图重跑=现状行为）: sessionId={}",
+                            sessionId);
+                } else {
+                    log.debug("[ResumeLedger] decision=stale-skipped reason=断点不在（非重试轮）: sessionId={}",
+                            sessionId);
+                }
+            }
+            if (resumeSeed != null) {
+                composed = insertResumeSection(composed, resumeSeed);
+            }
             // M3-17/M6：步骤 8 路由（意图分派 recall/direct/supervisor；语义同 F85/F64/F27）
             // M6：JSON 路径（NOOP listener）保持阻塞式 route() 行为逐字等价；
             // 流式路径走 routeStream()——直答/回顾真 token 流，规划分块流。
@@ -570,11 +660,17 @@ public class ChatService implements ChatStreamExecutor {
                 ChatRoutingStep.RouteResult blocking =
                         chatRoutingStep.route(intent, composed, userId, sessionId,
                                 sessionHits, cancellation);
+                // T-2：5 参构造透传 writtenItineraryId（原 4 参兼容构造丢弃该 id——
+                // JSON 路径 auto-anchor/preferenceSync/itineraryId 填充此前恒 null）
                 routed = new ChatRoutingStep.StreamRouteResult(blocking.response(),
-                        blocking.aiTokens(), blocking.fallback(), false);
+                        blocking.aiTokens(), blocking.fallback(), false,
+                        blocking.writtenItineraryId());
             } else {
-                routed = chatRoutingStep.routeStream(intent, composed, userId, sessionId,
-                        sessionHits, cancellation, l::onToken, l::onThinking);
+                routed = resumeSeed == null
+                        ? chatRoutingStep.routeStream(intent, composed, userId, sessionId,
+                                sessionHits, cancellation, l::onToken, l::onThinking)
+                        : chatRoutingStep.routeStream(intent, composed, userId, sessionId,
+                                sessionHits, cancellation, l::onToken, l::onThinking, resumeSeed);
             }
             String response = routed.response();
             long aiTokens = routed.aiTokens();
@@ -643,10 +739,12 @@ public class ChatService implements ChatStreamExecutor {
             // MI-4：取消链终局接线——正常完成=COMPLETED
             assertTurnTransition(turnState, TurnState.COMPLETED);
             turnState = TurnState.COMPLETED;
+            // T-2：JSON 响应 itineraryId 填充（非规划/replay 轮为 null，T-2b 消费）
             return new ChatStreamExecutor.ChatStreamResult(
                     response, aiTokens, routed.fallback(),
                     assistantMessageId, prepared.sessionTitle(),
-                    suggestion, preferenceConflict, preferenceSync);
+                    suggestion, preferenceConflict, preferenceSync,
+                    routedItineraryId);
         } catch (TurnInterruptedException e) {
             // M6-36/46：中断终止——不落库 assistant 回答。
             // 幂等状态：PENDING→INTERRUPTED（用户停止可恢复；覆盖 SSE abort 与

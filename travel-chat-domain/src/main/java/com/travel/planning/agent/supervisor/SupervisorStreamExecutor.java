@@ -6,11 +6,14 @@ import com.alibaba.cloud.ai.graph.RunnableConfig;
 import com.alibaba.cloud.ai.graph.agent.flow.agent.SupervisorAgent;
 import com.travel.core.guard.CircuitBreaker;
 import com.travel.aigateway.route.ModelRoutingContext;
+import com.travel.planning.agent.support.DestinationContext;
+import com.travel.planning.memory.knowledge.SupervisorResultLedger;
 import com.travel.planning.memory.longterm.ProfileToolProvider;
 import com.travel.memory.prompt.PromptTemplates;
 import com.travel.stream.service.TurnCancellation;
 import com.travel.stream.service.TurnInterruptedException;
 import com.travel.planning.agent.supervisor.support.ActionFingerprinter;
+import com.travel.planning.trace.TtftChannel;
 import com.travel.planning.trace.TraceContext;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.metadata.Usage;
@@ -46,19 +49,27 @@ final class SupervisorStreamExecutor {
     private final QuotaTripwire quotaTripwire;
     // M18-1：启发式判定（实例化注入）
     private final PlanningHeuristics planningHeuristics;
+    /** T-5a：子代理结果台账（T-5b 捕获/清理；构造注入——本类非 Spring 托管） */
+    private final SupervisorResultLedger resultLedger;
+    /** T-5b：台账开关（false=零捕获零清理，行为等价现状） */
+    private final boolean resumeLedgerEnabled;
 
     SupervisorStreamExecutor(TokenUsageInterceptor tokenUsageInterceptor,
                              CircuitBreaker.Registry circuitBreakerRegistry,
                              PromptTemplates promptTemplates,
                              DirectAnswerExecutor directAnswerExecutor,
                              QuotaTripwire quotaTripwire,
-                            PlanningHeuristics planningHeuristics) {
+                            PlanningHeuristics planningHeuristics,
+                            SupervisorResultLedger resultLedger,
+                            boolean resumeLedgerEnabled) {
         this.tokenUsageInterceptor = tokenUsageInterceptor;
         this.circuitBreakerRegistry = circuitBreakerRegistry;
         this.promptTemplates = promptTemplates;
         this.directAnswerExecutor = directAnswerExecutor;
         this.quotaTripwire = quotaTripwire;
         this.planningHeuristics = planningHeuristics;
+        this.resultLedger = resultLedger;
+        this.resumeLedgerEnabled = resumeLedgerEnabled;
     }
 
     /** S-C1：动作指纹器（C-0；四维振荡裁决第一维数据源，缺省自给实例） */
@@ -96,10 +107,21 @@ final class SupervisorStreamExecutor {
      * 任何异常/空状态由调用方（ChatRoutingStep）降级回阻塞路径。</p>
      */
     TravelSupervisorAgent.StreamPlanningResult streamPlanningWithUsage(
-            SupervisorAgent supervisor, String userInput, Long userId,
+            SupervisorAgent supervisor, String userInput, Long userId, String sessionId,
             BiConsumer<String, String> nodeThinking,
             Consumer<String> tokenSink,
             TurnCancellation cancellation) throws Exception {
+        return streamPlanningWithUsage(supervisor, userInput, userId, sessionId,
+                nodeThinking, tokenSink, cancellation, null);
+    }
+
+    /** T-5c：resumeSeed 非空时走框架 Map 入口种子化 state（DedupSubAgentHook 既有语义自动短路）。 */
+    TravelSupervisorAgent.StreamPlanningResult streamPlanningWithUsage(
+            SupervisorAgent supervisor, String userInput, Long userId, String sessionId,
+            BiConsumer<String, String> nodeThinking,
+            Consumer<String> tokenSink,
+            TurnCancellation cancellation,
+            Map<String, String> resumeSeed) throws Exception {
         log.info("开始执行行程规划(图流): input={}, userId={}", userInput, userId);
         long start = System.currentTimeMillis();
         TurnCancellation cancel = cancellation == null ? TurnCancellation.NOOP : cancellation;
@@ -108,6 +130,9 @@ final class SupervisorStreamExecutor {
         // M8-9m：短路作用域优先轮次 key（图流重试复用），缺失回退 requestId
         String scopeKey = cancel.clientMessageId() != null && !cancel.clientMessageId().isBlank()
                 ? cancel.clientMessageId() : requestId;
+        // T-5d：复用 thinking 事件（流起始逐复用代理发，前端思考流与实际跳过对齐——
+        // 用户点名的展示不一致修复点；文案=E-47 授权新增"复用中断前结果："）
+        emitReuseThinking(nodeThinking, resumeSeed);
         tokenUsageInterceptor.begin(requestId);
         try {
             RunnableConfig.Builder configBuilder = RunnableConfig.builder()
@@ -134,12 +159,18 @@ final class SupervisorStreamExecutor {
             if (userId != null) {
                 configBuilder.addMetadata(ProfileToolProvider.USER_ID_METADATA_KEY, userId);
             }
+            // T-1：锚定目的地经 metadata 跨线程传递（调用线程读 DestinationContext，E-48 合规）
+            String destination = DestinationContext.routed();
+            if (destination != null && !destination.isBlank()) {
+                configBuilder.addMetadata(DestinationContext.DESTINATION_METADATA_KEY, destination);
+            }
             RunnableConfig config = configBuilder.build();
             AtomicReference<OverAllState> lastState = new AtomicReference<>();
             long[] nodeTokens = {0};
             String[] lastNodeLabel = {null};
             Flux<NodeOutput> flux = circuitBreakerRegistry.of("supervisor").call(
-                    "supervisor", () -> streamSupervisorSafely(supervisor, userInput, config));
+                    "supervisor", () -> streamSupervisorSafely(supervisor, userInput,
+                            resumeSeed, config));
             // M9-3c：同节点执行次数观测（图流成本治理第③层）
             Map<String, Integer> nodeExecutionCounts = new ConcurrentHashMap<>();
             long[] firstOutputAt = {0}; // S-B7：首 node 输出事件=图流首 token 等价打点
@@ -157,6 +188,8 @@ final class SupervisorStreamExecutor {
                     OverAllState os = out.state();
                     if (os != null) {
                         String outputText = SupervisorResponseSupport.toText(os.value(out.node()));
+                        captureNodeOutput(sessionId, cancel.clientMessageId(),
+                                out.node(), outputText, os); // T-5b（审计修复：按 outputKey 轮询 state）
                         int keyCount = os.data() == null ? 0 : os.data().size();
                         boolean hit = isOscillating(fingerprinter, requestId, out.node(),
                                 nodeVisits, nodeHashes, nodeKeyCounts, outputText, keyCount);
@@ -196,6 +229,7 @@ final class SupervisorStreamExecutor {
             SupervisorTraceSupport.applyTraceTokens(streamUsage);
             if (firstOutputAt[0] > 0) {
                 SupervisorTraceSupport.applyTraceTtft(firstOutputAt[0] - start); // S-B7
+                TtftChannel.record(requestId, firstOutputAt[0] - start); // T-3a：通道兜底双写
             }
             SupervisorTraceSupport.applyTracePath(finalState);
 
@@ -218,11 +252,16 @@ final class SupervisorStreamExecutor {
                     if (userId != null) {
                         retryBuilder.addMetadata(ProfileToolProvider.USER_ID_METADATA_KEY, userId);
                     }
+                    String retryDestination = DestinationContext.routed();
+                    if (retryDestination != null && !retryDestination.isBlank()) {
+                        retryBuilder.addMetadata(DestinationContext.DESTINATION_METADATA_KEY,
+                                retryDestination);
+                    }
                     AtomicReference<OverAllState> retryState = new AtomicReference<>();
                     long[] retryNodeTokens = {0};
                     Flux<NodeOutput> retryFlux = circuitBreakerRegistry.of("supervisor").call(
                             "supervisor", () -> streamSupervisorSafely(
-                                    supervisor, userInput, retryBuilder.build()));
+                                    supervisor, userInput, resumeSeed, retryBuilder.build()));
                     ReactiveBlockSupport.blockUntilDone(retryFlux, out -> {
                         if (out.node() != null) {
                             nodeExecutionCounts.merge(out.node(), 1, Integer::sum);
@@ -309,6 +348,13 @@ final class SupervisorStreamExecutor {
             }
             String budgetJson = SupervisorResponseSupport.toText(
                     finalState.value("budgetEstimate"));
+            // T-5b：轮次正常完成 best-effort 单清（防陈旧；中断/异常上抛不经过此处
+            // =台账保留供同键重试种子；fail-open 在 ledger 内）
+            String turnKey = cancel.clientMessageId();
+            if (resultLedger != null && sessionId != null && !sessionId.isBlank()
+                    && turnKey != null && !turnKey.isBlank()) {
+                resultLedger.clear(sessionId, turnKey);
+            }
             return new TravelSupervisorAgent.StreamPlanningResult(
                     result, totalTokens, false, routePlanJson, budgetJson);
         } catch (Exception e) {
@@ -345,6 +391,68 @@ final class SupervisorStreamExecutor {
         return dim1FpRepeat && dim2HashSame && dim3KeysStale && dim4Cycle;
     }
 
+    /**
+     * T-5d：流起始逐复用代理发 thinking 事件——固定图执行顺序（偏好→景点→路线→预算）
+     * 只发种子命中的键；nodeThinking 空安全。包级=单测直连。
+     */
+    static void emitReuseThinking(BiConsumer<String, String> nodeThinking,
+                                  Map<String, String> resumeSeed) {
+        if (nodeThinking == null || resumeSeed == null || resumeSeed.isEmpty()) {
+            return;
+        }
+        for (String key : java.util.List.of("preference", "attractions", "routePlan",
+                "budgetEstimate")) {
+            if (!resumeSeed.containsKey(key)) {
+                continue;
+            }
+            String name = friendlyOutputKey(key);
+            if (name != null) {
+                nodeThinking.accept("routing", "复用中断前结果：" + name);
+            }
+        }
+    }
+
+    /** T-5d：outputKey→中文友好名（未知键返回 null 跳过）。 */
+    static String friendlyOutputKey(String outputKey) {
+        if (outputKey == null) {
+            return null;
+        }
+        return switch (outputKey) {
+            case "preference" -> "偏好分析";
+            case "attractions" -> "景点筛选";
+            case "routePlan" -> "路线安排";
+            case "budgetEstimate" -> "预算估算";
+            default -> null;
+        };
+    }
+
+    /**
+     * T-5b：子代理节点输出捕获台账（开关∧node∈四映射∧sessionId/clientMessageId 齐
+     * ∧文本非空；包级可见=单测直连）。clientMessageId 空（无幂等键轮次）跳过——
+     * 台账按 {sessionId}:{clientMessageId} 键控，无键轮次无从重试。
+     */
+    void captureNodeOutput(String sessionId, String clientMessageId,
+                           String node, String outputText, OverAllState state) {
+        if (!resumeLedgerEnabled || resultLedger == null
+                || sessionId == null || sessionId.isBlank()
+                || clientMessageId == null || clientMessageId.isBlank()) {
+            return;
+        }
+        // 审计修复（2026-09-22 实弹）：框架 NodeOutput.node() 名称带包装前缀（friendlyNode
+        // 只能用 contains 的原因），精确 Map.get(node) 恒 null=原实现死代码；且子代理输出
+        // state 键是 outputKey（preference 等）不是节点名。改为按 outputKey 轮询 state：
+        // 哪个键当前非空即记哪个（幂等：record 覆盖同 field，已完成子代理重复节点事件无害）
+        // 审计修复二段：外层流只发包装节点（travel_planning_supervisor_supervisor 等），
+        // 子代理节点不独立出现——去掉节点名门控，纯按 outputKey 轮询（state 随 supervisor
+        // 节点增量 yield 而累积，轮询本身已足够精确且幂等）
+        for (String outputKey : SupervisorResultLedger.NODE_TO_OUTPUT_KEY.values()) {
+            String text = SupervisorResponseSupport.toText(state.value(outputKey));
+            if (text != null && !text.isBlank()) {
+                resultLedger.record(sessionId, clientMessageId, outputKey, text);
+            }
+        }
+    }
+
     /** M6-21：把图节点名映射为友好 thinking；内部节点返回 null 跳过 */
     private static String friendlyNode(String node) {
         if (node == null || node.isBlank()) {
@@ -370,11 +478,26 @@ final class SupervisorStreamExecutor {
 
     /** M6-18：图流安全包装（GraphRunnerException 受检异常 → RuntimeException） */
     private static Flux<NodeOutput> streamSupervisorSafely(
-            SupervisorAgent supervisor, String userInput, RunnableConfig config) {
+            SupervisorAgent supervisor, String userInput, Map<String, String> resumeSeed,
+            RunnableConfig config) {
         try {
+            if (resumeSeed != null && !resumeSeed.isEmpty()) {
+                return supervisor.stream(buildSeededInput(userInput, resumeSeed), config);
+            }
             return supervisor.stream(userInput, config);
         } catch (Exception e) {
             throw new RuntimeException("Supervisor 图流失败", e);
         }
+    }
+
+    /**
+     * T-5c：种子 input map——outputKey=文本 逐键 + "input"=用户输入（框架 String
+     * 路径的 state 键名假设，实弹验收⑤覆盖；不符时台账回合回退 full-rerun）。
+     * 包级=单测直连。javap 实证框架 Agent.stream(Map, RunnableConfig) 重载存在。
+     */
+    static Map<String, Object> buildSeededInput(String userInput, Map<String, String> resumeSeed) {
+        Map<String, Object> seeded = new java.util.HashMap<>(resumeSeed);
+        seeded.put("input", userInput);
+        return seeded;
     }
 }

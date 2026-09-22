@@ -5,6 +5,7 @@ import com.travel.planning.agent.supervisor.TravelSupervisorAgent;
 import com.travel.planning.agent.supervisor.SupervisorResponseSupport;
 import com.travel.planning.agent.support.AttractionGroundingChecker;
 import com.travel.planning.agent.support.ChatWeatherContextPort;
+import com.travel.planning.agent.support.DestinationContext;
 import com.travel.planning.agent.support.ItineraryConflictPort;
 import com.travel.planning.agent.support.ItineraryVersionPort;
 import com.travel.common.config.ChatIntent;
@@ -112,6 +113,21 @@ public class ChatRoutingStep implements ChatPipelineStep {
     private final SessionKnowledgeWriter sessionKnowledgeWriter;
     private final SessionContextChunker sessionContextChunker;
 
+    /** T-1a：锚定目的地读取依赖（optional 注入，null=读不到目的地→runWith(null) 行为等价现状） */
+    private com.travel.memory.MemoryFacade memoryFacade;
+
+    private com.travel.memory.anchor.ItineraryBriefPort itineraryBriefPort;
+
+    @Autowired(required = false)
+    void setMemoryFacade(com.travel.memory.MemoryFacade memoryFacade) {
+        this.memoryFacade = memoryFacade;
+    }
+
+    @Autowired(required = false)
+    void setItineraryBriefPort(com.travel.memory.anchor.ItineraryBriefPort itineraryBriefPort) {
+        this.itineraryBriefPort = itineraryBriefPort;
+    }
+
     /** M9-4：冲突校验 Port（planning 实现注入；null=关闭/未装配） */
     private ItineraryConflictPort itineraryConflictPort;
 
@@ -164,6 +180,8 @@ public class ChatRoutingStep implements ChatPipelineStep {
                              String sessionId,
                              List<Map<String, Object>> sessionHits,
                              TurnCancellation cancellation) {
+        // T-1a：入口设锚定目的地上下文（supervisor 执行器同线程读取→metadata 跨线程传递），finally 清理
+        return DestinationContext.runWith(currentDestination(userId, sessionId), () -> {
         Long writtenItineraryId = null; // M23（P-D）：回写成功的行程 id（供 suggestion 判定）
         TurnCancellation cancel = cancellation == null ? TurnCancellation.NOOP : cancellation;
         long routeStart = System.currentTimeMillis();
@@ -231,6 +249,12 @@ public class ChatRoutingStep implements ChatPipelineStep {
             // 不得吞成“抱歉，请稍后重试”兜底文案
             ModelCircuitExceptionSupport.rethrowIfCircuitOpen(e);
             ModelQuotaExceptionSupport.rethrowIfQuotaExceeded(e);
+            // T-3b：分类器未命中时的实测类型取证（WARN+DEBUG 均可见；审计相起服读此定位
+            // 扩展点，分类器扩展按决策②"实测名适配"授权）
+            String diagMsg = String.valueOf(e.getMessage());
+            log.warn("[ChatRouting][quota-diag] 兜底前实测异常: class={}, chain={}, msg80={}",
+                    e.getClass().getName(), chainPreview(e),
+                    diagMsg.length() > 80 ? diagMsg.substring(0, 80) : diagMsg);
             log.error("Agent 调用失败", e);
             response = ResponseTexts.GENERIC_ROUTE_FAILURE;
             fallback = true;
@@ -239,6 +263,7 @@ public class ChatRoutingStep implements ChatPipelineStep {
         log.info("[ChatRouting] intent={}, router={}, elapsedMs={}, fallback={}",
                 intent, routerOf(intent), routeElapsed, fallback);
         return new RouteResult(response, aiTokens, fallback, writtenItineraryId);
+        });
     }
 
     /**
@@ -254,6 +279,23 @@ public class ChatRoutingStep implements ChatPipelineStep {
                                          TurnCancellation cancellation,
                                          Consumer<String> tokenSink,
                                          BiConsumer<String, String> thinkingSink) {
+        return routeStream(intent, composed, userId, sessionId, sessionHits, cancellation,
+                tokenSink, thinkingSink, null);
+    }
+
+    /**
+     * T-5c：resumeSeed 非空=同键重试（种子经 supervisor 图 state 注入，
+     * DedupSubAgentHook 既有语义自动短路已完成子代理）。
+     */
+    public StreamRouteResult routeStream(ChatIntent intent, String composed, Long userId,
+                                         String sessionId,
+                                         List<Map<String, Object>> sessionHits,
+                                         TurnCancellation cancellation,
+                                         Consumer<String> tokenSink,
+                                         BiConsumer<String, String> thinkingSink,
+                                         java.util.Map<String, String> resumeSeed) {
+        // T-1a：入口设锚定目的地上下文（supervisor 执行器同线程读取→metadata 跨线程传递），finally 清理
+        return DestinationContext.runWith(currentDestination(userId, sessionId), () -> {
         Consumer<String> sink = tokenSink == null ? t -> { } : tokenSink;
         BiConsumer<String, String> think = thinkingSink == null ? (s, m) -> { } : thinkingSink;
         long routeStart = System.currentTimeMillis();
@@ -277,10 +319,17 @@ public class ChatRoutingStep implements ChatPipelineStep {
                         // M6-38：用户停止（SSE abort）会让图流线程收到 InterruptedException——
                         // 此时必须终止，不得降级阻塞再启动一轮完整 LLM 规划
                         try {
-                            TravelSupervisorAgent.StreamPlanningResult r =
-                                    supervisorAgent.streamPlanningWithUsage(
-                                            withWeather(intent, composed),
-                                            userId, think, sink, cancellation);
+                            TravelSupervisorAgent.StreamPlanningResult r;
+                            if (resumeSeed == null) {
+                                r = supervisorAgent.streamPlanningWithUsage(
+                                        withWeather(intent, composed),
+                                        userId, sessionId, think, sink, cancellation);
+                            } else {
+                                // T-5c：种子非空=同键重试细粒度续跑（框架 Map 入口种子化）
+                                r = supervisorAgent.streamPlanningWithUsage(
+                                        withWeather(intent, composed),
+                                        userId, sessionId, think, sink, cancellation, resumeSeed);
+                            }
                             SupervisorResponseSupport.recordGrounding(
                                     groundingChecker, composed, r.answer());
                             observeConflictIfEnabled(composed, r.routePlanJson());
@@ -312,8 +361,10 @@ public class ChatRoutingStep implements ChatPipelineStep {
                     RouteResult blocking = route(intent, composed, userId, sessionId,
                             sessionHits, cancellation);
                     logElapsed(intent, routeStart, blocking.fallback());
+                    // T-2：5 参构造透传 writtenItineraryId（原 4 参丢弃——阻塞降级路径
+                    // 的回写 id 此前丢失，与图流分支行为对齐）
                     return new StreamRouteResult(blocking.response(), blocking.aiTokens(),
-                            blocking.fallback(), false);
+                            blocking.fallback(), false, blocking.writtenItineraryId());
                 }
             }
         } catch (java.util.concurrent.CancellationException e) {
@@ -326,8 +377,39 @@ public class ChatRoutingStep implements ChatPipelineStep {
             // M8-9i：模型额度不足必须上抛 40303，不得吞成兜底文案
             ModelCircuitExceptionSupport.rethrowIfCircuitOpen(e);
             ModelQuotaExceptionSupport.rethrowIfQuotaExceeded(e);
+            // T-3b：同 route() 的实测类型取证（SSE 兜底路径对齐）
+            String diagMsg = String.valueOf(e.getMessage());
+            log.warn("[ChatRouting][quota-diag] 兜底前实测异常: class={}, chain={}, msg80={}",
+                    e.getClass().getName(), chainPreview(e),
+                    diagMsg.length() > 80 ? diagMsg.substring(0, 80) : diagMsg);
             log.error("Agent 流式调用失败", e);
             return new StreamRouteResult(ResponseTexts.GENERIC_ROUTE_FAILURE, 0, true, false);
+        }
+        });
+    }
+
+    /**
+     * T-1a：锚定目的地读取——锚定列表非空时取首锚行程目的地；依赖未装配/无锚定/
+     * 读取失败一律返回 null（runWith(null) 等价现状零行为变化）。读取链与
+     * ChatService 自动锚定/偏好回写同源（memoryFacade.getAnchors → briefOf）。
+     */
+    private String currentDestination(Long userId, String sessionId) {
+        try {
+            if (memoryFacade == null || itineraryBriefPort == null
+                    || userId == null || sessionId == null) {
+                return null;
+            }
+            java.util.List<Long> anchors = memoryFacade.getAnchors(sessionId);
+            if (anchors == null || anchors.isEmpty()) {
+                return null;
+            }
+            return itineraryBriefPort.briefOf(userId, anchors.get(0))
+                    .map(com.travel.memory.anchor.ItineraryBrief::destination)
+                    .orElse(null);
+        } catch (Exception e) {
+            log.debug("[ChatRouting] 锚定目的地读取失败（按 null 处理，行为等价现状）: sessionId={}, error={}",
+                    sessionId, e.getMessage());
+            return null;
         }
     }
 
@@ -343,6 +425,17 @@ public class ChatRoutingStep implements ChatPipelineStep {
             case PROFILE, CHAT, FUNCTIONAL -> "direct";
             default -> "supervisor";
         };
+    }
+
+    /** T-3b：异常 cause 链前 3 层预览（quota 诊断取证用；reactor 包装形态定位） */
+    private static String chainPreview(Throwable e) {
+        StringBuilder sb = new StringBuilder(e.getClass().getSimpleName());
+        Throwable cur = e.getCause();
+        for (int i = 0; i < 3 && cur != null && cur != e; i++) {
+            sb.append(" -> ").append(cur.getClass().getSimpleName());
+            cur = cur.getCause();
+        }
+        return sb.toString();
     }
 
     /** M15-1：PLANNING/REFINE 前拼接天气参考段；不可用时不改变输入。 */

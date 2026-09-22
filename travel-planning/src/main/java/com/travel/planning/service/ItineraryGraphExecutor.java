@@ -69,6 +69,14 @@ public class ItineraryGraphExecutor {
                     // 导致 SnapshotNodeWrapper 快照 payload 泄漏为 "FluxFlatMap"（toString）。
                     // 显式关闭流式 → 节点输出 AssistantMessage，快照可正确归一化业务 JSON。
                     .addMetadata("_stream_", false);
+            // T-1（缺口③）：表单路径锚定目的地（ItineraryService.generate 嵌套 runWith 设值）
+            // 同点写入 metadata——attraction_search 工具城市约束在行程路径同样生效
+            String destination = com.travel.planning.agent.support.DestinationContext.routed();
+            if (destination != null && !destination.isBlank()) {
+                configBuilder.addMetadata(
+                        com.travel.planning.agent.support.DestinationContext.DESTINATION_METADATA_KEY,
+                        destination);
+            }
             if (collectTokens) {
                 configBuilder.addMetadata(TokenUsageInterceptor.REQUEST_ID_KEY, requestId);
             }

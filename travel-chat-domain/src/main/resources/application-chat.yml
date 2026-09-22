@@ -183,6 +183,10 @@ travel:
       slice-skip: true
       profile-skip: true
       summary-filter: true
+    # T-1：attraction_search 工具检索词目的地前缀硬约束（REFINE 跨城缺陷修复；
+    # false=一键回退旧行为——不加前缀，行为等价现状）
+    attraction-search:
+      destination-prefix-enabled: true
     supervisor:
       # M9-4：聊天规划路径冲突观测（只写 trace，不阻断；false=行为等价现状）
       conflict-observe:
@@ -194,6 +198,9 @@ travel:
       # M13-3：派发去重（输出已有值短路子Agent，false=现状灰度）
       dispatch-dedup:
         enabled: true
+      # T-5：中断重试子代理结果台账（默认关=E-33 纯净；审计相灰度开启验收后转 true）
+      resume-ledger:
+        enabled: true   # T-5 审计灰度（PT 终态后开启，八项验收⑤⑦⑧达标终态）
   # F90：Agent 调用前安全防护（Prompt 注入 / 熔断 / 限流）
   # M16-3：注入词表本文件为唯一源（PromptInjectionRule 已删除代码默认词表，
   # guard 开启时词表缺失将启动失败——拒绝以空词表静默放行）

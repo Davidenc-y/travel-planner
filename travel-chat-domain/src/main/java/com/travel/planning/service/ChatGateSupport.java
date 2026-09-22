@@ -60,10 +60,15 @@ public class ChatGateSupport {
      */
     public void clearBreakpointsAndTerminate(TurnGate gate, ChatBreakpointStore breakpointStore,
             ChatPersistenceStep chatPersistenceStep, TurnCancellationRegistry cancellationRegistry,
-            TurnCancellationBroadcaster cancellationBroadcaster, String sessionId, String clientMessageId) {
+            TurnCancellationBroadcaster cancellationBroadcaster, String sessionId, String clientMessageId,
+            com.travel.planning.memory.knowledge.SupervisorResultLedger resumeLedger) {
         // M6-36：新轮次（非 FAILED 复用）清除同会话旧断点——旧任务的重试按钮随之失效
         if (!gate.reuseUserMessage()) {
             breakpointStore.clearSessionBreakpoints(sessionId);
+            // T-5e：台账同生共死（新轮失效点对齐 M6-36 生命周期；null=开关关/未接线零变更）
+            if (resumeLedger != null) {
+                resumeLedger.clearSession(sessionId);
+            }
             // M6-39：同时终止同会话其他在途轮次（防旧任务后台完成后幽灵落库）
             List<String> inFlight = chatPersistenceStep.markSessionInterrupted(
                     sessionId, clientMessageId);

@@ -112,7 +112,11 @@ public class TravelSupervisorAgent {
                                   QuotaTripwire quotaTripwire,
                                   CircuitBreaker.Registry circuitBreakerRegistry,
                                   PromptTemplates promptTemplates,
-                                  PlanningHeuristics planningHeuristics) {
+                                  PlanningHeuristics planningHeuristics,
+                                  com.travel.planning.memory.knowledge.SupervisorResultLedger supervisorResultLedger,
+                                  @org.springframework.beans.factory.annotation.Value(
+                                          "${travel.chat.supervisor.resume-ledger.enabled:false}")
+                                  boolean resumeLedgerEnabled) {
         this.chatModel = chatModel;
         this.prefAgent = prefAgent;
         this.attrAgent = attrAgent;
@@ -129,7 +133,8 @@ public class TravelSupervisorAgent {
                 directAnswerExecutor, quotaTripwire, planningHeuristics);
         this.streamExecutor = new SupervisorStreamExecutor(
                 tokenUsageInterceptor, circuitBreakerRegistry, promptTemplates,
-                directAnswerExecutor, quotaTripwire, planningHeuristics);
+                directAnswerExecutor, quotaTripwire, planningHeuristics,
+                supervisorResultLedger, resumeLedgerEnabled);
         this.quotaShortCircuitInterceptor = quotaShortCircuitInterceptor;
     }
 
@@ -283,11 +288,24 @@ public class TravelSupervisorAgent {
      * M6-58/T9：实现已迁至 {@link SupervisorStreamExecutor}，本方法为门面委托。</p>
      */
     public StreamPlanningResult streamPlanningWithUsage(String userInput, Long userId,
+                                                        String sessionId,
                                                         BiConsumer<String, String> nodeThinking,
                                                         Consumer<String> tokenSink,
                                                         TurnCancellation cancellation) throws Exception {
         return streamExecutor.streamPlanningWithUsage(
-                supervisor, userInput, userId, nodeThinking, tokenSink, cancellation);
+                supervisor, userInput, userId, sessionId, nodeThinking, tokenSink, cancellation);
+    }
+
+    /** T-5c：resumeSeed 非空=同键重试细粒度续跑（框架 Map 入口种子化）。 */
+    public StreamPlanningResult streamPlanningWithUsage(String userInput, Long userId,
+                                                        String sessionId,
+                                                        BiConsumer<String, String> nodeThinking,
+                                                        Consumer<String> tokenSink,
+                                                        TurnCancellation cancellation,
+                                                        java.util.Map<String, String> resumeSeed) throws Exception {
+        return streamExecutor.streamPlanningWithUsage(
+                supervisor, userInput, userId, sessionId, nodeThinking, tokenSink, cancellation,
+                resumeSeed);
     }
 
     /** M6-18：图流规划结果 */

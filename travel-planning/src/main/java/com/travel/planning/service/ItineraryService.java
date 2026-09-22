@@ -69,8 +69,12 @@ public class ItineraryService {
      */
     public ItineraryResponseDTO generate(ItineraryGenerateRequestDTO req, Long userId) {
         validateModel(req.getModel());
+        // T-1（缺口③）：表单显式目的地不经 ChatRoutingStep，同点嵌套注入 DestinationContext
+        //（行程图执行器同点读取写入 metadata，attraction_search 工具城市约束同样生效）
         return ModelRoutingContext.runWith(req.getModel(),
-                () -> generationOrchestrator.generate(req, userId));
+                () -> com.travel.planning.agent.support.DestinationContext.runWith(
+                        req.getDestination(),
+                        () -> generationOrchestrator.generate(req, userId)));
     }
 
     /**

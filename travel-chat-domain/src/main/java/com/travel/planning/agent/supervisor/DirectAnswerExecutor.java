@@ -213,6 +213,12 @@ public final class DirectAnswerExecutor {
         }
         if (firstTokenAt[0] > 0) {
             SupervisorTraceSupport.applyTraceTtft(firstTokenAt[0] - t0); // S-B7
+            // T-3a：通道兜底双写（直答线程无独立 requestId 源，best-effort 取 holder——
+            // holder 不可用时无键可记，通道在该场景结构性受限，留痕审计）
+            if (TraceContext.active()) {
+                com.travel.planning.trace.TtftChannel.record(
+                        TraceContext.current().requestId, firstTokenAt[0] - t0);
+            }
         }
         if (text.isBlank()) {
             sink.accept(blankFallback);

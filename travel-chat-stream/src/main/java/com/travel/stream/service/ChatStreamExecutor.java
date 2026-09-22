@@ -61,19 +61,20 @@ public interface ChatStreamExecutor {
                             Long assistantMessageId, String sessionTitle,
                             AnchorSuggestion suggestion,
                             PreferenceConflict preferenceConflict,
-                            PreferenceSync preferenceSync) {
+                            PreferenceSync preferenceSync,
+                            Long itineraryId) {
 
         /** M23 前的五参兼容构造（suggestion/conflict/sync=null），既有调用点零改动。 */
         public ChatStreamResult(String response, long aiTokens, boolean fallback,
                                 Long assistantMessageId, String sessionTitle) {
-            this(response, aiTokens, fallback, assistantMessageId, sessionTitle, null, null, null);
+            this(response, aiTokens, fallback, assistantMessageId, sessionTitle, null, null, null, null);
         }
 
         /** M23 的六参兼容构造（conflict/sync=null）。 */
         public ChatStreamResult(String response, long aiTokens, boolean fallback,
                                 Long assistantMessageId, String sessionTitle,
                                 AnchorSuggestion suggestion) {
-            this(response, aiTokens, fallback, assistantMessageId, sessionTitle, suggestion, null, null);
+            this(response, aiTokens, fallback, assistantMessageId, sessionTitle, suggestion, null, null, null);
         }
 
         /** M25 的七参兼容构造（sync=null）。 */
@@ -82,7 +83,7 @@ public interface ChatStreamExecutor {
                                 AnchorSuggestion suggestion,
                                 PreferenceConflict preferenceConflict) {
             this(response, aiTokens, fallback, assistantMessageId, sessionTitle,
-                    suggestion, preferenceConflict, null);
+                    suggestion, preferenceConflict, null, null);
         }
 
         /**
