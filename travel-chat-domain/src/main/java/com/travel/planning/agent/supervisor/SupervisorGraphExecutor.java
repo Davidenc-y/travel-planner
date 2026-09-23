@@ -10,6 +10,7 @@ import com.travel.memory.prompt.PromptTemplates;
 import com.travel.stream.service.TurnCancellation;
 import com.travel.stream.service.TurnInterruptedException;
 import com.travel.planning.trace.TraceContext;
+import com.travel.planning.trace.TtftChannel;
 import com.travel.aigateway.route.ModelRoutingContext;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.metadata.Usage;
@@ -131,6 +132,10 @@ final class SupervisorGraphExecutor {
                     .orElseThrow(() -> new IllegalStateException("Supervisor 未返回最终状态"));
             // M6-42：等待期间发生取消 → 立即终止，不进入重试/直答/落库
             cancel.throwIfCancelled();
+            // V-1：JSON 阻塞路径 TTFT——阻塞 invoke 只返回一次，整图耗时≈首 token 等价
+            // （保守上界非真实首 token，口径见 recordBlockingTtft javadoc）；置于取消
+            // 检查之后，取消轮不落 TTFT
+            recordBlockingTtft(start, requestId);
             String result = SupervisorResponseSupport.buildFinalResponse(finalState);
             long[] mainUsage = tokenUsageInterceptor.peek(requestId);
             long totalTokens = tokenUsageInterceptor.endAndGet(requestId);
@@ -290,6 +295,20 @@ final class SupervisorGraphExecutor {
             // M8-9m：请求结束清理额度短路状态（与 token 采集 endAndGet 对称）
             quotaTripwire.clear(scopeKey);
         }
+    }
+
+    /**
+     * V-1：JSON 阻塞路径 TTFT 双写（trace holder + TtftChannel，与流式路径 U-1b
+     * 双源写同构：applyTraceTtft holder 写 + TtftChannel.record putIfAbsent first-wins）。
+     *
+     * <p>口径注明：阻塞调用整个图只返回一次，该值=整图耗时≈首 token 的<b>保守上界</b>
+     * 而非真实首 token（窄口径在流式路径 {@link SupervisorStreamExecutor} 双源
+     * resolveTtft）；整图重试/直答兜底发生在打点之后，不回改此值（first-wins 语义）。</p>
+     */
+    static void recordBlockingTtft(long start, String requestId) {
+        long ttft = System.currentTimeMillis() - start;
+        SupervisorTraceSupport.applyTraceTtft(ttft);
+        TtftChannel.record(requestId, ttft);
     }
 
     /**

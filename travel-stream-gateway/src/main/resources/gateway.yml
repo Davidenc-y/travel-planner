@@ -1,0 +1,36 @@
+# V-3：独立流式网关配置（travel-stream-gateway，端口 8083）
+# 纯传输层：仅 JWT 验证 + SSE 转发 + 限流；业务全在 planning 进程（8081）。
+# 本文件为网关唯一配置源（应用入口 spring.config.name=gateway）；
+# V 批次 yml 新键仅限本文件（既有键零改值）。
+server:
+  port: 8083
+
+spring:
+  autoconfigure:
+    exclude:
+      - org.springframework.boot.autoconfigure.jdbc.DataSourceAutoConfiguration
+      - com.baomidou.mybatisplus.autoconfigure.MybatisPlusAutoConfiguration
+  application:
+    name: travel-stream-gateway
+  # 锁定 Reactive：travel-common 传递引入 spring-webmvc（其 MVC 横切件依赖），
+  # Boot WebApplicationType 推断见 DispatcherServlet 会误判 SERVLET，而 classpath
+  # 无 servlet 容器（仅 validation 的 tomcat-embed-el）→ 必须显式锁定 REACTIVE
+  main:
+    web-application-type: reactive
+
+travel:
+  gateway:
+    # planning 基座地址（V-3c PlanningStreamClient WebClient SSE 消费目标）
+    planning-base-url: ${PLANNING_BASE_URL:http://localhost:8081}
+    # 超时对齐 chat-stream ChatStreamProperties（timeout 默认 330s）
+    connect-timeout-ms: 5000
+    response-timeout-ms: 330000
+    # SSE 心跳对齐 ChatStreamProperties.keepaliveMs（V-3c 心跳间隔）
+    heartbeat-interval-ms: 15000
+
+# jwt 键：common TokenAuthService @Value 实际绑定顶层 jwt.*（jwt.secret 空=启动
+# fail-fast，M21-1 受控配置不携带默认密钥——本地经环境变量 JWT_SECRET 注入）
+jwt:
+  secret: ${JWT_SECRET:}
+  expiration: 86400000
+  refresh-expiration: 604800000

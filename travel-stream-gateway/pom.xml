@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>com.travel.planner</groupId>
+        <artifactId>travel-planner</artifactId>
+        <version>1.0-SNAPSHOT</version>
+    </parent>
+
+    <groupId>com.travel.gateway</groupId>
+    <artifactId>travel-stream-gateway</artifactId>
+    <packaging>jar</packaging>
+
+    <name>travel-stream-gateway</name>
+    <description>V-3 独立流式网关：纯传输层（ReactiveJwtAuthFilter + SSE 转发 + 限流）。
+        禁依赖任何聊天域模块（P0⑬：网关禁嵌聊天域——旧 webflux 整域复制的教训）；
+        业务全在 planning 进程，网关仅 WebClient 消费 /messages/stream 并转发。</description>
+
+    <dependencies>
+        <!-- 唯一内部依赖：横切组件（common TokenAuthService/GrayFlags/RateLimiter） -->
+        <dependency>
+            <groupId>com.travel.common</groupId>
+            <artifactId>travel-common</artifactId>
+        </dependency>
+        <!-- WebFlux 传输层（Reactive 非阻塞；本模块禁引入 starter-web） -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-webflux</artifactId>
+        </dependency>
+        <!-- Reactor Netty（WebClient 连接栈；webflux starter 已含，方案字面显式列出） -->
+        <dependency>
+            <groupId>io.projectreactor.netty</groupId>
+            <artifactId>reactor-netty-http</artifactId>
+        </dependency>
+        <!-- 参数校验（V-3c 控制器请求体校验） -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-validation</artifactId>
+        </dependency>
+
+        <!-- 测试（V-3b/c 单测预置；同旧 webflux pom 先例） -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>io.projectreactor</groupId>
+            <artifactId>reactor-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+            </plugin>
+        </plugins>
+    </build>
+</project>

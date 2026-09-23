@@ -2,7 +2,12 @@ import type { R } from '@/types';
 import { consumeSseStream, type SseStreamHandlers } from '../sse';
 import { PLANNING_BASE, planningApi } from './http';
 
-// U-4a：webflux 退役——聊天 SSE 恒用 planning(8081)（8083 基址与灰度回退分支随模块删除）
+/**
+ * V-3d：流式基址单路径配置化（用户决策②无 fallback）——设 NEXT_PUBLIC_STREAM_BASE
+ * 为网关地址（8083）启用 Reactive 流式；不设=直连 planning(8081) 开发态。
+ * 网关不可达=显式报错（禁静默降级/禁 session 级回退 memory——P0⑭）。
+ */
+export const STREAM_BASE = process.env.NEXT_PUBLIC_STREAM_BASE || PLANNING_BASE;
 
 // ==================== Chat ====================
 export const chatApi = {
@@ -47,7 +52,7 @@ export const chatApi = {
     planningApi.get<R<import('@/types').LatestInterruptedTurn>>(
       `/api/v1/chat/sessions/${sessionId}/interrupted-turn`),
   /** M6：流式发送（SSE）——POST /messages/stream，事件回调驱动思考气泡与流式文本。
-   *  U-4a：webflux 已退役，SSE 恒用 planning(8081)（原 R3 灰度/回退分支删除）。 */
+   *  V-3d：SSE 基址=STREAM_BASE 单路径（网关 8083 或 planning 8081，无 fallback）。 */
   sendMessageStream: (
     sessionId: string,
     message: string,
@@ -82,7 +87,7 @@ export const chatApi = {
         handlers,
     );
 
-    // U-4a：webflux 已退役，SSE 恒用 planning(8081)（原 8083 灰度/回退分支删除）
-    return attempt(PLANNING_BASE);
+    // V-3d：STREAM_BASE 单路径（网关或 planning，无 fallback=P0⑭）
+    return attempt(STREAM_BASE);
   },
 };

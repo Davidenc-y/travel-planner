@@ -74,7 +74,7 @@ This is a **personal thesis project** developed iteratively under a milestone-dr
 | **Spring AI**                           | 1.1.2                 | Unified LLM abstraction (`ChatClient`, `ChatModel`)                                                                 |
 | **Spring AI Alibaba**                   | 1.1.2.0               | **Agent Framework** (supervisor agents) + **Graph Core** (StateGraph workflow) — the core AI orchestration backbone |
 | **Spring AI Alibaba Starter DashScope** | 1.1.2.0               | Connects to Alibaba Cloud DashScope (Qwen LLM series)                                                               |
-| **Spring WebFlux / Reactor**            | 6.2.x / 3.7.x         | Reactor `Flux<StreamEvent>` streaming pipeline (M6); the `:8083` reactive transport pilot was retired in v2.0.7.10  |
+| **Spring WebFlux / Reactor**            | 6.2.x / 3.7.x         | Reactor `Flux<StreamEvent>` streaming pipeline (M6); `travel-stream-gateway` (:8083, V-3) is a pure-relay WebFlux edge — the old domain-embedding pilot stays retired |
 | **MyBatis-Plus**                        | 3.5.7                 | ORM with rich CRUD, pagination, and codegen support                                                                 |
 | **Redisson**                            | 3.28.0                | Reserved for distributed locks/rate limiting: version-managed only in the parent POM since M3-19; not enabled (P3 evolution item) |
 | **Spring Data Redis**                   | 3.5.0                 | Redis read/write for refresh tokens and session summaries (explicitly introduced in planning since M3-19)                 |
@@ -208,18 +208,23 @@ Streaming transport (M6) — the chat pipeline is transport-agnostic:
 ┌──────────────────────────────────────────────────────────────────────────┐
 │  MVC path — travel-planning (:8081)                                      │
 │  ChatController → SseStreamAdapter → SseEmitter                          │
-│  (the reactive :8083 transport pilot was retired in v2.0.7.10)           │
 └─────────────┬────────────────────────────────────────────────────────────┘
               │   internal HTTP bridge (X-Internal-Token)
               └──────────────▶ brief / weather / anchors
                                SSE text/event-stream
+
+  V-3 gateway edge (optional) — travel-stream-gateway (:8083, WebFlux/Netty):
+  frontend STREAM_BASE → ReactiveJwtAuthFilter → ChatStreamGatewayController
+  → WebClient → planning /messages/stream → SSE relay (event name/id preserved)
+  (the old :8083 domain-embedding pilot was retired in v2.0.7.10; the gateway
+   is a pure transmission relay — pom has zero chat-domain dependencies)
 ```
 
 ---
 
 ## 4. Module Breakdown
 
-The backend is a **Maven multi-module** project (`pom.xml`, Java 21). Nine backend modules + one frontend app:
+The backend is a **Maven multi-module** project (`pom.xml`, Java 21). Ten backend modules + one frontend app:
 
 ```
 travel-planner/
@@ -234,6 +239,7 @@ travel-planner/
 ├── travel-crawl/           # Web crawler for attraction data
 ├── travel-knowledge/       # ETL + RAG knowledge engine
 ├── travel-planning/        # Core agentic planning service (main app, :8081)
+├── travel-stream-gateway/  # Independent streaming gateway (:8083, WebFlux/Netty, V-3) — pure relay
 └── travel-frontend/
     └── next-app/           # Next.js 14 frontend
 ```
@@ -339,6 +345,8 @@ Chat domain, independent of any web transport (M6-31, ChatService sink-down):
 > The former §4.7 `travel-web-mvc` (never a Maven module) and §4.8 `travel-stream-webflux`
 > (`:8083` reactive transport pilot) sections were removed in v2.0.7.10 — the pilot module
 > was retired and chat SSE is served exclusively by the MVC path in `travel-planning`.
+> §4.8 now hosts the **V-3 pure-relay gateway** (`travel-stream-gateway`, v2.0.7.11),
+> which reuses the `:8083` port without embedding chat domain.
 
 The **core service** where agents collaborate:
 
@@ -369,7 +377,21 @@ The **core service** where agents collaborate:
 - **Guard Layer** (`guard/`) — `PromptGuard` (prompt injection detection), rate limiting, and circuit breaker protecting LLM calls.
 - **Trace** (`trace/`) — per-request agent trace: every node execution, tool call, and LLM exchange is recorded for explainability and debugging.
 
-### 4.8 travel-frontend (`next-app`)
+### 4.8 travel-stream-gateway (`:8083`)
+
+**V-3**：独立流式网关——**纯传输层**（WebFlux/Netty，Reactive 非阻塞，单连接零 servlet 线程占用）。
+
+- **职责边界**：JWT 验证（`ReactiveJwtAuthFilter`，validate 包 boundedElastic 防 EventLoop
+  阻塞；`/actuator/**` 白名单）+ SSE 消费转发（`PlanningStreamClient` → planning `:8081`
+  `/messages/stream`，事件名/id 全元数据透传，元素间隔超时 330s，断连取消）+ 限流复用
+  common。**不嵌入任何聊天域**（pom 零 chat-domain/chat-stream/memory 依赖；业务全在
+  planning 进程——旧 webflux 整域复制的教训）。
+- **启用方式**：前端 `NEXT_PUBLIC_STREAM_BASE=http://localhost:8083`（不设=直连 planning
+  开发态；**无自动 fallback**——网关不可达即显式报错，用户决策②单路径）。
+- **启动**：`mvn -pl travel-stream-gateway spring-boot:run`（配置唯一源 `gateway.yml`；
+  `JWT_SECRET` 环境变量必填，`travel.internal.token` 可选对齐 planning 内部桥）。
+
+### 4.9 travel-frontend (`next-app`)
 
 Next.js 14 App Router application (`npm run dev` serves :3000; `npm run dev:alt`
 serves :3100 — the port used throughout development):
@@ -571,6 +593,10 @@ Each planning request produces a **trace record**: node ID, agent invoked, tool 
   the `travel-chat-stream` `Flux<StreamEvent>` (thinking / token / done / error / id). The
   former WebFlux `:8083` reactive pilot and its `NEXT_PUBLIC_STREAM_BASE` gray switch were
   retired in v2.0.7.10.
+- **Gateway edge (V-3, optional)**: `NEXT_PUBLIC_STREAM_BASE=http://localhost:8083` routes
+  chat SSE through `travel-stream-gateway` (pure relay: JWT + metadata-preserving SSE
+  forward to the MVC endpoint above; **no automatic fallback** — unreachable gateway =
+  explicit error, by design).
 - **Frontend reveal**: per-session `streamStates` + a 24 ms × 3-char reveal queue; switching
   sessions never aborts the backend stream; background sessions accumulate and notify via a
   red dot on the session list (M6-5 / M6-48 / M6-49).
