@@ -7,6 +7,9 @@ import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.cloud.client.loadbalancer.LoadBalanced;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
 import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
@@ -48,6 +51,18 @@ public class PlanningStreamClient {
     private final WebClient webClient;
     private final long responseTimeoutMs;
     private final String internalToken;
+
+    /** X-2c：服务名模式开关（空/空白=URL 模式现状零行为；单测直连未注入=null 同 URL 模式）。 */
+    @Value("${travel.gateway.planning-service-name:}")
+    private String planningServiceName;
+
+    /** X-2c：@LoadBalanced 限定 builder（容器注入；独立构造/无该限定 Bean 时=null → 回落 URL 模式）。 */
+    @Autowired(required = false)
+    @LoadBalanced
+    private WebClient.Builder loadBalancedBuilder;
+
+    /** X-2c：service-name 模式惰性客户端（null=未构造，构造后缓存）。 */
+    private volatile WebClient serviceModeClient;
 
     /** W-1b：转发时长 Timer（缺省自给 registry=无 MeterRegistry Bean 时零依赖可用；装配后切官方 registry）。 */
     private volatile MeterRegistry meterRegistry = new SimpleMeterRegistry();
@@ -93,7 +108,7 @@ public class PlanningStreamClient {
     public Flux<ServerSentEvent<String>> stream(String sessionId, String rawBody,
                                                 String userAuthorization, String clientRequestId) {
         long startMs = System.currentTimeMillis();
-        return webClient.post()
+        return resolveClient().post()
                 .uri(STREAM_URI, sessionId)
                 .headers(h -> h.addAll(forwardHeaders(userAuthorization, internalToken, clientRequestId)))
                 .bodyValue(rawBody)
@@ -106,6 +121,38 @@ public class PlanningStreamClient {
                     log.info("[GatewayForward] uri={}, status={}, elapsedMs={}",
                             STREAM_URI, signalStatus(sig), elapsedMs);
                 });
+    }
+
+    /**
+     * X-2c：客户端解析——service-name 空/空白=现状 {@code webClient}（URL 模式构造逐字不动）；
+     * 非空=经 @LoadBalanced builder 以 {@code http://{service-name}} 为基座（服务发现负载均衡，
+     * 仅审计实弹开启）。builder 缺失时回落 URL 模式（live-fire 误配置保护）。
+     * 包级可见供单测直连（V-1 范式）。
+     */
+    WebClient resolveClient() {
+        if (planningServiceName == null || planningServiceName.isBlank()) {
+            return webClient;
+        }
+        if (loadBalancedBuilder == null) {
+            return webClient;
+        }
+        WebClient client = serviceModeClient;
+        if (client == null) {
+            client = loadBalancedBuilder.baseUrl("http://" + planningServiceName.trim()).build();
+            serviceModeClient = client;
+        }
+        return client;
+    }
+
+    /** X-2c：负载均衡 builder 定义（嵌套配置随包扫描；service-name 空=此 Bean 惰性零行为）。 */
+    @Configuration(proxyBeanMethods = false)
+    static class LoadBalancedBuilderConfig {
+
+        @Bean
+        @LoadBalanced
+        WebClient.Builder planningLoadBalancedBuilder() {
+            return WebClient.builder();
+        }
     }
 
     /** W-1b：doFinally 终态归一（ok/error/cancel；其余信号类型小写原名）。 */

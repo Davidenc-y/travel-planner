@@ -98,6 +98,20 @@
             <groupId>cn.hutool</groupId>
             <artifactId>hutool-all</artifactId>
         </dependency>
+
+        <!-- X-1b：Nacos 配置中心（版本随 SCA 2025.0.0.0 BOM；白名单四件之一；
+             NACOS_ENABLED=false 时禁用解析器跳过 import，行为与引入前零差异） -->
+        <dependency>
+            <groupId>com.alibaba.cloud</groupId>
+            <artifactId>spring-cloud-starter-alibaba-nacos-config</artifactId>
+        </dependency>
+
+        <!-- X-2a：Nacos 服务发现（版本随 SCA BOM；白名单四件之二；
+             NACOS_ENABLED=false 时 @ConditionalOnNacosDiscoveryEnabled 不装配=零注册零发现） -->
+        <dependency>
+            <groupId>com.alibaba.cloud</groupId>
+            <artifactId>spring-cloud-starter-alibaba-nacos-discovery</artifactId>
+        </dependency>
     </dependencies>
 
     <build>

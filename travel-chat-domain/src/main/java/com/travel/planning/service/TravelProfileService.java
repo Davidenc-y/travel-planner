@@ -3,6 +3,7 @@ package com.travel.planning.service;
 import com.travel.common.entity.TravelProfile;
 import com.travel.common.exception.BusinessException;
 import com.travel.common.exception.ErrorCode;
+import com.travel.common.lock.LockPort;
 import com.travel.common.util.JsonUtils;
 import com.travel.memory.config.LlmGovernor;
 import com.travel.memory.longterm.ProfilePort;
@@ -43,16 +44,6 @@ public class TravelProfileService implements ProfilePort {
     /** M3-22：跨实例乐观锁冲突重试上限（单实例内条带锁已串行化，冲突主要来自多实例） */
     private static final int OPTIMISTIC_RETRY_TIMES = 3;
 
-    /** F69/B3-3：按 userId 串行化的条带锁（64 条，可重入；无需 schema 变更） */
-    private static final int PROFILE_LOCK_STRIPES = 64;
-    private final Object[] profileLocks = new Object[PROFILE_LOCK_STRIPES];
-
-    {
-        for (int i = 0; i < PROFILE_LOCK_STRIPES; i++) {
-            profileLocks[i] = new Object();
-        }
-    }
-
     private final TravelProfileMapper profileMapper;
     private final ChatModel chatModel;
     // F75/B3-5：LLM 调用统一治理（画像压缩纳入并发许可）
@@ -61,18 +52,23 @@ public class TravelProfileService implements ProfilePort {
     private final PromptTemplates promptTemplates;
     // M17-2：行程完成后异步重算行为画像（compute-enabled 由服务内部自检）
     private final BehaviorProfileService behaviorProfileService;
+    // X-7a/X-7b：画像锁端口（NoOp 默认=进程内串行语义等价；travel.lock.redisson.enabled=true
+    // 时 RedissonLockPort @Primary 接管=跨实例分布式可重入）
+    private final LockPort lockPort;
 
     // M7-6：画像压缩为低频后台任务 → light 角色（压缩质量由校验与回退守护）
     public TravelProfileService(TravelProfileMapper profileMapper,
                                 @Qualifier("lightModel") ChatModel chatModel,
                                 LlmGovernor llmGovernor,
                                 PromptTemplates promptTemplates,
-                                BehaviorProfileService behaviorProfileService) {
+                                BehaviorProfileService behaviorProfileService,
+                                LockPort lockPort) {
         this.profileMapper = profileMapper;
         this.chatModel = chatModel;
         this.llmGovernor = llmGovernor;
         this.promptTemplates = promptTemplates;
         this.behaviorProfileService = behaviorProfileService;
+        this.lockPort = lockPort;
     }
 
     /**
@@ -84,7 +80,8 @@ public class TravelProfileService implements ProfilePort {
             throw new BusinessException(40101, "用户未登录");
         }
         // F69/B3-3：读-改-写整段按 userId 串行化（可重入），避免并发写同一画像行 lost update
-        synchronized (lockFor(userId)) {
+        // X-7b：synchronized→LockPort（NoOp 默认语义等价；Redisson 开启=跨实例可重入）
+        return lockPort.executeWithLock("profile:" + userId, () -> {
         TravelProfile profile = profileMapper.findByUserId(userId);
         if (profile == null) {
             profile = new TravelProfile();
@@ -100,7 +97,7 @@ public class TravelProfileService implements ProfilePort {
             log.info("创建用户旅游画像: userId={}", userId);
         }
         return profile;
-        }
+        });
     }
 
     /**
@@ -128,7 +125,8 @@ public class TravelProfileService implements ProfilePort {
                                 String preferredInterests, String budgetRange,
                                 String travelStyle, String consumeLevel) {
         // F69/B3-3：画像写入口 1（save_user_profile）按 userId 串行化
-        synchronized (lockFor(userId)) {
+        // X-7b：synchronized→LockPort
+        return lockPort.executeWithLock("profile:" + userId, () -> {
             for (int attempt = 0; ; attempt++) {
             TravelProfile profile = getByUserId(userId);
             applyProfileUpdate(profile, preferredDestinations, preferredInterests,
@@ -147,7 +145,7 @@ public class TravelProfileService implements ProfilePort {
             }
             log.info("画像更新乐观锁冲突，重读重试: userId={}, attempt={}", userId, attempt + 1);
             }
-        }
+        });
     }
 
     /**
@@ -199,7 +197,8 @@ public class TravelProfileService implements ProfilePort {
     public void recordTrip(Long userId, String destination, String interests, String title,
                            BigDecimal budget, String party) {
         // F69/B3-3：画像写入口 2（行程生成）按 userId 串行化
-        synchronized (lockFor(userId)) {
+        // X-7b：synchronized→LockPort（Supplier 化尾部补 return null，语义等价）
+        lockPort.executeWithLock("profile:" + userId, () -> {
         try {
             int tripsSize = recordTripWithRetry(userId, destination, interests, title, budget, party);
 
@@ -216,7 +215,8 @@ public class TravelProfileService implements ProfilePort {
         } catch (Exception e) {
             log.warn("画像自动更新失败（不影响主流程）: userId={}, error={}", userId, e.getMessage());
         }
-        }
+        return null;
+        });
     }
 
     /**
@@ -362,20 +362,21 @@ public class TravelProfileService implements ProfilePort {
      */
     private void compactHistory(Long userId) {
         // F69/B3-3：画像写入口 3（异步压缩）按 userId 串行化
-        synchronized (lockFor(userId)) {
+        // X-7b：synchronized→LockPort（Supplier 化 bare return→return null，语义等价）
+        lockPort.executeWithLock("profile:" + userId, () -> {
         try {
             for (int attempt = 0; ; attempt++) {
             TravelProfile p = getByUserId(userId);
             String trips = p.getHistoryTrips();
             if (trips == null || trips.isBlank()
                     || (trips.startsWith("[") && trips.length() <= HISTORY_COMPACT_MAX_CHARS)) {
-                return;
+                return null;
             }
             String prompt = promptTemplates.profileHistoryCompact()
                     .formatted(HISTORY_COMPACT_MAX_CHARS, trips);
             String summary = chatModel.call(prompt);
             if (summary == null || summary.isBlank()) {
-                return;
+                return null;
             }
             p.setHistoryTrips(summary.trim());
             // M17-1：摘要双写独立通道（读路径 Phase A 不变，M17-3 起优先消费本列）
@@ -385,18 +386,19 @@ public class TravelProfileService implements ProfilePort {
             if (profileMapper.updateById(p) > 0) {
                 log.info("画像历史行程已压缩: userId={}, 长度 {} -> {}",
                         userId, trips.length(), summary.trim().length());
-                return;
+                return null;
             }
             if (attempt >= OPTIMISTIC_RETRY_TIMES) {
                 log.warn("画像压缩乐观锁冲突重试耗尽: userId={}", userId);
-                return;
+                return null;
             }
             log.info("画像压缩乐观锁冲突，重读重试: userId={}, attempt={}", userId, attempt + 1);
             }
         } catch (Exception e) {
             log.warn("画像历史行程压缩失败（不影响主流程）: userId={}, error={}", userId, e.getMessage());
         }
-        }
+        return null;
+        });
     }
 
     /**
@@ -413,11 +415,4 @@ public class TravelProfileService implements ProfilePort {
         };
     }
 
-    /**
-     * F69/B3-3：userId → 条带锁（floorMod 保证非负下标；不同用户可能共享条带，仅轻微争用）。
-     */
-    private Object lockFor(Long userId) {
-        long id = userId == null ? 0L : userId;
-        return profileLocks[Math.floorMod(id, PROFILE_LOCK_STRIPES)];
-    }
 }

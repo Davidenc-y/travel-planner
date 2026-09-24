@@ -16,9 +16,13 @@ import java.util.Map;
  *
  * <p>供 travel-planning 模块通过 HTTP 调用 travel-knowledge 的 RAG 检索 API。</p>
  *
- * <p>配置：travel.knowledge.base-url（application.yml，默认 http://localhost:8082）</p>
+ * <p>配置：travel.knowledge.base-url（chat-domain 域单源 classpath:application-chat.yml:69，
+ * 默认 http://localhost:8082；X-1a 盘点修正：该键不在各进程 application.yml）</p>
  *
  * <p>超时与重试：{@link KnowledgeClientConfig}（B1.1；默认连接 2s/读取 8s、重试 1 次，KNOWLEDGE_FEIGN_* 环境变量可覆盖）</p>
+ *
+ * <p>X-2b：{@code fallbackFactory} 挂接 {@link KnowledgeClientFallbackFactory}（显式失败降级，
+ * 禁 R.ok 伪装）——默认态 circuitbreaker=false 仅挂接不接管（异常直抛=现状），开启归审计实弹。</p>
  *
  * <p>MI-5：本接口 extends {@link KnowledgeSearchPort}（业务端口，纯签名零注解）——
  * Feign 注解留在本接口（传输契约不外溢），三调用方改注入端口类型（Spring 按类型
@@ -28,7 +32,8 @@ import java.util.Map;
  * @since 1.0-SNAPSHOT
  */
 @FeignClient(name = "travel-knowledge", url = "${travel.knowledge.base-url:http://localhost:8082}",
-        configuration = KnowledgeClientConfig.class)
+        configuration = KnowledgeClientConfig.class,
+        fallbackFactory = KnowledgeClientFallbackFactory.class)
 public interface KnowledgeClient extends KnowledgeSearchPort {
 
     /**

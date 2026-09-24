@@ -46,6 +46,29 @@
             <artifactId>micrometer-core</artifactId>
         </dependency>
 
+        <!-- X-1b：Nacos 配置中心（版本随 SCA 2025.0.0.0 BOM；白名单四件之一；
+             NACOS_ENABLED=false 时禁用解析器跳过 import，行为与引入前零差异。
+             非聊天域依赖，P0⑬ 红线不受影响） -->
+        <dependency>
+            <groupId>com.alibaba.cloud</groupId>
+            <artifactId>spring-cloud-starter-alibaba-nacos-config</artifactId>
+        </dependency>
+
+        <!-- X-2a：Nacos 服务发现（版本随 SCA BOM；白名单四件之二；
+             NACOS_ENABLED=false 时零注册零发现。非聊天域依赖，P0⑬ 红线不受影响） -->
+        <dependency>
+            <groupId>com.alibaba.cloud</groupId>
+            <artifactId>spring-cloud-starter-alibaba-nacos-discovery</artifactId>
+        </dependency>
+
+        <!-- X-2c：负载均衡（版本随 SC 2025.0.3 BOM；白名单四件之三。
+             依赖树核验=未随 nacos-discovery 传递（R168 实测零命中），方案预留条款生效显式上桌；
+             service-name 空=LoadBalancerExchangeFilterFunction 不被触发，惰性零行为） -->
+        <dependency>
+            <groupId>org.springframework.cloud</groupId>
+            <artifactId>spring-cloud-starter-loadbalancer</artifactId>
+        </dependency>
+
         <!-- 测试（V-3b/c 单测预置；同旧 webflux pom 先例） -->
         <dependency>
             <groupId>org.springframework.boot</groupId>

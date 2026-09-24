@@ -61,6 +61,14 @@
             <artifactId>spring-cloud-starter-loadbalancer</artifactId>
         </dependency>
 
+        <!-- X-7a：Redisson core（白名单四件之四；独立 Redisson.create 实例，
+             travel.lock.redisson.enabled=false 默认关=不装配零行为，E-33；
+             禁 redisson-spring-boot-starter 入模块） -->
+        <dependency>
+            <groupId>org.redisson</groupId>
+            <artifactId>redisson</artifactId>
+        </dependency>
+
         <!-- MyBatis Plus + MySQL（会话/消息/幂等/追溯仓储） -->
         <dependency>
             <groupId>com.baomidou</groupId>

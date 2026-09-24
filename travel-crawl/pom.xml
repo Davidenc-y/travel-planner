@@ -40,6 +40,13 @@
         </dependency>
         <!-- 说明：骨架阶段不依赖 travel-common，保持轻量与解耦；
              后续导入联动通过 HTTP 调用 knowledge /api/v1/etl/import 实现 -->
+
+        <!-- X-1b：Nacos 配置中心（版本随 SCA 2025.0.0.0 BOM；白名单四件之一；
+             NACOS_ENABLED=false 时禁用解析器跳过 import，行为与引入前零差异） -->
+        <dependency>
+            <groupId>com.alibaba.cloud</groupId>
+            <artifactId>spring-cloud-starter-alibaba-nacos-config</artifactId>
+        </dependency>
     </dependencies>
 
     <build>

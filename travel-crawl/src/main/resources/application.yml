@@ -1,6 +1,18 @@
 spring:
   application:
     name: travel-crawl
+  # X-1b：Nacos 配置中心接线（E-33：NACOS_ENABLED=false=整体关闭，禁用解析器跳过 import=零键值变化；
+  # optional: 前缀容忍 dataId 缺席；dataId 灌配见 docs/zcode/20260924_review/Nacos部署与灌配手册.md）
+  config:
+    import: optional:nacos:travel-common.yaml,optional:nacos:travel-crawl.yaml
+  # X-1b：配置中心接线（默认值=E-33 现状等价；server-addr 默认=VM 契约地址）
+  cloud:
+    nacos:
+      config:
+        enabled: ${NACOS_ENABLED:false}
+        server-addr: ${NACOS_ADDR:192.168.253.129:8848}
+        namespace: ${NACOS_NAMESPACE:dev}  # AR-1（X 审计修复）：配置在 dev 命名空间，缺省连 public 拉不到
+        group: TRAVEL  # AR-2（X 审计修复）：灌配在 TRAVEL 组，缺省 DEFAULT_GROUP 拉空
   # F110-B：Redis（执行队列/持久配额，queue-type/quota-type=redis 时使用）
   data:
     redis:
