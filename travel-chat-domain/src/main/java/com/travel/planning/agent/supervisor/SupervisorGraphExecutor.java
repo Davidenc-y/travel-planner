@@ -9,6 +9,8 @@ import com.travel.planning.memory.longterm.ProfileToolProvider;
 import com.travel.memory.prompt.PromptTemplates;
 import com.travel.stream.service.TurnCancellation;
 import com.travel.stream.service.TurnInterruptedException;
+import com.travel.common.exception.BusinessException;
+import com.travel.common.exception.ErrorCode;
 import com.travel.planning.trace.TraceContext;
 import com.travel.planning.trace.TtftChannel;
 import com.travel.aigateway.route.ModelRoutingContext;
@@ -58,6 +60,40 @@ final class SupervisorGraphExecutor {
         this.directAnswerExecutor = directAnswerExecutor;
         this.quotaTripwire = quotaTripwire;
         this.planningHeuristics = planningHeuristics;
+    }
+
+    /** S-C2b：意图分级预算（缺省自给=未接线时等价内置档；StreamExecutor 同款模式） */
+    private com.travel.planning.config.ChatBudgetPresets budgetPresets = new com.travel.planning.config.ChatBudgetPresets();
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    void setBudgetPresets(com.travel.planning.config.ChatBudgetPresets budgetPresets) {
+        this.budgetPresets = budgetPresets;
+    }
+
+    /** W-2b：重试轮跨轮 token 台账（key=scopeKey=clientMessageId 回退 requestId；E-48 规范 ConcurrentMap，轮 finally 清键；包级可见=单测直连） */
+    final java.util.concurrent.ConcurrentHashMap<String, Long> turnTokenSpend = new java.util.concurrent.ConcurrentHashMap<>();
+
+    /** W-2b：轮总预算上限——与流式预算门（BUDGET_MAX_TOKENS_KEY 写入处）同源 budgetPresets.resolve(budgetIntent).getMaxTokens()；budgetIntent 空返回 null=守卫跳过零行为。 */
+    private Long turnBudgetCap() {
+        String intent = TraceContext.active() ? TraceContext.current().budgetIntent : null;
+        if (intent == null || intent.isBlank()) {
+            return null;
+        }
+        return (long) budgetPresets.resolve(intent).getMaxTokens();
+    }
+
+    /** W-2b：重试准入裁决（包级可见=单测直连）——turnKey 已耗 + 在途累计 &gt; cap 抛 ChatService:797 同款 40303；budgetIntent 空零行为。 */
+    void enforceRetryTurnBudget(String spendKey, String requestId) {
+        Long cap = turnBudgetCap();
+        if (cap == null) {
+            return;
+        }
+        long projected = turnTokenSpend.getOrDefault(spendKey, 0L)
+                + tokenUsageInterceptor.peek(requestId)[2];
+        if (projected > cap) {
+            throw new BusinessException(ErrorCode.MODEL_QUOTA_EXCEEDED.code(),
+                    ErrorCode.MODEL_QUOTA_EXCEEDED.message());
+        }
     }
 
     /**
@@ -139,6 +175,7 @@ final class SupervisorGraphExecutor {
             String result = SupervisorResponseSupport.buildFinalResponse(finalState);
             long[] mainUsage = tokenUsageInterceptor.peek(requestId);
             long totalTokens = tokenUsageInterceptor.endAndGet(requestId);
+            turnTokenSpend.merge(scopeKey, totalTokens, Long::sum); // W-2b：轮已耗累计入台账
             SupervisorTraceSupport.applyTraceTokens(mainUsage);
             // F77/B4-2：路由截断/非 JSON 防护——四键全空且路由 FINISH、且疑似规划类请求时，
             // 用新 requestId 重试一次整图（F63 "playplay" 类问题：解析失败被框架当 FINISH，
@@ -150,6 +187,8 @@ final class SupervisorGraphExecutor {
                     && !planningHeuristics.isRecallQuery(userInput)) {
                 // M6-42：整图重试前检查取消
                 cancel.throwIfCancelled();
+                // W-2b：重试轮跨轮累计守卫——轮总预算跨重试共享；超限走 ChatService:797 同款 40303
+                enforceRetryTurnBudget(scopeKey, requestId);
                 String retryRequestId = UUID.randomUUID().toString();
                 tokenUsageInterceptor.begin(retryRequestId);
                 RunnableConfig.Builder retryBuilder = RunnableConfig.builder()
@@ -180,7 +219,9 @@ final class SupervisorGraphExecutor {
                         finalState = retried.get();
                         result = SupervisorResponseSupport.buildFinalResponse(finalState);
                         long[] retryUsage = tokenUsageInterceptor.peek(retryRequestId);
-                        totalTokens += tokenUsageInterceptor.endAndGet(retryRequestId);
+                        long retryTokens = tokenUsageInterceptor.endAndGet(retryRequestId);
+                        totalTokens += retryTokens;
+                        turnTokenSpend.merge(scopeKey, retryTokens, Long::sum); // W-2b：重试增量入台账（防累计值双计）
                         SupervisorTraceSupport.applyTraceTokens(retryUsage);
                         log.info("路由重试成功: 重新生成规划, resultLength={}, tokens累计={}",
                                 result != null ? result.length() : 0, totalTokens);
@@ -294,6 +335,7 @@ final class SupervisorGraphExecutor {
             tokenUsageInterceptor.endAndGet(requestId);
             // M8-9m：请求结束清理额度短路状态（与 token 采集 endAndGet 对称）
             quotaTripwire.clear(scopeKey);
+            turnTokenSpend.remove(scopeKey); // W-2b：轮终态清台账（防跨轮泄漏）
         }
     }
 

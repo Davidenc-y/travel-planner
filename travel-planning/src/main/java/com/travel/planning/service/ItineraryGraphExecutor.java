@@ -34,6 +34,15 @@ public class ItineraryGraphExecutor {
 
     private final TokenUsageInterceptor tokenUsageInterceptor;
 
+    /** W-2c：意图分级预算（缺省自给=内置档；Supervisor 执行器同款模式，未装配 Bean 时零行为差异） */
+    private com.travel.planning.config.ChatBudgetPresets chatBudgetPresets =
+            new com.travel.planning.config.ChatBudgetPresets();
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    void setChatBudgetPresets(com.travel.planning.config.ChatBudgetPresets chatBudgetPresets) {
+        this.chatBudgetPresets = chatBudgetPresets;
+    }
+
     public ItineraryGraphExecutor(TokenUsageInterceptor tokenUsageInterceptor) {
         this.tokenUsageInterceptor = tokenUsageInterceptor;
     }
@@ -79,6 +88,11 @@ public class ItineraryGraphExecutor {
             }
             if (collectTokens) {
                 configBuilder.addMetadata(TokenUsageInterceptor.REQUEST_ID_KEY, requestId);
+                // W-2c：行程图接入门限——PLANNING 档上限经 metadata 传给 enforceBudget
+                // （M14-1c 注册链静态核实通过：AbstractReactSubAgent:49-62 将 interceptor()
+                // 注册进 ReactAgent，4 个子代理 Bean 被 Supervisor 与行程图共用）
+                configBuilder.addMetadata(TokenUsageInterceptor.BUDGET_MAX_TOKENS_KEY,
+                        chatBudgetPresets.resolve("PLANNING").getMaxTokens());
             }
             RunnableConfig config = configBuilder.build();
             future = CompletableFuture.supplyAsync(

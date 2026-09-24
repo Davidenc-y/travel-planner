@@ -256,6 +256,10 @@ public class ChatRoutingStep implements ChatPipelineStep {
                     e.getClass().getName(), chainPreview(e),
                     diagMsg.length() > 80 ? diagMsg.substring(0, 80) : diagMsg);
             log.error("Agent 调用失败", e);
+            // W-1a：错误详情补记进 span（TraceContext 未激活时空安全跳过）
+            spanCollector.recordError(com.travel.planning.trace.TraceContext.active()
+                    ? com.travel.planning.trace.TraceContext.current().requestId : null,
+                    "route", diagMsg);
             response = ResponseTexts.GENERIC_ROUTE_FAILURE;
             fallback = true;
         }
@@ -332,12 +336,26 @@ public class ChatRoutingStep implements ChatPipelineStep {
                             }
                             SupervisorResponseSupport.recordGrounding(
                                     groundingChecker, composed, r.answer());
+                            // W-5：graph-stream 分支补 S-D1 未命中标注——静态核实证伪（本分支
+                            // 此前仅 recordGrounding 观测，"（非知识库来源，请核实）"标注在
+                            // 流式默认路径缺失，与阻塞 route() default 分支不对齐）。
+                            // 仅改最终全文/落库文本（SSE 已发出 token 无法追溯），实弹归待审计
+                            String beforeAnnotate = r.answer();
+                            String annotatedAnswer = SupervisorResponseSupport.annotateGrounding(
+                                    groundingChecker, composed, r.answer());
+                            // S-D2：幻觉标注计数与阻塞分支对齐（RK-13 通道）
+                            String mark = com.travel.planning.agent.support.AttractionGroundingChecker.UNKNOW_SOURCE_MARK;
+                            int flagged = countOccurrences(annotatedAnswer, mark)
+                                    - countOccurrences(beforeAnnotate, mark);
+                            if (flagged > 0 && ragQualityCounters != null) {
+                                ragQualityCounters.recordHallucinationFlagged(flagged);
+                            }
                             observeConflictIfEnabled(composed, r.routePlanJson());
                             writeItineraryChunks(sessionId, r.routePlanJson());
                             Long writtenId = writebackIfEnabled(intent, userId, sessionId, composed,
                                     r.routePlanJson(), r.budgetJson());
                             logElapsed(intent, routeStart, r.fallback());
-                            return new StreamRouteResult(r.answer(), r.totalTokens(),
+                            return new StreamRouteResult(annotatedAnswer, r.totalTokens(),
                                     r.fallback(), true, writtenId);
                         }
                         catch (InterruptedException e) {
@@ -383,6 +401,10 @@ public class ChatRoutingStep implements ChatPipelineStep {
                     e.getClass().getName(), chainPreview(e),
                     diagMsg.length() > 80 ? diagMsg.substring(0, 80) : diagMsg);
             log.error("Agent 流式调用失败", e);
+            // W-1a：SSE 兜底路径对齐补记（route() 同款）
+            spanCollector.recordError(com.travel.planning.trace.TraceContext.active()
+                    ? com.travel.planning.trace.TraceContext.current().requestId : null,
+                    "route.stream", diagMsg);
             return new StreamRouteResult(ResponseTexts.GENERIC_ROUTE_FAILURE, 0, true, false);
         }
         });

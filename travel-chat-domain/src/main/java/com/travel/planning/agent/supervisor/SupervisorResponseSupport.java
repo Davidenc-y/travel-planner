@@ -280,7 +280,53 @@ public final class SupervisorResponseSupport {
         }
         int marker = composed.indexOf(Markers.ATTRACTION_CANDIDATES);
         String segment = marker >= 0 ? composed.substring(marker) : composed;
-        return AttractionGroundingChecker.extractJsonArray(segment);
+        return extractObjectArrayJson(segment);
+    }
+
+    /**
+     * AR-2（W 审计修复）：候选数组提取——定位 "[{" 后做引号感知的括号配平扫描。
+     *
+     * <p> RK（v2.0.7.7）起 composed 候选段之前携带【数据来源说明】/【知识使用规则】
+     * 守护文本（内嵌 "[1][3]" 字面量）——旧 {@code extractJsonArray} 取首个 '[' 为
+     * 起点解析必败 → 候选恒空 → grounding 观测（M8-2）与 strict-attraction 标注
+     * （S-D1）自 v2.0.7.7 起静默失效（DB 实证：grounding_rate 2026-09-19 09:03 后
+     * 零非空）。本方法不受前置文本方括号干扰；空数组/无数组返回 null（保持原跳过语义）。</p>
+     */
+    private static String extractObjectArrayJson(String segment) {
+        int start = segment.indexOf("[{");
+        if (start < 0) {
+            return null;
+        }
+        boolean inString = false;
+        boolean escaped = false;
+        int depth = 0;
+        for (int i = start; i < segment.length(); i++) {
+            char c = segment.charAt(i);
+            if (escaped) {
+                escaped = false;
+                continue;
+            }
+            if (c == '\\') {
+                escaped = true;
+                continue;
+            }
+            if (c == '"') {
+                inString = !inString;
+                continue;
+            }
+            if (inString) {
+                continue;
+            }
+            if (c == '[') {
+                depth++;
+            } else if (c == ']') {
+                depth--;
+                if (depth == 0) {
+                    return segment.substring(start, i + 1);
+                }
+            }
+        }
+        return null;
     }
 
     /** 从会话知识切片（type=itinerary_day 的 content）提取原行程景点名 */

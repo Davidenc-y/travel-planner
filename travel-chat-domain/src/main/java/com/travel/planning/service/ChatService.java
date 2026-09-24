@@ -237,7 +237,7 @@ public class ChatService implements ChatStreamExecutor {
         }
         // F52：防御脏 userId（兜底 0 会导致 user_id=0 画像/会话）。
         if (userId == null || userId <= 0) {
-            throw new BusinessException(40101, "用户未登录");
+            throw new BusinessException(ErrorCode.UNAUTHORIZED.code(), ErrorCode.UNAUTHORIZED.message());
         }
         // M7 D6：请求级 model 必须在注册表且 selectable，否则入口快速失败
         chatGateSupport.validateModel(modelRegistry, model);
@@ -272,7 +272,8 @@ public class ChatService implements ChatStreamExecutor {
     public void interruptTurn(Long userId, String sessionId, String clientMessageId) {
         ChatSession session = requireOwnedSession(userId, sessionId);
         if (clientMessageId == null || clientMessageId.isBlank()) {
-            throw new BusinessException(40001, "幂等键不能为空");
+            throw new BusinessException(ErrorCode.IDEMPOTENCY_KEY_REQUIRED.code(),
+                    ErrorCode.IDEMPOTENCY_KEY_REQUIRED.message());
         }
         boolean flipped = chatPersistenceStep.markTurnInterrupted(sessionId, clientMessageId);
         if (flipped) {
@@ -307,7 +308,8 @@ public class ChatService implements ChatStreamExecutor {
     public TurnStatusResult getTurnStatus(Long userId, String sessionId, String clientMessageId) {
         ChatSession session = requireOwnedSession(userId, sessionId);
         if (clientMessageId == null || clientMessageId.isBlank()) {
-            throw new BusinessException(40001, "幂等键不能为空");
+            throw new BusinessException(ErrorCode.IDEMPOTENCY_KEY_REQUIRED.code(),
+                    ErrorCode.IDEMPOTENCY_KEY_REQUIRED.message());
         }
         ChatMessageIdem row = chatPersistenceStep.findTurn(sessionId, clientMessageId);
         if (row == null) {
@@ -988,7 +990,8 @@ public class ChatService implements ChatStreamExecutor {
                     && SessionStatus.ARCHIVED.name().equals(fresh.getStatus())) {
                 return new CloseSessionResult(true, fresh.getSummaryFinal() != null);
             }
-            throw new BusinessException(40902, "会话状态冲突，请稍后重试");
+            throw new BusinessException(ErrorCode.SESSION_STATE_CONFLICT.code(),
+                    ErrorCode.SESSION_STATE_CONFLICT.message());
         }
         boolean finalized = sessionFinalizer.finalizeSession(sessionId);
         return new CloseSessionResult(true, finalized);
@@ -999,11 +1002,12 @@ public class ChatService implements ChatStreamExecutor {
      */
     private ChatSession requireOwnedSession(Long userId, String sessionId) {
         if (userId == null || userId <= 0) {
-            throw new BusinessException(40101, "用户未登录");
+            throw new BusinessException(ErrorCode.UNAUTHORIZED.code(), ErrorCode.UNAUTHORIZED.message());
         }
         ChatSession session = chatPersistenceStep.requireSession(sessionId);
         if (!userId.equals(session.getUserId())) {
-            throw new BusinessException(40302, "无权访问该会话");
+            throw new BusinessException(ErrorCode.SESSION_ACCESS_DENIED.code(),
+                    ErrorCode.SESSION_ACCESS_DENIED.message());
         }
         return session;
     }

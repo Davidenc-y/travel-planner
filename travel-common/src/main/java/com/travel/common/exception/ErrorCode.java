@@ -43,7 +43,15 @@ public enum ErrorCode {
     ITINERARY_PROCESSING(40905, 409, "行程正在生成中，请稍后重试或使用继续生成"),
     /** MM-8-fix（二次审批）：方法级开关未启用（如灰度动态写默认关闭）——ResponseStatusException
      *  不被 GlobalExceptionHandler 识别会吞成 50000，改走 BusinessException 通道后 HTTP 405 可达客户端 */
-    METHOD_NOT_ALLOWED(40501, 405, "方法不被允许（功能开关未启用）");
+    METHOD_NOT_ALLOWED(40501, 405, "方法不被允许（功能开关未启用）"),
+
+    // ==================== W-4 补缺（码+消息逐字取自 ChatService 既有字面量；同码异文案=既有码位复用实证，禁漂移=P0⑧） ====================
+    /** ChatService 幂等键校验（40001 码位与 BAD_REQUEST 复用，文案逐字保留） */
+    IDEMPOTENCY_KEY_REQUIRED(40001, 400, "幂等键不能为空"),
+    /** ChatService 会话关闭冲突（40902 码位与 SESSION_CLOSED 复用，文案逐字保留） */
+    SESSION_STATE_CONFLICT(40902, 409, "会话状态冲突，请稍后重试"),
+    /** ChatService 会话归属拒绝（40302 码位与 MODEL_UNAVAILABLE 复用，文案逐字保留） */
+    SESSION_ACCESS_DENIED(40302, 403, "无权访问该会话");
 
     private final int code;
     private final int httpStatus;

@@ -1,6 +1,11 @@
 package com.travel.gateway.service;
 
 import com.travel.common.config.GrayFlags;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.Timer;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.http.HttpHeaders;
@@ -9,9 +14,12 @@ import org.springframework.http.codec.ServerSentEvent;
 import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.function.client.WebClient;
 import reactor.core.publisher.Flux;
+import reactor.core.publisher.SignalType;
 
 import java.time.Duration;
 import java.util.List;
+import java.util.UUID;
+import java.util.concurrent.TimeUnit;
 
 /**
  * V-3c：planning 流式客户端——网关唯一出站通道。
@@ -24,6 +32,7 @@ import java.util.List;
  * <p>断连取消：浏览器侧取消沿 Reactor 链传播至 WebClient 底层连接关闭，planning
  * SseEmitter 感知断连后走其原生清理，网关无需额外注册回调。</p>
  */
+@Slf4j
 @Component
 public class PlanningStreamClient {
 
@@ -31,9 +40,32 @@ public class PlanningStreamClient {
     static final ParameterizedTypeReference<ServerSentEvent<String>> SSE_STRING =
             new ParameterizedTypeReference<>() {};
 
+    /** W-1b：转发观测 Timer 名与请求关联 ID 头名。 */
+    static final String TIMER_FORWARD = "gateway.stream.forward";
+    static final String HEADER_REQUEST_ID = "X-Request-Id";
+    static final String STREAM_URI = "/api/v1/chat/sessions/{sessionId}/messages/stream";
+
     private final WebClient webClient;
     private final long responseTimeoutMs;
     private final String internalToken;
+
+    /** W-1b：转发时长 Timer（缺省自给 registry=无 MeterRegistry Bean 时零依赖可用；装配后切官方 registry）。 */
+    private volatile MeterRegistry meterRegistry = new SimpleMeterRegistry();
+    private volatile Timer forwardTimer = newForwardTimer();
+
+    @Autowired(required = false)
+    void adoptMeterRegistry(MeterRegistry registry) {
+        if (registry != null && registry != this.meterRegistry) {
+            this.meterRegistry = registry;
+            this.forwardTimer = newForwardTimer();
+        }
+    }
+
+    private Timer newForwardTimer() {
+        return Timer.builder(TIMER_FORWARD)
+                .description("planning SSE 转发时长（W-1b）")
+                .register(meterRegistry);
+    }
 
     public PlanningStreamClient(
             @Value("${travel.gateway.planning-base-url:http://localhost:8081}") String planningBaseUrl,
@@ -53,15 +85,41 @@ public class PlanningStreamClient {
      * X-Internal-Token 按方案注入（值取与 planning 同名键 {@code travel.internal.token}，
      * 供端点未来收敛内部校验时零改网关）。超时=元素间隔（planning 原生 15s keepalive
      * 持续喂流，静默 330s 判链路死亡）。</p>
+     *
+     * <p>W-1b：X-Request-Id 透传（客户端未带则生成 8 位短 UUID，见
+     * {@link #forwardHeaders(String, String, String)}）；转发观测=Timer 记时长 +
+     * {@code [GatewayForward]} 终态日志（ok/error/cancel），planning 侧零改动。</p>
      */
-    public Flux<ServerSentEvent<String>> stream(String sessionId, String rawBody, String userAuthorization) {
+    public Flux<ServerSentEvent<String>> stream(String sessionId, String rawBody,
+                                                String userAuthorization, String clientRequestId) {
+        long startMs = System.currentTimeMillis();
         return webClient.post()
-                .uri("/api/v1/chat/sessions/{sessionId}/messages/stream", sessionId)
-                .headers(h -> h.addAll(forwardHeaders(userAuthorization, internalToken)))
+                .uri(STREAM_URI, sessionId)
+                .headers(h -> h.addAll(forwardHeaders(userAuthorization, internalToken, clientRequestId)))
                 .bodyValue(rawBody)
                 .retrieve()
                 .bodyToFlux(SSE_STRING)
-                .timeout(Duration.ofMillis(responseTimeoutMs));
+                .timeout(Duration.ofMillis(responseTimeoutMs))
+                .doFinally(sig -> {
+                    long elapsedMs = System.currentTimeMillis() - startMs;
+                    forwardTimer.record(elapsedMs, TimeUnit.MILLISECONDS);
+                    log.info("[GatewayForward] uri={}, status={}, elapsedMs={}",
+                            STREAM_URI, signalStatus(sig), elapsedMs);
+                });
+    }
+
+    /** W-1b：doFinally 终态归一（ok/error/cancel；其余信号类型小写原名）。 */
+    private static String signalStatus(SignalType sig) {
+        if (sig == SignalType.ON_COMPLETE) {
+            return "ok";
+        }
+        if (sig == SignalType.ON_ERROR) {
+            return "error";
+        }
+        if (sig == SignalType.CANCEL) {
+            return "cancel";
+        }
+        return sig.name().toLowerCase();
     }
 
     /**
@@ -78,6 +136,21 @@ public class PlanningStreamClient {
         }
         if (internalToken != null && !internalToken.isBlank()) {
             headers.set(GrayFlags.HEADER_INTERNAL_TOKEN, internalToken);
+        }
+        return headers;
+    }
+
+    /**
+     * W-1b：转发头组合 + X-Request-Id 落头——客户端已带则逐字透传（端到端关联锚点），
+     * 未带/空白则生成 8 位短 UUID（网关侧可关联回溯，planning 侧不读则无害）。
+     * 包级可见供单测直连。
+     */
+    static HttpHeaders forwardHeaders(String userAuthorization, String internalToken, String clientRequestId) {
+        HttpHeaders headers = forwardHeaders(userAuthorization, internalToken);
+        if (clientRequestId != null && !clientRequestId.isBlank()) {
+            headers.set(HEADER_REQUEST_ID, clientRequestId);
+        } else {
+            headers.set(HEADER_REQUEST_ID, UUID.randomUUID().toString().replace("-", "").substring(0, 8));
         }
         return headers;
     }

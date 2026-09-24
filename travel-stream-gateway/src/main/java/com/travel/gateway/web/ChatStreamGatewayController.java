@@ -44,6 +44,7 @@ public class ChatStreamGatewayController {
             @PathVariable String sessionId,
             @RequestBody String rawBody,
             @RequestHeader(value = "Authorization", required = false) String authorization,
+            @RequestHeader(value = "X-Request-Id", required = false) String clientRequestId,
             ServerWebExchange exchange) {
         Long userId = exchange.getAttribute(ReactiveJwtAuthFilter.ATTR_USER_ID);
         if (userId == null || userId <= 0) {
@@ -54,10 +55,11 @@ public class ChatStreamGatewayController {
         // 双订阅结构对同步完成源存在竞态（单测①实证：other 先完成即取消主路零透传）。
         // 超时=元素间隔 330s（原生 15s 心跳持续喂流，静默 330s 判链路死亡）；
         // 断连取消=下游取消传播至 WebClient 连接关闭。
+        // W-1b：X-Request-Id 透传（客户端未带由客户端层生成短 UUID；planning 零改动）。
         return ResponseEntity.ok()
                 .contentType(MediaType.TEXT_EVENT_STREAM)
                 .body(planningStreamClient
-                        .stream(sessionId, rawBody, authorization)
+                        .stream(sessionId, rawBody, authorization, clientRequestId)
                         .timeout(Duration.ofMillis(responseTimeoutMs)));
     }
 }

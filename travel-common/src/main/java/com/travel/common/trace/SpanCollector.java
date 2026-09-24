@@ -108,6 +108,20 @@ public class SpanCollector {
         }
     }
 
+    /**
+     * W-1a：错误 span 补记（catch 块用）——落一个 type/status 均 error 的 span，
+     * attrs 携带 errorMsg 键（超长截断沿用 drainSpansJson 既有 2KB 预算）。
+     * requestId 为 null 时空安全跳过（TraceContext 未激活等场景零行为）。
+     */
+    public void recordError(String requestId, String name, String errorMsg) {
+        if (requestId == null) {
+            return;
+        }
+        Map<String, Object> attrs = new LinkedHashMap<>();
+        attrs.put("errorMsg", errorMsg == null ? "" : errorMsg);
+        endSpan(requestId, new Span(name, "error", System.currentTimeMillis()), "error", attrs);
+    }
+
     /** 开启一个 span（调用线程持有返回值，endSpan 时回传）。 */
     public Span startSpan(String requestId, String name, String type) {
         return new Span(name, type, System.currentTimeMillis());

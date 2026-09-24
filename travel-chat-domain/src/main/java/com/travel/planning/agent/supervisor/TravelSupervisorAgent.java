@@ -114,6 +114,8 @@ public class TravelSupervisorAgent {
                                   PromptTemplates promptTemplates,
                                   PlanningHeuristics planningHeuristics,
                                   com.travel.planning.memory.knowledge.SupervisorResultLedger supervisorResultLedger,
+                                  com.travel.planning.config.ChatBudgetPresets chatBudgetPresets,
+                                  com.travel.common.trace.SpanCollector spanCollector,
                                   @org.springframework.beans.factory.annotation.Value(
                                           "${travel.chat.supervisor.resume-ledger.enabled:false}")
                                   boolean resumeLedgerEnabled) {
@@ -135,6 +137,13 @@ public class TravelSupervisorAgent {
                 tokenUsageInterceptor, circuitBreakerRegistry, promptTemplates,
                 directAnswerExecutor, quotaTripwire, planningHeuristics,
                 supervisorResultLedger, resumeLedgerEnabled);
+        // AR-1（W 审计修复）：执行器经 new 构造非 Spring Bean，@Autowired setter 不会触发——
+        // 在此显式接线共享 Bean：①SpanCollector（W-1a 错误 span 必须落 AgentTraceCollector
+        // 会 drain 的同一实例，否则流式路径错误详情丢失+私有实例慢泄漏）②ChatBudgetPresets
+        // （W-2b/预存 S-C2c 档位读 yml 覆盖值，与 SSE:160 cap 键写入同源一致）。
+        this.graphExecutor.setBudgetPresets(chatBudgetPresets);
+        this.streamExecutor.setBudgetPresets(chatBudgetPresets);
+        this.streamExecutor.setSpanCollector(spanCollector);
         this.quotaShortCircuitInterceptor = quotaShortCircuitInterceptor;
     }
 
