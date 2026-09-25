@@ -32,6 +32,12 @@ public class WebConfig implements WebMvcConfigurer {
     @Value("${travel.cors.allowed-origins:http://localhost:3000,http://127.0.0.1:3000,http://localhost:3100,http://127.0.0.1:3100}")
     private String allowedOrigins;
 
+    // Y-2b：旧限流拦截器退役开关（显式登记现状值=true=注册，缺省=true 字节等价）；
+    // 置 false=退役注册点（Bean 保留不阻断启动），限流交 SENTINEL_ENABLED 主闸开启后的
+    // starter 内建 Web 埋点——双轨三态语义见方案 §一 Y-2b
+    @Value("${travel.rate-limit.enabled:true}")
+    private boolean rateLimitEnabled;
+
     @Override
     public void addCorsMappings(CorsRegistry registry) {
         registry.addMapping("/api/**")
@@ -55,8 +61,10 @@ public class WebConfig implements WebMvcConfigurer {
 
     @Override
     public void addInterceptors(InterceptorRegistry registry) {
-        registry.addInterceptor(rateLimitInterceptor)
-                .addPathPatterns("/api/**");
+        if (rateLimitEnabled) {
+            registry.addInterceptor(rateLimitInterceptor)
+                    .addPathPatterns("/api/**");
+        }
         registry.addInterceptor(jwtAuthInterceptor)
                 .addPathPatterns("/api/**")
                 .excludePathPatterns(

@@ -1005,6 +1005,44 @@ the planning service — it consumes the domain classes from its classpath.
 
 API contract doc: `docs/test/backend-api-postman-testing-2026-08-23.md` (Knife4j removed)
 
+### 9.5b Microservices & Nacos Configuration Center (since v2.0.7.13/X + Y series)
+
+The backend runs as four independently launchable services plus a standalone
+stream gateway. Since the X/Y batches they wire to **Nacos** (config center +
+service discovery) on the VM: `192.168.253.129:8848`, namespace `dev`,
+group `TRAVEL`. The `NACOS_ENABLED` placeholder default was flipped to
+**true** in the Y-4 production switch (the only intentional default change of
+the Y batch) — all C/S-layer configuration keys now live in Nacos dataIds
+(`travel-common.yaml` + one dataId per service), and the local `application.yml`
+files keep only wiring keys, environment-placeholder (E-layer) keys and the
+Y-series contract keys.
+
+| Service | Port | Module | Sentinel | Event bus | dataId |
+| ------- | ---- | ------ | -------- | --------- | ------ |
+| planning | 8081 | `travel-planning` | `${SENTINEL_ENABLED:false}` | redis (default) / rabbit | `travel-planning.yaml` |
+| knowledge | 8082 | `travel-knowledge` | same main gate | — | `travel-knowledge.yaml` |
+| stream-gateway | 8083 | `travel-stream-gateway` | same main gate | — | `travel-gateway.yaml` |
+| crawl | 8087 | `travel-crawl` | not wired (by design) | — | `travel-crawl.yaml` |
+
+Switch semantics (three-state dual-track, Y-2/Y-3 lines):
+
+- **Default**: `SENTINEL_ENABLED=false` (main gate off = the Sentinel starter
+  initializes nothing) and `travel.rate-limit.enabled=true` (legacy
+  `RateLimitInterceptor` still registered) — byte-equivalent with the
+  pre-migration behavior.
+- **Observation**: `SENTINEL_ENABLED=true` — Sentinel web instrumentation is
+  on (no rules = all pass), legacy interceptor still active.
+- **Full takeover**: `SENTINEL_ENABLED=true` + `travel.rate-limit.enabled=false`
+  — flow rules are served from Nacos (`travel-sentinel-flow-{svc}.json`).
+- **Event bus**: `travel.eventbus.type=redis` (default, Redis Stream, byte
+  equivalent) or `rabbit` (StreamBridge + DLQ topology, see
+  `docs/zcode/20260925_review/RabbitMQ实弹手册.md`).
+
+Offline / degraded development (Nacos unreachable): set `NACOS_ENABLED=false`
+and restore the deleted local blocks from git history — the full decision
+table and log identification guide lives in
+`docs/zcode/20260925_review/离线开发降级手册.md` (three paths).
+
 ### 9.6 Step 5 — Run Frontend
 
 ```bash

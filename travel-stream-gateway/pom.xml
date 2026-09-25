@@ -61,6 +61,21 @@
             <artifactId>spring-cloud-starter-alibaba-nacos-discovery</artifactId>
         </dependency>
 
+        <!-- Y-2a：Sentinel 限流（版本随 SCA BOM；Y 批白名单三件之一；crawl 不加。
+             E-33：主闸 spring.cloud.sentinel.enabled 默认 false=starter 全链路不初始化字节等价。
+             非聊天域依赖，P0⑬ 红线不受影响） -->
+        <dependency>
+            <groupId>com.alibaba.cloud</groupId>
+            <artifactId>spring-cloud-starter-alibaba-sentinel</artifactId>
+        </dependency>
+
+        <!-- Y-2c：Sentinel 规则 Nacos 数据源（版本随 SCA BOM；Y 批白名单三件之二。
+             未灌配 dataId=无规则=全放行零行为；r1：namespace/group 显式写在 yml datasource 节内） -->
+        <dependency>
+            <groupId>com.alibaba.csp</groupId>
+            <artifactId>sentinel-datasource-nacos</artifactId>
+        </dependency>
+
         <!-- X-2c：负载均衡（版本随 SC 2025.0.3 BOM；白名单四件之三。
              依赖树核验=未随 nacos-discovery 传递（R168 实测零命中），方案预留条款生效显式上桌；
              service-name 空=LoadBalancerExchangeFilterFunction 不被触发，惰性零行为） -->

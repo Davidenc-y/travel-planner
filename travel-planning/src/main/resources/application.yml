@@ -1,47 +1,31 @@
 # ============================================================
-# travel-planning 服务配置（端口 8081）
-# M16-3：chat-domain 域共享配置（模型注册表/记忆/RAG/LLM/聊天/守卫词表/追溯/CORS/JWT）
-# 已收敛至 chat-domain 内的 application-chat.yml 单源文件（经 EnvironmentPostProcessor 自动装载），本文件只保留进程专属配置。
+# travel-planning 服务配置（端口 8081；Y-4a 生产切换：C/S 层已删，Nacos 为准）
+# M16-3：chat-domain 域共享配置照旧经 application-chat.yml 自动装载。
+# 本文件仅保留：接线键（nacos/sentinel/openfeign）+ E 层占位键 + Y 系列契约键（health.rabbit）。
 # ============================================================
-server:
-  port: 8081
-  servlet:
-    context-path: /
-
 spring:
-  application:
-    name: travel-planning
   # X-1b：Nacos 配置中心接线（E-33：NACOS_ENABLED=false=整体关闭，禁用解析器跳过 import=零键值变化；
   # optional: 前缀容忍 dataId 缺席；dataId 灌配见 docs/zcode/20260924_review/Nacos部署与灌配手册.md）
   config:
     import: optional:nacos:travel-common.yaml,optional:nacos:travel-planning.yaml
+  # Spring Cloud 兼容性检查已上收 Nacos travel-common.yaml（Y-4a）
+  cloud:
   # M16-3：chat-domain 域共享配置（application-chat.yml，单源在 chat-domain 模块内）
   # 由 ChatDomainConfigEnvironmentPostProcessor（META-INF/spring.factories 注册）以
   # 最低优先级自动装载——本文件与 application-local.yml 的同名键均可覆盖。
   # 不再使用 spring.config.import：IDEA 无法解析依赖模块 classpath 资源而报错
   # （运行时两种机制等价，2026-09-06 修订）。
-  # F104 P1：头像上传 ≤5MB（默认 1MB 会拒收）
-  servlet:
-    multipart:
-      max-file-size: 5MB
-      max-request-size: 6MB
-
-  # Spring Cloud 兼容性检查 — Spring Boot 3.5.0 + Spring Cloud 4.2.0
-  # 实际 API 兼容，仅版本号检查不通过，禁用即可
-  cloud:
-    compatibility-verifier:
-      enabled: false
     # X-1b：配置中心接线（默认值=E-33 现状等价；server-addr 默认=VM 契约地址）
     nacos:
       config:
-        enabled: ${NACOS_ENABLED:false}
+        enabled: ${NACOS_ENABLED:true}
         server-addr: ${NACOS_ADDR:192.168.253.129:8848}
         namespace: ${NACOS_NAMESPACE:dev}  # AR-1（X 审计修复）：配置在 dev 命名空间，缺省连 public 拉不到
         group: TRAVEL  # AR-2（X 审计修复）：灌配在 TRAVEL 组，缺省 DEFAULT_GROUP 拉空
       # X-2a：服务发现接线（默认关=不注册不发现；server-addr 为自裁决修订项——discovery
       # 不继承 config 作用域键，缺省回落 localhost:8848，live-fire 陷阱预防）
       discovery:
-        enabled: ${NACOS_ENABLED:false}
+        enabled: ${NACOS_ENABLED:true}
         server-addr: ${NACOS_ADDR:192.168.253.129:8848}
         namespace: ${NACOS_NAMESPACE:dev}  # AR-1（X 审计修复）：配置在 dev 命名空间，缺省连 public 拉不到
     # X-2b：Feign 熔断开关（默认 false=现状异常直抛，KnowledgeClientFallbackFactory 仅挂接
@@ -49,6 +33,23 @@ spring:
     openfeign:
       circuitbreaker:
         enabled: false
+    # Y-2a：Sentinel 主闸（r1 修复：starter 默认自动注册 Web 拦截器，缺主闸=依赖上桌即行为变化；
+    # 默认关=全链路不初始化，E-33 关闭态字节等价；开启+dashboard 不可达=fail-open 不影响服务）
+    sentinel:
+      enabled: ${SENTINEL_ENABLED:false}
+      transport:
+        dashboard: ${SENTINEL_DASHBOARD:192.168.253.129:8858}
+      eager: false
+      # Y-2c：规则 Nacos 数据源（r1：namespace/group 显式写死在 datasource 节内，不复用 config 段两键
+      # ——AR-1/AR-2 同类陷阱预防；未灌配 dataId=无规则=全放行零行为；灌配手册见 docs/zcode/20260925_review/）
+      datasource:
+        flow-ds:
+          nacos:
+            server-addr: ${NACOS_ADDR:192.168.253.129:8848}
+            namespace: dev
+            groupId: TRAVEL  # AR-3（Y 审计修复）：SCA datasource 属性名是 groupId，group 被静默忽略→DEFAULT_GROUP 拉空
+            data-id: travel-sentinel-flow-planning.json
+            rule-type: flow
 
   # ============ 数据源 ============
   datasource:
@@ -57,9 +58,6 @@ spring:
     # S0 扫描拦截顺带修复（D-04-002）：受控配置不携带默认口令；本地在 application-local.yml 覆盖
     password: ${MYSQL_PASSWORD:}
     driver-class-name: com.mysql.cj.jdbc.Driver
-    # M10-2d：maxLifetime < MySQL wait_timeout（20min），避免服务端关闭后校验失败
-    hikari:
-      max-lifetime: 1200000
 
   # ============ Redis ============
   data:
@@ -75,18 +73,15 @@ spring:
   elasticsearch:
     uris: http://${ES_HOST:localhost}:${ES_PORT:9200}
 
-# ============ MyBatis Plus ============
-mybatis-plus:
-  mapper-locations: classpath:mapper/*.xml
-  configuration:
-    # S-E2（P3-③）：生产收敛 STDOUT→Slf4j（DEBUG 明细经 logging.level 管控，控制台不再打行程 JSON/用户行；local profile 保持 StdOutImpl）
-    log-impl: org.apache.ibatis.logging.slf4j.Slf4jImpl
-    map-underscore-to-camel-case: true
-  global-config:
-    db-config:
-      logic-delete-field: deleted
-      logic-delete-value: 1
-      logic-not-delete-value: 0
+  # ============ RabbitMQ（Y-3b：事件总线 rabbit 通道连接参数） ============
+  # 凭据不落 yml（M21 纪律）：RABBITMQ_USER/PASSWORD 经环境变量注入（compose 明文账号
+  # travel/travel2026 仅 VM 侧，见 docs/zcode/20260925_review/部署手册v2.md）；默认空=未配置。
+  # type=redis（默认）时本连接参数惰性零使用；rabbit 通道实弹归审计。
+  rabbitmq:
+    host: ${RABBITMQ_HOST:localhost}
+    port: ${RABBITMQ_PORT:5672}
+    username: ${RABBITMQ_USER:}
+    password: ${RABBITMQ_PASSWORD:}
 
 # ============ 应用专属配置（进程独有） ============
 travel:
@@ -96,20 +91,6 @@ travel:
   # M11-3：可靠性看板管理员白名单（空=无管理员，生产用环境变量 ADMIN_USER_IDS 注入）
   admin:
     user-ids: ${ADMIN_USER_IDS:2}
-  # S-C2：意图分级预算 presets（§八④授权新键组；紧=CHAT/PROFILE/FUNCTIONAL，标准=PLANNING/REFINE，宽=RECALL；
-  # 消费=C-2b supervisor 墙钟覆盖 + TokenUsageInterceptor token 门，超限走既有 QuotaShortCircuit 通道）
-  rag:
-    # S-D1：grounding 扩展——行程/回复景点名未命中知识库时行级标注（回退 false=关闭）
-    grounding:
-      strict-attraction: true
-  chat:
-    budget-presets:
-      CHAT: { max-steps: 4, wall-ms: 20000, max-tokens: 4000 }
-      PROFILE: { max-steps: 4, wall-ms: 20000, max-tokens: 4000 }
-      FUNCTIONAL: { max-steps: 4, wall-ms: 20000, max-tokens: 4000 }
-      PLANNING: { max-steps: 8, wall-ms: 45000, max-tokens: 10000 }
-      REFINE: { max-steps: 8, wall-ms: 45000, max-tokens: 10000 }
-      RECALL: { max-steps: 12, wall-ms: 75000, max-tokens: 16000 }
   # F104 P1：MinIO 业务对象存储（头像 avatars 桶）
   minio:
     endpoint: http://${MIDDLEWARE_HOST:192.168.253.129}:9000
@@ -117,94 +98,11 @@ travel:
     secret-key: minioadmin
     attractions-bucket: attractions
     avatars-bucket: avatars
-  # M12：高德地图路线/地理编码（Key 只允许环境变量或本地未提交配置）
-  map:
-    amap:
-      enabled: true
-      web-api-key: ${AMAP_WEB_API_KEY:}
-      route-base-url: https://restapi.amap.com/v3/direction
-      geocode-base-url: https://restapi.amap.com/v3/geocode/geo
-      timeout-ms: 8000
-      connect-timeout-ms: 5000
-      max-qps: 2
-      max-retries: 1
-      retry-backoff-ms: 1000
-      route-day-quota: 4500
-      route-month-quota: 120000
-      geocode-day-quota: 3000
-      geocode-month-quota: 30000
-      cache-enabled: true
-      route-cache-ttl-days: 30
-      geocode-cache-ttl-days: 90
-      max-segments-per-request: 40
-      circuit-failure-threshold: 3
-      circuit-window-ms: 60000
-      circuit-open-ms: 30000
-  # M15-1：Open-Meteo 天气接入（零 Key；默认关闭灰度，开启后日预算 3000/QPS1）
-  weather:
-    enabled: true
-    forecast-base-url: https://api.open-meteo.com/v1
-    geocoding-base-url: https://geocoding-api.open-meteo.com/v1
-    timeout-ms: 8000
-    connect-timeout-ms: 5000
-    day-quota: 3000
-    max-qps: 1
-    cache-enabled: true
-    forecast-cache-ttl-hours: 24
-    geocode-cache-ttl-days: 30
-    circuit-failure-threshold: 3
-    circuit-window-ms: 60000
-    circuit-open-ms: 30000
-  # 限流
-  rate-limit:
-    per-minute: 100
-  # M3-6：业务异常 HTTP 状态与业务码语义对齐
-  api:
-    http-status-aligned: true
-  # M4-8/P1-5：行程状态机（GENERATING/FAILED/快照/resume；false=回退一次性写入旧行为）
-  itinerary:
-    state-machine:
-      enabled: true
-      zombie-minutes: 10
-    # M8-3：时间冲突确定性校验（规则链 + 图内重试环；false 回到 M8-3 之前图结构）
-    conflict-check:
-      enabled: true
-      max-route-retry: 2
-      day-start: "08:00"
-      day-end: "21:00"
-    # M6-15 Item 4：行程流式生成（SSE）
-    stream:
-      enabled: true
-      timeout-ms: 330000
-      keepalive-ms: 15000
-      chunk-max-chars: 16
-
-# ============ 灰度开关（GrayReleaseManager KNOWN_KEYS 消费键，D-2a 起）============
-# 注意：enabled() 键缺失回落 false——消费键须在此显式配置；默认 true=现状行为零变更
-gray:
-  itinerary-detail-cache:
-    enabled: true
-  writeback-consumer:
-    enabled: true
-
 # ============ Actuator ============
 management:
-  endpoints:
-    web:
-      exposure:
-        include: health,info,metrics
-  endpoint:
-    health:
-      show-details: when-authorized
+  # Y-3b（r1）：spring-rabbit 上桌后 actuator 会聚合 rabbit 健康指示器——默认显式关，
+  # 防 VM 不可达时 /actuator/health 误报 DOWN；审计开 rabbit 实弹时一并置 true
+  health:
+    rabbit:
+      enabled: false
 
-# ============ 日志 ============
-logging:
-  level:
-    com.travel: DEBUG
-    # S-E2（P3-③）：mapper 层 WARN——Slf4jImpl 的 SQL 明细（完整行程 JSON/用户行）不再进控制台
-    com.travel.planning.mapper: WARN
-    com.travel.common.repository: WARN
-    org.springframework.ai: INFO
-    com.alibaba.cloud.ai: INFO
-  pattern:
-    console: "%d{HH:mm:ss.SSS} %-5level [%thread] %logger{36} - %msg%n"

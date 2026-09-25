@@ -29,6 +29,12 @@ public class WebConfig implements WebMvcConfigurer {
     @Value("${travel.cors.allowed-origins:http://localhost:3000,http://127.0.0.1:3000,http://localhost:3100,http://127.0.0.1:3100}")
     private String allowedOrigins;
 
+    // Y-2b：旧限流拦截器退役开关（显式登记现状值=true=注册，缺省=true 字节等价）；
+    // 置 false=退役注册点（Bean 保留不阻断启动），限流交 SENTINEL_ENABLED 主闸开启后的
+    // starter 内建 Web 埋点——双轨三态语义见方案 §一 Y-2b
+    @Value("${travel.rate-limit.enabled:true}")
+    private boolean rateLimitEnabled;
+
     @Override
     public void addCorsMappings(CorsRegistry registry) {
         registry.addMapping("/api/v1/attractions/**")
@@ -58,8 +64,10 @@ public class WebConfig implements WebMvcConfigurer {
     @Override
     public void addInterceptors(InterceptorRegistry registry) {
         // F90：仅用户面 attractions 端点限流；ETL/RAG/memory 为后端集成，不在此限流
-        registry.addInterceptor(rateLimitInterceptor)
-                .addPathPatterns("/api/v1/attractions/**");
+        if (rateLimitEnabled) {
+            registry.addInterceptor(rateLimitInterceptor)
+                    .addPathPatterns("/api/v1/attractions/**");
+        }
         // M21-3（SEC-02-04/05/07/08）：管理面端点服务间共享密钥（fail-closed）
         registry.addInterceptor(internalTokenInterceptor)
                 .addPathPatterns("/api/v1/etl/**", "/api/v1/memory/**", "/api/v1/rag/**", "/api/v1/files/images");

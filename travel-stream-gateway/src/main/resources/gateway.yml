@@ -1,17 +1,7 @@
-# V-3：独立流式网关配置（travel-stream-gateway，端口 8083）
+# V-3：独立流式网关配置（travel-stream-gateway，端口 8083；Y-4b 生产切换：S 层已删，Nacos 为准）
 # 纯传输层：仅 JWT 验证 + SSE 转发 + 限流；业务全在 planning 进程（8081）。
-# 本文件为网关唯一配置源（应用入口 spring.config.name=gateway）；
-# V 批次 yml 新键仅限本文件（既有键零改值）。
-server:
-  port: 8083
-
+# 本文件仅保留：接线键 + E 层占位键（planning-base-url/jwt.secret）+ Y 系列契约键。
 spring:
-  autoconfigure:
-    exclude:
-      - org.springframework.boot.autoconfigure.jdbc.DataSourceAutoConfiguration
-      - com.baomidou.mybatisplus.autoconfigure.MybatisPlusAutoConfiguration
-  application:
-    name: travel-stream-gateway
   # X-1b：Nacos 配置中心接线（E-33：NACOS_ENABLED=false=整体关闭，禁用解析器跳过 import=零键值变化；
   # optional: 前缀容忍 dataId 缺席；dataId 灌配见 docs/zcode/20260924_review/Nacos部署与灌配手册.md）
   config:
@@ -20,34 +10,44 @@ spring:
   cloud:
     nacos:
       config:
-        enabled: ${NACOS_ENABLED:false}
+        enabled: ${NACOS_ENABLED:true}
         server-addr: ${NACOS_ADDR:192.168.253.129:8848}
         namespace: ${NACOS_NAMESPACE:dev}  # AR-1（X 审计修复）：配置在 dev 命名空间，缺省连 public 拉不到
         group: TRAVEL  # AR-2（X 审计修复）：灌配在 TRAVEL 组，缺省 DEFAULT_GROUP 拉空
       # X-2a：服务发现接线（默认关=不注册不发现；server-addr 为自裁决修订项——discovery
       # 不继承 config 作用域键，缺省回落 localhost:8848，live-fire 陷阱预防）
       discovery:
-        enabled: ${NACOS_ENABLED:false}
+        enabled: ${NACOS_ENABLED:true}
         server-addr: ${NACOS_ADDR:192.168.253.129:8848}
         namespace: ${NACOS_NAMESPACE:dev}  # AR-1（X 审计修复）：配置在 dev 命名空间，缺省连 public 拉不到
-  # 锁定 Reactive：travel-common 传递引入 spring-webmvc（其 MVC 横切件依赖），
-  # Boot WebApplicationType 推断见 DispatcherServlet 会误判 SERVLET，而 classpath
-  # 无 servlet 容器（仅 validation 的 tomcat-embed-el）→ 必须显式锁定 REACTIVE
-  main:
-    web-application-type: reactive
-
+    # Y-2a：Sentinel 主闸（r1 修复：starter 默认自动注册 Web 拦截器，缺主闸=依赖上桌即行为变化；
+    # 默认关=全链路不初始化，E-33 关闭态字节等价；开启+dashboard 不可达=fail-open 不影响服务）
+    sentinel:
+      enabled: ${SENTINEL_ENABLED:false}
+      transport:
+        dashboard: ${SENTINEL_DASHBOARD:192.168.253.129:8858}
+      eager: false
+      # Y-2c：规则 Nacos 数据源（r1：namespace/group 显式写死在 datasource 节内，不复用 config 段两键
+      # ——AR-1/AR-2 同类陷阱预防；未灌配 dataId=无规则=全放行零行为；灌配手册见 docs/zcode/20260925_review/）
+      datasource:
+        flow-ds:
+          nacos:
+            server-addr: ${NACOS_ADDR:192.168.253.129:8848}
+            namespace: dev
+            groupId: TRAVEL  # AR-3（Y 审计修复）：SCA datasource 属性名是 groupId，group 被静默忽略→DEFAULT_GROUP 拉空
+            data-id: travel-sentinel-flow-stream-gateway.json
+            rule-type: flow
 travel:
+  # Y-2b：旧限流拦截器退役开关（显式登记现状值=true；网关为 reactive 无 MVC 拦截器，
+  # 本键为三服务统一口径的惰性登记，当前零消费者=零行为）
+  rate-limit:
+    enabled: true
   gateway:
     # planning 基座地址（V-3c PlanningStreamClient WebClient SSE 消费目标）
     planning-base-url: ${PLANNING_BASE_URL:http://localhost:8081}
     # X-2c：服务名模式开关（空串=URL 模式现状零行为；非空=经 @LoadBalanced 服务发现负载均衡，
     # 仅审计实弹开启——需 NACOS_ENABLED=true + planning 已注册）
     planning-service-name: ""
-    # 超时对齐 chat-stream ChatStreamProperties（timeout 默认 330s）
-    connect-timeout-ms: 5000
-    response-timeout-ms: 330000
-    # SSE 心跳对齐 ChatStreamProperties.keepaliveMs（V-3c 心跳间隔）
-    heartbeat-interval-ms: 15000
 
 # jwt 键：common TokenAuthService @Value 实际绑定顶层 jwt.*（jwt.secret 空=启动
 # fail-fast，M21-1 受控配置不携带默认密钥——本地经环境变量 JWT_SECRET 注入）

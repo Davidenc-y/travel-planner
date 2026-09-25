@@ -102,6 +102,28 @@
             <groupId>com.alibaba.cloud</groupId>
             <artifactId>spring-cloud-starter-alibaba-nacos-discovery</artifactId>
         </dependency>
+
+        <!-- Y-2a：Sentinel 限流（版本随 SCA BOM；Y 批白名单三件之一；crawl 不加。
+             E-33：主闸 spring.cloud.sentinel.enabled 默认 false=starter 全链路不初始化字节等价） -->
+        <dependency>
+            <groupId>com.alibaba.cloud</groupId>
+            <artifactId>spring-cloud-starter-alibaba-sentinel</artifactId>
+        </dependency>
+
+        <!-- Y-2c：Sentinel 规则 Nacos 数据源（版本随 SCA BOM；Y 批白名单三件之二。
+             未灌配 dataId=无规则=全放行零行为；r1：namespace/group 显式写在 yml datasource 节内） -->
+        <dependency>
+            <groupId>com.alibaba.csp</groupId>
+            <artifactId>sentinel-datasource-nacos</artifactId>
+        </dependency>
+
+        <!-- Y-3b：事件总线 rabbit 通道（版本随 SC 2025.0.3 BOM；Y 批白名单三件之三。
+             E-33：travel.eventbus.type=redis（默认）时 RabbitEventBusConfig 零装配，
+             binder 无 binding 配置=惰性；health.rabbit 显式默认关（r1）） -->
+        <dependency>
+            <groupId>org.springframework.cloud</groupId>
+            <artifactId>spring-cloud-starter-stream-rabbit</artifactId>
+        </dependency>
     </dependencies>
 
     <build>

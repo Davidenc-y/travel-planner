@@ -1,18 +1,8 @@
 # ============================================================
-# travel-knowledge 服务配置（端口 8082）
+# travel-knowledge 服务配置（端口 8082；Y-4a 生产切换：C/S 层已删，Nacos 为准）
+# 本文件仅保留：接线键 + E 层占位键（datasource/redis/dashscope/es/milvus host-port/internal/minio/etl.import-base-dir）
 # ============================================================
-server:
-  port: 8082
-  servlet:
-    context-path: /
-  # F30：允许查询参数中出现原始反斜杠（Windows 路径 filePath，如 D:\...）
-  # Tomcat 默认按 RFC 7230/3986 拒绝 '\'，导致 TC-13 直接返回 HTTP 400。
-  tomcat:
-    relaxed-query-chars: '\'
-
 spring:
-  application:
-    name: travel-knowledge
   # X-1b：Nacos 配置中心接线（E-33：NACOS_ENABLED=false=整体关闭，禁用解析器跳过 import=零键值变化；
   # optional: 前缀容忍 dataId 缺席；dataId 灌配见 docs/zcode/20260924_review/Nacos部署与灌配手册.md）
   config:
@@ -21,22 +11,33 @@ spring:
   cloud:
     nacos:
       config:
-        enabled: ${NACOS_ENABLED:false}
+        enabled: ${NACOS_ENABLED:true}
         server-addr: ${NACOS_ADDR:192.168.253.129:8848}
         namespace: ${NACOS_NAMESPACE:dev}  # AR-1（X 审计修复）：配置在 dev 命名空间，缺省连 public 拉不到
         group: TRAVEL  # AR-2（X 审计修复）：灌配在 TRAVEL 组，缺省 DEFAULT_GROUP 拉空
       # X-2a：服务发现接线（默认关=不注册不发现；server-addr 为自裁决修订项——discovery
       # 不继承 config 作用域键，缺省回落 localhost:8848，live-fire 陷阱预防）
       discovery:
-        enabled: ${NACOS_ENABLED:false}
+        enabled: ${NACOS_ENABLED:true}
         server-addr: ${NACOS_ADDR:192.168.253.129:8848}
         namespace: ${NACOS_NAMESPACE:dev}  # AR-1（X 审计修复）：配置在 dev 命名空间，缺省连 public 拉不到
-  # F104 P1：图片上传 ≤5MB（默认 1MB 会拒收）
-  servlet:
-    multipart:
-      max-file-size: 5MB
-      max-request-size: 6MB
-
+    # Y-2a：Sentinel 主闸（r1 修复：starter 默认自动注册 Web 拦截器，缺主闸=依赖上桌即行为变化；
+    # 默认关=全链路不初始化，E-33 关闭态字节等价；开启+dashboard 不可达=fail-open 不影响服务）
+    sentinel:
+      enabled: ${SENTINEL_ENABLED:false}
+      transport:
+        dashboard: ${SENTINEL_DASHBOARD:192.168.253.129:8858}
+      eager: false
+      # Y-2c：规则 Nacos 数据源（r1：namespace/group 显式写死在 datasource 节内，不复用 config 段两键
+      # ——AR-1/AR-2 同类陷阱预防；未灌配 dataId=无规则=全放行零行为；灌配手册见 docs/zcode/20260925_review/）
+      datasource:
+        flow-ds:
+          nacos:
+            server-addr: ${NACOS_ADDR:192.168.253.129:8848}
+            namespace: dev
+            groupId: TRAVEL  # AR-3（Y 审计修复）：SCA datasource 属性名是 groupId，group 被静默忽略→DEFAULT_GROUP 拉空
+            data-id: travel-sentinel-flow-knowledge.json
+            rule-type: flow
   # ============ 数据源 ============
   datasource:
     url: jdbc:mysql://${MYSQL_HOST:localhost}:${MYSQL_PORT:3306}/travel_planner?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true
@@ -44,9 +45,6 @@ spring:
     # S0 扫描拦截顺带修复（D-04-002）：受控配置不携带默认口令；本地在 application-local.yml 覆盖
     password: ${MYSQL_PASSWORD:}
     driver-class-name: com.mysql.cj.jdbc.Driver
-    # M10-2d：maxLifetime < MySQL wait_timeout（20min），避免服务端关闭后校验失败
-    hikari:
-      max-lifetime: 1200000
 
   # ============ Redis ============
   # DG-3c：恢复 spring.data.redis.*（EtlOutbox/ChangeEventConsumer Redis Stream
@@ -60,39 +58,15 @@ spring:
   ai:
     dashscope:
       api-key: ${DASHSCOPE_API_KEY:}
-    # M8-9b：禁用 Spring AI MCP client 自动装配——启动期 initialize 失败会直接终止应用
-    # （实测 20s 超时后抛异常），无法满足“web-search 灰度不阻断启动”。
-    # 联网搜索由 McpWebSearchAdapter 后台自行建立 MCP stdio 连接（MCP Java SDK），
-    # 连接失败仅降级为空搜索工具；LLM 仍无自由搜索工具，注入面不扩大。
-    mcp:
-      client:
-        enabled: false
-        type: SYNC
-        toolcallback:
-          enabled: false
 
   # ============ Elasticsearch ============
   elasticsearch:
     uris: http://${ES_HOST:localhost}:${ES_PORT:9200}
 
-# ============ MyBatis Plus ============
-mybatis-plus:
-  mapper-locations: classpath:mapper/*.xml
-  configuration:
-    # S-E2（P3-③）：生产收敛 STDOUT→Slf4j（local profile 保持 StdOutImpl；DEBUG 明细经 logging.level 管控）
-    log-impl: org.apache.ibatis.logging.slf4j.Slf4jImpl
-    map-underscore-to-camel-case: true
-  global-config:
-    db-config:
-      logic-delete-field: deleted
-      logic-delete-value: 1
-      logic-not-delete-value: 0
-
 # ============ Milvus ============
 milvus:
   host: ${MILVUS_HOST:localhost}
   port: ${MILVUS_PORT:19530}
-  collection-name: attraction_vectors
 
 # ============ 应用专属配置 ============
 travel:
@@ -104,82 +78,6 @@ travel:
     # MM-7：Embedding 模型键配置化（默认值与原硬编码常量逐字节一致；未配置=零行为变化）
     embedding:
       model: ${AI_EMBEDDING_MODEL:text-embedding-v2}
-    model-registry:
-      enabled: true
-      default-timeout-seconds: 120
-      models:
-        - key: qwen3.7-max
-          provider: dashscope-native
-          display-name: "Qwen3.7 Max · 深度推理"
-          api-key-env: DASHSCOPE_API_KEY
-          temperature: 0.7
-          max-tokens: 8000
-          top-p: 0.9
-          roles: [main]
-          selectable: true
-          enabled: true
-        - key: qwen-turbo
-          provider: dashscope-native
-          display-name: "Qwen Turbo · 轻量高速"
-          api-key-env: DASHSCOPE_API_KEY
-          temperature: 0.5
-          max-tokens: 2000
-          roles: [light]
-          selectable: true
-          enabled: true
-        - key: qwen3.7-plus
-          provider: openai-compatible
-          # M8-9g 修复：不能带结尾 /v1（Spring AI OpenAiApi 会自动追加 /v1/chat/completions，
-          # 否则拼出 /v1/v1/chat/completions → 404）
-          base-url: https://dashscope.aliyuncs.com/compatible-mode
-          display-name: "Qwen3.7 Plus · 均衡"
-          api-key-env: DASHSCOPE_API_KEY
-          roles: []
-          selectable: true
-          enabled: true
-        - key: deepseek-chat
-          provider: openai-compatible
-          base-url: https://api.deepseek.com
-          display-name: "DeepSeek Chat · 通用"
-          api-key-env: DEEPSEEK_API_KEY
-          roles: []
-          selectable: true
-          enabled: true
-        - key: text-embedding-v2
-          provider: dashscope-native
-          display-name: "Text Embedding v2"
-          api-key-env: DASHSCOPE_API_KEY
-          roles: [embedding]
-          selectable: false
-          enabled: true
-        - key: gte-rerank-v2
-          provider: dashscope-native
-          display-name: "GTE Rerank v2"
-          api-key-env: DASHSCOPE_API_KEY
-          roles: [rerank]
-          selectable: false
-          enabled: true
-    # M10-2c：模型维度熔断（按 model key；false=直通现状）
-    model-circuit:
-      enabled: true
-      failure-threshold: 5
-      open-ms: 60000
-  # M6-19：RAG 检索流式
-  knowledge:
-    stream:
-      enabled: true
-      timeout-ms: 120000
-      keepalive-ms: 15000
-      chunk-max-chars: 16
-    # MR2-1（2026-09-18 二次审批同步）：两集合物理索引已切换 HNSW/M=16/efC=128/L2，
-    # yml 键值从 IVF_FLAT 同步为 HNSW 消除配置漂移（ContextRetriever:373 建新集合时
-    # 用此键——原漂移会导致未来新建集合退回 IVF_FLAT）。nlist 改 M=16/efC=128（HNSW 参数）。
-    milvus:
-      index:
-        index-type: HNSW
-        M: 16
-        efConstruction: 128
-        metric: L2
   # F104 P1：MinIO 业务对象存储（docker-compose travel-minio，9000/9001）
   minio:
     endpoint: http://${MIDDLEWARE_HOST:192.168.253.129}:9000
@@ -194,162 +92,7 @@ travel:
     # 创建新桶时允许公开读的桶（仅景点图；avatars 保持私有）
     public-buckets:
       - attractions
-  # RAG 默认策略
-  rag:
-    default-type: hybrid
-    # P3：auto 复杂查询首选路由（supervisor / agent / heuristic）；S-A5/A-6（L1a）：supervisor→agent（授权键值清单第 3 处）
-    auto-router: agent
-    # S-B2 审计修复：键路径与 @Value 对齐为平级 travel.rag.hedge-enabled
-    hedge-enabled: false
-    # MR-D1：HyDE 假设答案改写（向量路专用；默认关=原 query 零变更，E-33）
-    query:
-      hyde:
-        enabled: true
-      # MR-D2：LLM 多 Query 扩展（bean 条件装配；默认关=rule 现状，E-33）
-      llm-expand:
-        enabled: true
-        variants: 3
-    # MR-E1：来源权威度注册表（source→authority 0~1；默认空=不参与排序，E-33。
-    # MR2-2/MR2-3 已重灌 ES/Milvus 携带 source 字段，本表自 MR2-4 起实际生效）
-    source-registry:
-      amap: 0.9
-      manual: 0.8
-      web_enrich: 0.5
-      # RK-9：权威裁决 tie-break（默认关=E-33 字节等价；epsilon=相邻并列相对差阈值）
-      tie-break-enabled: false
-      tie-break-epsilon: 0.05
-    # B1.2：RAG 查询级进程内 TTL 缓存（默认开可关；hit 直接返回，miss 走原逻辑后写入）
-    query-cache:
-      enabled: true
-      ttl-ms: 60000
-    # P3：查询理解配置（LLM 抽取开关 / 意图缓存 / 城市与类型清单）
-    query-understanding:
-      enabled: true
-      cache-size: 256
-      cities: 北京,上海,广州,深圳,杭州,成都,西安,厦门,南京,天津,重庆,武汉,长沙,苏州,桂林,青岛,大连,三亚
-      type-keywords:
-        CULTURE: [文化, 博物馆, 古迹, 历史]
-        NATURE: [自然, 山水, 公园, 湖泊]
-        FOOD: [美食, 小吃, 餐厅]
-        SHOPPING: [购物, 逛街, 商场]
-        FAMILY: [亲子, 家庭, 乐园, 儿童]
-        LEISURE: [休闲, 度假, 放松]
-      # M8-2：type 同义词表（M7-8 幻觉校验用；与 type-keywords 合并为单源，yml 可覆盖扩展）
-      type-synonyms:
-        CULTURE: [文物, 遗址, 民俗, 展览, 古迹, 博物馆]
-        NATURE: [爬山, 风景, 森林, 海边, 湖泊]
-        FOOD: [好吃, 火锅, 烧烤, 美食街, 小吃街, 吃, 菜]
-        SHOPPING: [购物街, 买]
-        FAMILY: [孩子, 带娃, 儿童]
-        LEISURE: [温泉, 慢生活]
-    # M8-1：检索结果结构化补全（false 时 AttractionEnricher 直通，行为回到 M8-1 之前）
-    enrichment:
-      enabled: true
-      # RK-8：确定性冲突检测（E-40 授权默认开+低置信契约同理由；false=一键回退零行为）
-      conflict-detect-enabled: true
-    # M8-4：MCP 联网搜索兜底（默认关；灰度开启后仅本地缺失字段触发，限频+熔断+超时）
-    web-search:
-      enabled: false
-      timeout-ms: 1500
-      rate-limit-per-minute: 10
-      daily-quota: 100
-      enrich-fields: [openHours, ticketPrice]
-      writeback-enabled: false
-      # M9-2：补全模式（sync=现状同步；async=本轮回 null + 后台回写）
-      fill-mode: sync
-      # M9-2：搜索源注册表（priority 升序；单源失败自动 failover 下一源）
-      providers:
-        - name: tavily
-          enabled: false
-          api-key-env: TAVILY_API_KEY
-          base-url: https://api.tavily.com/search
-          timeout-ms: 10000
-          priority: 1
-        - name: duckduckgo
-          enabled: false
-          priority: 2
-    # M4-6：Rerank SPI（none=直通默认；dashscope 启用 gte-rerank-v2，失败 fail-open）
-    rerank:
-      type: none
-      candidate-pool: 20
-      timeout-ms: 2000
-      # M7 Batch 4：rerank 模型配置化（默认不变）
-      model: gte-rerank-v2
-      # MR-B1：rerank 低置信阈值门控（E-33 默认 0.0=关闭；二次审批修复——原仅代码默认值
-      # 缺 yml 显式登记，行为等价仅补可发现性；(0,1] 生效，topScore<threshold 判低置信）
-      gate-threshold: 0.0
-    # M8-9d：候选质量感知选择（默认关=顺序截断，行为与现状一致；灰度开启见 local）
-    quality:
-      enabled: false
-      candidate-pool: 20
-      weight: 0.35
-      description-weight: 0.35
-      rating-weight: 0.25
-      image-weight: 0.10
-      tags-weight: 0.10
-      empty-description-penalty: 0.20
-      zero-rating-penalty: 0.10
-      # M9-1：精确名称命中优先（默认 true，纯排序规则；false=直通现状）
-      exact-match-boost: true
-    # M8-9e：检索层修复（city 参与评分 + PLANNING 规则化扩展）
-    retrieval:
-      city-score-boost: 0.5
-      # 生产保守默认关；local 灰度开启，验证后可转正
-      planning-expansion-enabled: true
-      planning-trigger-keywords: [规划, 安排, 行程, 攻略, 几日游, 一日游, 两日游, 三日游, 旅游, 路线, 推荐]
-      planning-expansion-words: [旅游, 景点, 推荐, 攻略]
   # ETL 配置
   etl:
     # M21-3（SEC-02-05）：导入白名单根目录（空缺省=导入功能关闭；本地/回归环境显式配置）
     import-base-dir: ${ETL_IMPORT_BASE_DIR:}
-    batch-size: 100
-    schedule-cron: "0 0 3 * * ?"   # 每天 3 点增量 ETL
-    parallelism: 4                 # F119：ETL 并行度（1~8）
-    embedding-qps: 4               # F119：DashScope Embedding 全局节流（次/秒）
-    timeout-ms: 60000              # F119：单条 ETL 节流等待兜底（毫秒）
-    # RK-4：内容 hash 对账扫描（默认关，E-33 纯净；RK-5 重灌时临时置 true，验证完回关）
-    change-scan:
-      enabled: false
-      batch-size: 500
-      interval-ms: 86400000
-  # F90：用户面端点限流（按 userId+接口，每分钟）
-  rate-limit:
-    per-minute: 100
-  # M3-6：业务异常 HTTP 状态与业务码语义对齐（40401→404、50001→500 等）
-  api:
-    http-status-aligned: true
-  # F89：RAG 链路追溯开关
-  trace:
-    enabled: true
-  # F87/F92：前端跨域白名单（精确 origin；代码层叠加 localhost:* 通配）
-  cors:
-    allowed-origins: http://localhost:3000,http://127.0.0.1:3000,http://localhost:3100,http://127.0.0.1:3100
-
-# ============ Actuator ============
-management:
-  endpoints:
-    web:
-      exposure:
-        include: health,info,metrics
-  endpoint:
-    health:
-      show-details: when-authorized
-
-# ============ 日志 ============
-logging:
-  level:
-    com.travel: DEBUG
-    # U-6：mapper SQL 控制台噪声收敛（对齐 E-2 planning 侧先例）——mapper 接口
-    # 全量 SQL 不再打印；com.travel.common.repository 为共享 AgentTraceMapper 包
-    com.travel.knowledge.repository: WARN
-    com.travel.common.repository: WARN
-    # F33：Milvus SDK 内部重试告警收敛。SDK 在 gRPC 瞬时断流/参数校验失败时会打印
-    # ERROR + 全栈（如 DescribeCollectionRequest ... end-of-stream mid-frame），
-    # 随后由 SDK retry 自动恢复并成功写入。数据完整性由业务侧 ETL 成功/失败统计兜底，
-    # 此处 OFF 避免每条重试刷屏；如需深入排查 Milvus 连接可临时改为 INFO/DEBUG。
-    # 注意：必须带引号写 "OFF"——SnakeYAML（YAML 1.1）会把裸 OFF 解析为布尔 false，
-    # Spring Boot 2.2+ 将布尔 false 静默忽略（日志级别不生效）。
-    io.milvus: "OFF"
-    org.springframework.ai: INFO
-  pattern:
-    console: "%d{HH:mm:ss.SSS} %-5level [%thread] %logger{36} - %msg%n"
