@@ -43,9 +43,8 @@ import java.util.function.Consumer;
  * {@link DirectAnswerExecutor#callDirect}（withBreaker=false，与迁移前一致）。</p>
  */
 @Slf4j
-final class SupervisorStreamExecutor {
+final class SupervisorStreamExecutor extends AbstractSupervisorExecutor {
 
-    private final TokenUsageInterceptor tokenUsageInterceptor;
     private final CircuitBreaker.Registry circuitBreakerRegistry;
     private final PromptTemplates promptTemplates;
     private final DirectAnswerExecutor directAnswerExecutor;
@@ -64,8 +63,9 @@ final class SupervisorStreamExecutor {
                              QuotaTripwire quotaTripwire,
                             PlanningHeuristics planningHeuristics,
                             SupervisorResultLedger resultLedger,
-                            boolean resumeLedgerEnabled) {
-        this.tokenUsageInterceptor = tokenUsageInterceptor;
+                            boolean resumeLedgerEnabled,
+                            SpanCollector spanCollector) {
+        super(tokenUsageInterceptor); // Z-4d 2/2：预算七件上移基类
         this.circuitBreakerRegistry = circuitBreakerRegistry;
         this.promptTemplates = promptTemplates;
         this.directAnswerExecutor = directAnswerExecutor;
@@ -73,52 +73,14 @@ final class SupervisorStreamExecutor {
         this.planningHeuristics = planningHeuristics;
         this.resultLedger = resultLedger;
         this.resumeLedgerEnabled = resumeLedgerEnabled;
+        this.spanCollector = spanCollector; // Z-4e：W-AR-1 显式接线经构造参数保持
     }
 
     /** S-C1：动作指纹器（C-0；四维振荡裁决第一维数据源，缺省自给实例） */
     private ActionFingerprinter fingerprinter = new ActionFingerprinter();
 
-    /** S-C2b：意图分级预算（缺省自给=未接线时等价内置档；墙钟 clamp 只紧不松） */
-    private com.travel.planning.config.ChatBudgetPresets budgetPresets = new com.travel.planning.config.ChatBudgetPresets();
-
-    @Autowired(required = false)
-    void setBudgetPresets(com.travel.planning.config.ChatBudgetPresets budgetPresets) {
-        this.budgetPresets = budgetPresets;
-    }
-
-    /** W-1a：错误 span 补记（缺省自给=未装配时写入本实例，ChatRoutingStep:64 同款模式） */
-    private SpanCollector spanCollector = new SpanCollector();
-
-    @Autowired(required = false)
-    void setSpanCollector(SpanCollector spanCollector) {
-        this.spanCollector = spanCollector;
-    }
-
-    /** W-2b：重试轮跨轮 token 台账（key=scopeKey=clientMessageId 回退 requestId；E-48 规范 ConcurrentMap，轮 finally 清键；包级可见=单测直连） */
-    final ConcurrentHashMap<String, Long> turnTokenSpend = new ConcurrentHashMap<>();
-
-    /** W-2b：轮总预算上限——与 SSE 预算门（BUDGET_MAX_TOKENS_KEY 写入处）同源 budgetPresets.resolve(budgetIntent).getMaxTokens()；budgetIntent 空返回 null=守卫跳过零行为。 */
-    private Long turnBudgetCap() {
-        String intent = TraceContext.active() ? TraceContext.current().budgetIntent : null;
-        if (intent == null || intent.isBlank()) {
-            return null;
-        }
-        return (long) budgetPresets.resolve(intent).getMaxTokens();
-    }
-
-    /** W-2b：重试准入裁决（包级可见=单测直连）——turnKey 已耗 + 在途累计 &gt; cap 抛 ChatService:797 同款 40303；budgetIntent 空零行为。 */
-    void enforceRetryTurnBudget(String spendKey, String requestId) {
-        Long cap = turnBudgetCap();
-        if (cap == null) {
-            return;
-        }
-        long projected = turnTokenSpend.getOrDefault(spendKey, 0L)
-                + tokenUsageInterceptor.peek(requestId)[2];
-        if (projected > cap) {
-            throw new BusinessException(ErrorCode.MODEL_QUOTA_EXCEEDED.code(),
-                    ErrorCode.MODEL_QUOTA_EXCEEDED.message());
-        }
-    }
+    /** W-1a：错误 span 补记（Z-4e：构造注入统一——由 TravelSupervisorAgent 显式构造传入，W-AR-1 接线语义经构造参数保持） */
+    private final SpanCollector spanCollector;
 
     /** S-C2b：意图预算墙钟秒数——preset 与既有 MAX_EXECUTION_SECONDS 取小（只紧不松，E-33 式） */
     private long budgetWallSeconds() {
@@ -168,9 +130,8 @@ final class SupervisorStreamExecutor {
         TurnCancellation cancel = cancellation == null ? TurnCancellation.NOOP : cancellation;
         String requestId = TraceContext.active() ? TraceContext.current().requestId
                 : UUID.randomUUID().toString();
-        // M8-9m：短路作用域优先轮次 key（图流重试复用），缺失回退 requestId
-        String scopeKey = cancel.clientMessageId() != null && !cancel.clientMessageId().isBlank()
-                ? cancel.clientMessageId() : requestId;
+        // M8-9m：短路作用域优先轮次 key（图流重试复用），缺失回退 requestId（Z-4d 2/2：推导单点化基类）
+        String scopeKey = scopeKeyOf(cancel, requestId);
         // T-5d：复用 thinking 事件（流起始逐复用代理发，前端思考流与实际跳过对齐——
         // 用户点名的展示不一致修复点；文案=E-47 授权新增"复用中断前结果："）
         emitReuseThinking(wrappedThinking, resumeSeed);

@@ -44,13 +44,8 @@ public class ChatBudgetStep implements ChatPipelineStep {
         return STEP_ORDER;
     }
 
-    /** S-B6a：Span 采集挂点（optional 注入，缺省自给=无 bean 也不影响预算主流程） */
-    private SpanCollector spanCollector = new SpanCollector();
-
-    @Autowired(required = false)
-    void setSpanCollector(SpanCollector spanCollector) {
-        this.spanCollector = spanCollector;
-    }
+    /** S-B6a：Span 采集挂点（Z-4e：构造注入统一——SpanCollector 为 @Component bean，注入语义与 optional setter 等价） */
+    private final SpanCollector spanCollector;
 
     /**
      * 组装结果：注入文本、token 数、画像/历史段（可能被预算兜底收紧）、候选与会话命中

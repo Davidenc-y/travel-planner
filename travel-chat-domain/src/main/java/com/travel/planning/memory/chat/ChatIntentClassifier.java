@@ -42,22 +42,19 @@ public class ChatIntentClassifier {
     private final Map<String, ChatIntent> cache;
 
     // M7-6：意图分类为高频短输出 → light 角色（注册表默认 qwen-turbo），避免旗舰模型成本浪费
-    /** S-B6a：Span 采集挂点（optional 注入，缺省自给） */
-    private SpanCollector spanCollector = new SpanCollector();
-
-    @Autowired(required = false)
-    void setSpanCollector(SpanCollector spanCollector) {
-        this.spanCollector = spanCollector;
-    }
+    /** S-B6a：Span 采集挂点（Z-4e：构造注入统一——SpanCollector 为 @Component bean，注入语义与 optional setter 等价） */
+    private final SpanCollector spanCollector;
 
     public ChatIntentClassifier(@Qualifier("lightModel") ChatModel chatModel,
                                 ChatIntentProperties properties,
                                 PromptTemplates promptTemplates,
-                                ChatWordLists wordLists) {
+                                ChatWordLists wordLists,
+                                SpanCollector spanCollector) {
         this.chatModel = chatModel;
         this.properties = properties;
         this.promptTemplates = promptTemplates;
         this.wordLists = wordLists;
+        this.spanCollector = spanCollector;
         this.cache = Collections.synchronizedMap(new LinkedHashMap<>(16, 0.75f, true) {
             @Override
             protected boolean removeEldestEntry(Map.Entry<String, ChatIntent> eldest) {

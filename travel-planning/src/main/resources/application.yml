@@ -50,6 +50,17 @@ spring:
             groupId: TRAVEL  # AR-3（Y 审计修复）：SCA datasource 属性名是 groupId，group 被静默忽略→DEFAULT_GROUP 拉空
             data-id: travel-sentinel-flow-planning.json
             rule-type: flow
+        # Z-2a：degrade 规则 Nacos 数据源（熔断第二层，r1 候选方向②；与 flow-ds 同构，属性名口径同 AR-3；
+        # dataId 与已灌文件逐字一致（docs/zcode/20260926_review/sentinel_degrade/）；
+        # 随 SENTINEL_ENABLED 主闸默认 false 不加载=关闭态零行为（E-33）；knowledge/gateway 无 feign
+        # 出站不接 degrade（Z-2c 口径：无 dataId 灌配=空源）
+        degrade-ds:
+          nacos:
+            server-addr: ${NACOS_ADDR:192.168.253.129:8848}
+            namespace: dev
+            groupId: TRAVEL
+            data-id: travel-sentinel-degrade-planning.json
+            rule-type: degrade
 
   # ============ 数据源 ============
   datasource:
@@ -82,6 +93,18 @@ spring:
     port: ${RABBITMQ_PORT:5672}
     username: ${RABBITMQ_USER:}
     password: ${RABBITMQ_PASSWORD:}
+
+# ============ Sentinel Feign 整合（Z-2b，r1 设计） ============
+# 键名经 SCA 2025.0.0.0 starter 字节码核验（javap SentinelFeignAutoConfiguration）：
+# feignSentinelBuilder @Bean @ConditionalOnProperty(name=["feign.sentinel.enabled"])
+# ——实际键名=旧形态 feign.sentinel.enabled（非 spring.cloud.openfeign.sentinel.enabled，备选留痕作废）；
+# 类在 com.alibaba.cloud.sentinel.feign 且已列 AutoConfiguration.imports（classpath 前置核验通过）。
+# 默认 false=条件不匹配=SentinelFeign Builder 不装配=Feign 走默认 Builder（E-33 关闭态字节等价）；
+# 开启=KnowledgeClient 五方法自动成 Sentinel 资源→degrade 命中→既有 fallbackFactory 接管（零新代码），
+# 开启态实弹归审计；天气/地图不埋（已有本地 CircuitBreaker 守卫，双熔断无必要）。
+feign:
+  sentinel:
+    enabled: ${SENTINEL_FEIGN_ENABLED:false}
 
 # ============ 应用专属配置（进程独有） ============
 travel:

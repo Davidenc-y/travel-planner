@@ -257,7 +257,18 @@ public class ItineraryVersionPortImpl implements ItineraryVersionPort {
         // 首次建版（v1）；版本服务缺失不影响主流程
         log.info("[ItineraryWriteback] 聊天规划已创建行程: itineraryId={}, destination={}, days={}",
                 entity.getId(), destination, days);
-        sliceWriter.writeAfterGenerated(sessionId, entity.getId(), entity.getContent());
+        // Z-3a：首创建触发面统一——与 REFINE 分支同构（异步优先+发布失败同步回退；事件
+        // type 仍为 REFINE，消费者零改）。双写者幂等前置核验通过（R214）：同步切片写
+        // seq=itin:x:*、异步写 seq=itin:<id>:*，键空间不重叠且各自 delete-prefix 自幂等，
+        // 检索面 F83 仅保留一套 itinerary_day 兜底混叠。
+        boolean asyncDispatched = writebackAsyncEnabled && writebackEventPublisher != null
+                && writebackEventPublisher.publishRefineWritten(sessionId, entity.getId(), entity.getContent());
+        if (!asyncDispatched) {
+            sliceWriter.writeAfterGenerated(sessionId, entity.getId(), entity.getContent());
+            if (itineraryDetailCache != null) {
+                itineraryDetailCache.evict(entity.getId());
+            }
+        }
         return Optional.of(entity.getId());
     }
 

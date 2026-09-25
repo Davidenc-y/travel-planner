@@ -44,10 +44,8 @@ import java.util.Map;
 @ConditionalOnProperty(name = "travel.eventbus.type", havingValue = "rabbit")
 public class RabbitWritebackConfig {
 
-    /** StreamBridge 动态 destination（Y-3b 发端同名）；DIRECT 交换机 */
+    /** StreamBridge 动态 destination（Y-3b 发端同名）；Topic 交换机（AR-4 修型，绑定 '#' 通配） */
     public static final String EXCHANGE = "travel-event";
-    /** routing key（=destination 名；StreamBridge 动态 destination 默认路由键，实弹核验归审计） */
-    public static final String ROUTING_KEY = "travel-event";
     /** writeback rabbit 消费队列（带 DLX 声明） */
     public static final String QUEUE = "travel-writeback-rabbit";
     /** 死信交换机/队列（消费失败 reject 后落此，人工处置） */

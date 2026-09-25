@@ -60,13 +60,8 @@ public class ChatRoutingStep implements ChatPipelineStep {
     }
 
 
-    /** S-B6c：Span 采集挂点（optional 注入，缺省自给=无 bean 也不影响路由主流程） */
-    private SpanCollector spanCollector = new SpanCollector();
-
-    @Autowired(required = false)
-    void setSpanCollector(SpanCollector spanCollector) {
-        this.spanCollector = spanCollector;
-    }
+    /** S-B6c：Span 采集挂点（Z-4e：构造注入统一——SpanCollector 为 @Component bean，注入语义与 optional setter 等价） */
+    private final SpanCollector spanCollector;
 
 
     /** B3.2：步骤顺序——M3-17 步骤 8「路由」（依据 R7-pipeline-mapping 现发送链步骤序 8，终步序号最大，ChatService :583/:588）。 */

@@ -38,9 +38,8 @@ import java.util.concurrent.TimeoutException;
  * 默认路径（planning-graph-stream-enabled=true），捕获在 {@link SupervisorStreamExecutor}。</p>
  */
 @Slf4j
-final class SupervisorGraphExecutor {
+final class SupervisorGraphExecutor extends AbstractSupervisorExecutor {
 
-    private final TokenUsageInterceptor tokenUsageInterceptor;
     private final CircuitBreaker.Registry circuitBreakerRegistry;
     private final PromptTemplates promptTemplates;
     private final DirectAnswerExecutor directAnswerExecutor;
@@ -54,46 +53,12 @@ final class SupervisorGraphExecutor {
                             DirectAnswerExecutor directAnswerExecutor,
                             QuotaTripwire quotaTripwire,
                             PlanningHeuristics planningHeuristics) {
-        this.tokenUsageInterceptor = tokenUsageInterceptor;
+        super(tokenUsageInterceptor); // Z-4d 2/2：预算七件上移基类
         this.circuitBreakerRegistry = circuitBreakerRegistry;
         this.promptTemplates = promptTemplates;
         this.directAnswerExecutor = directAnswerExecutor;
         this.quotaTripwire = quotaTripwire;
         this.planningHeuristics = planningHeuristics;
-    }
-
-    /** S-C2b：意图分级预算（缺省自给=未接线时等价内置档；StreamExecutor 同款模式） */
-    private com.travel.planning.config.ChatBudgetPresets budgetPresets = new com.travel.planning.config.ChatBudgetPresets();
-
-    @org.springframework.beans.factory.annotation.Autowired(required = false)
-    void setBudgetPresets(com.travel.planning.config.ChatBudgetPresets budgetPresets) {
-        this.budgetPresets = budgetPresets;
-    }
-
-    /** W-2b：重试轮跨轮 token 台账（key=scopeKey=clientMessageId 回退 requestId；E-48 规范 ConcurrentMap，轮 finally 清键；包级可见=单测直连） */
-    final java.util.concurrent.ConcurrentHashMap<String, Long> turnTokenSpend = new java.util.concurrent.ConcurrentHashMap<>();
-
-    /** W-2b：轮总预算上限——与流式预算门（BUDGET_MAX_TOKENS_KEY 写入处）同源 budgetPresets.resolve(budgetIntent).getMaxTokens()；budgetIntent 空返回 null=守卫跳过零行为。 */
-    private Long turnBudgetCap() {
-        String intent = TraceContext.active() ? TraceContext.current().budgetIntent : null;
-        if (intent == null || intent.isBlank()) {
-            return null;
-        }
-        return (long) budgetPresets.resolve(intent).getMaxTokens();
-    }
-
-    /** W-2b：重试准入裁决（包级可见=单测直连）——turnKey 已耗 + 在途累计 &gt; cap 抛 ChatService:797 同款 40303；budgetIntent 空零行为。 */
-    void enforceRetryTurnBudget(String spendKey, String requestId) {
-        Long cap = turnBudgetCap();
-        if (cap == null) {
-            return;
-        }
-        long projected = turnTokenSpend.getOrDefault(spendKey, 0L)
-                + tokenUsageInterceptor.peek(requestId)[2];
-        if (projected > cap) {
-            throw new BusinessException(ErrorCode.MODEL_QUOTA_EXCEEDED.code(),
-                    ErrorCode.MODEL_QUOTA_EXCEEDED.message());
-        }
     }
 
     /**
@@ -125,9 +90,8 @@ final class SupervisorGraphExecutor {
             log.warn("[ModelRoute] 阻塞图请求级模型为空，将使用角色默认 main: requestId={}",
                     requestId);
         }
-        // M8-9m：短路作用域优先轮次 key（图流重试复用），缺失回退 requestId
-        String scopeKey = cancel.clientMessageId() != null && !cancel.clientMessageId().isBlank()
-                ? cancel.clientMessageId() : requestId;
+        // M8-9m：短路作用域优先轮次 key（图流重试复用），缺失回退 requestId（Z-4d 2/2：推导单点化基类）
+        String scopeKey = scopeKeyOf(cancel, requestId);
         tokenUsageInterceptor.begin(requestId);
         try {
             // F26 修复：必须执行 SupervisorAgent 整图（多步路由循环），

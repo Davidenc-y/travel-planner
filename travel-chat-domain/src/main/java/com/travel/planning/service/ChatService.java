@@ -118,6 +118,10 @@ public class ChatService implements ChatStreamExecutor {
     private final ChatPreferenceLogSupport chatPreferenceLogSupport = new ChatPreferenceLogSupport();
     /** R4.2：锚定策略（自动锚定判定+锚定持久化薄封装迁出至 ChatAnchorPolicy；行内初始化保持既有直构签名不变）。 */
     private final ChatAnchorPolicy chatAnchorPolicy = new ChatAnchorPolicy();
+    /** Z-4a：轮次生命周期（中断/清除断点/状态/最近可恢复轮次迁出至 TurnLifecycleService；末位字段=委托构造参数追加在尾部，既有构造调用点位置零移）。 */
+    private final TurnLifecycleService turnLifecycleService;
+    /** Z-4b：会话查询/生命周期（建会话/历史/关会话迁出至 ChatSessionQueryService；继续尾部追加）。 */
+    private final ChatSessionQueryService chatSessionQueryService;
     /** MI-1：标题策略（首条消息标题联动+标题生成/更新迁出至 ChatTurnTitlePolicy；行内初始化保持既有直构签名不变）。 */
     private final ChatTurnTitlePolicy chatTurnTitlePolicy = new ChatTurnTitlePolicy();
     /** MI-1：门禁装配（ARCHIVED 拒写/追加决策/断点清理+在途终止/模型校验迁出至 ChatGateSupport；行内初始化保持既有直构签名不变）。 */
@@ -131,23 +135,26 @@ public class ChatService implements ChatStreamExecutor {
 
     /**
      * 创建会话
+     * <p>Z-4b：方法体迁出至 {@link ChatSessionQueryService}（公共 API 签名零变）。</p>
      */
     public String createSession(Long userId, String title) {
-        return sessionStorePort.createSession(userId, title);
+        return chatSessionQueryService.createSession(userId, title);
     }
 
     /**
      * 获取会话历史
      */
-    /** M21-2 SEC-02-03 止血：历史读取前先校验会话归属（40404 不存在 / 40302 非本人）。 */
+    /** M21-2 SEC-02-03 止血：历史读取前先校验会话归属（40404 不存在 / 40302 非本人）。
+     * <p>Z-4b：方法体迁出至 {@link ChatSessionQueryService}（公共 API 签名零变）。</p> */
     public List<ChatMessage> getHistory(Long userId, String sessionId) {
-        requireOwnedSession(userId, sessionId);
-        return sessionStorePort.listMessages(sessionId);
+        return chatSessionQueryService.getHistory(userId, sessionId);
     }
 
     /**
      * 发送消息并获取响应（无幂等键重载，原路径）。
      */
+    /** Z-4c：旧签名收敛（@Deprecated 委托一版；公共 API 零删除）。 */
+    @Deprecated
     public ChatResponseDTO sendMessage(String sessionId, String message, Long userId) {
         return sendMessage(sessionId, message, userId, null);
     }
@@ -158,25 +165,38 @@ public class ChatService implements ChatStreamExecutor {
      * <p>幂等语义见 {@link ChatPersistenceStep#beginTurn}：COMPLETED 重放 /
      * PENDING 40904 / FAILED 复用重跑 / 未命中同事务登记；兜底文案登记 FAILED
      * （重试重新执行，不重放兜底，M4-0-R1 评审 D3-1/D3-2）。</p>
+     * @deprecated Z-4c 收敛至 {@link #sendMessage(ChatTurnRequest)}
      */
+    @Deprecated
     public ChatResponseDTO sendMessage(String sessionId, String message, Long userId, String clientMessageId) {
         return sendMessage(sessionId, message, userId, clientMessageId, null);
     }
 
     /**
      * 发送消息并获取响应（M4-3 幂等 + M7 请求级模型）。
+     * @deprecated Z-4c 收敛至 {@link #sendMessage(ChatTurnRequest)}
      */
+    @Deprecated
     public ChatResponseDTO sendMessage(String sessionId, String message, Long userId,
                                        String clientMessageId, String model) {
         return sendMessage(sessionId, message, userId, clientMessageId, model, java.util.List.of());
     }
 
-    /** M23（E1）：JSON 兜底路径同样携带锚定快照（与 SSE 路径 per-turn truth 一致）。 */
+    /** M23（E1）：JSON 兜底路径同样携带锚定快照（与 SSE 路径 per-turn truth 一致）。
+     * @deprecated Z-4c 收敛至 {@link #sendMessage(ChatTurnRequest)} */
+    @Deprecated
     public ChatResponseDTO sendMessage(String sessionId, String message, Long userId,
                                        String clientMessageId, String model,
                                        java.util.List<Long> anchorIds) {
+        return sendMessage(ChatTurnRequest.of(userId, sessionId, message,
+                clientMessageId, model, anchorIds));
+    }
+
+    /** Z-4c：sendMessage 主方法（参数对象收敛；真实体自六参版逐字搬运，参数访问机械替换）。 */
+    public ChatResponseDTO sendMessage(ChatTurnRequest req) {
+        String sessionId = req.sessionId();
         ChatStreamExecutor.ChatStreamPrepared prepared =
-                prepareStream(userId, sessionId, message, clientMessageId, model, anchorIds);
+                prepareStream(req);
         if (prepared.replay()) {
             // 命中 COMPLETED：直接重放，不落任何库（豁免会话状态校验——已归档会话也应可重放）
             return ChatResponseDTO.builder()
@@ -207,7 +227,7 @@ public class ChatService implements ChatStreamExecutor {
     public ChatStreamExecutor.ChatStreamPrepared prepareStream(
             Long userId, String sessionId, String message, String clientMessageId, String model) {
         // M23（E1）：旧五参委托六参（锚定空集）——既有调用点零破坏
-        return prepareStream(userId, sessionId, message, clientMessageId, model, java.util.List.of());
+        return prepareStream(ChatTurnRequest.of(userId, sessionId, message, clientMessageId, model, java.util.List.of()));
     }
 
     /** M23（E1）：六参实现委托七参（无偏好）——既有调用点零破坏。 */
@@ -215,7 +235,7 @@ public class ChatService implements ChatStreamExecutor {
     public ChatStreamExecutor.ChatStreamPrepared prepareStream(
             Long userId, String sessionId, String message, String clientMessageId, String model,
             java.util.List<Long> anchorIds) {
-        return prepareStream(userId, sessionId, message, clientMessageId, model, anchorIds, null);
+        return prepareStream(ChatTurnRequest.of(userId, sessionId, message, clientMessageId, model, anchorIds));
     }
 
     /**
@@ -232,35 +252,45 @@ public class ChatService implements ChatStreamExecutor {
             Long userId, String sessionId, String message, String clientMessageId, String model,
             java.util.List<Long> anchorIds,
             com.travel.common.dto.PreferenceTagsDTO preferences) {
-        if (anchorIds == null) {
-            anchorIds = java.util.List.of();
-        }
+        return prepareStream(new ChatTurnRequest(userId, sessionId, message,
+                clientMessageId, model, anchorIds, preferences));
+    }
+
+    /**
+     * Z-4c：prepareStream 主方法（参数对象收敛；真实体自七参版逐字搬运，参数访问机械替换）。
+     *
+     * <p>M23b/M28-17：偏好标签经 prepared 贯穿 runStream——M28-17 定案：此前 preferences
+     * 被静默丢弃致图流输入永远没有【本轮偏好约束】段，本主方法保持七参语义单点。</p>
+     */
+    public ChatStreamExecutor.ChatStreamPrepared prepareStream(ChatTurnRequest req) {
+        java.util.List<Long> anchorIds = req.anchorIds() == null
+                ? java.util.List.of() : req.anchorIds();
         // F52：防御脏 userId（兜底 0 会导致 user_id=0 画像/会话）。
-        if (userId == null || userId <= 0) {
+        if (req.userId() == null || req.userId() <= 0) {
             throw new BusinessException(ErrorCode.UNAUTHORIZED.code(), ErrorCode.UNAUTHORIZED.message());
         }
         // M7 D6：请求级 model 必须在注册表且 selectable，否则入口快速失败
-        chatGateSupport.validateModel(modelRegistry, model);
+        chatGateSupport.validateModel(modelRegistry, req.model());
         // F90：调用前安全防护（Prompt 注入检测）→ MessagePipeline 步骤 1
-        chatGuardStep.check(userId, message);
+        chatGuardStep.check(req.userId(), req.message());
         // M3-11：步骤 2 持久化（会话校验 + 用户消息落库）
-        ChatSession session = requireOwnedSession(userId, sessionId);
+        ChatSession session = requireOwnedSession(req.userId(), req.sessionId());
         // M4-3：幂等门禁（在用户消息落库之前；未命中时用户消息已在门禁事务内追加）
         TurnGate gate = chatPersistenceStep.beginTurn(
-                sessionId, userId, clientMessageId, message);
+                req.sessionId(), req.userId(), req.clientMessageId(), req.message());
         String updatedSessionTitle = null;
         if (gate.proceed()) {
             chatGateSupport.enforceTurnEntry(sessionGuardProps, session, gate,
-                    chatPersistenceStep, sessionId, message);
+                    chatPersistenceStep, req.sessionId(), req.message());
             updatedSessionTitle = chatTurnTitlePolicy.firstMessageTitle(
-                    sessionStorePort, titleProps, sessionId, message);
+                    sessionStorePort, titleProps, req.sessionId(), req.message());
             chatGateSupport.clearBreakpointsAndTerminate(gate, breakpointStore, chatPersistenceStep,
-                    cancellationRegistry, cancellationBroadcaster, sessionId, clientMessageId,
+                    cancellationRegistry, cancellationBroadcaster, req.sessionId(), req.clientMessageId(),
                     resumeLedgerEnabled ? supervisorResultLedger : null);
         }
         return new ChatStreamExecutor.ChatStreamPrepared(
-                sessionId, message, userId, clientMessageId, gate, updatedSessionTitle, model,
-                anchorIds, preferences);
+                req.sessionId(), req.message(), req.userId(), req.clientMessageId(), gate, updatedSessionTitle, req.model(),
+                anchorIds, req.preferences());
     }
 
     /**
@@ -268,35 +298,18 @@ public class ChatService implements ChatStreamExecutor {
      *
      * <p>断点快照由 runStream 在路由前写入；若中断发生时尚未写入（步骤 3~7），
      * 重试将按 FAILED 语义整体重跑。</p>
+     * <p>Z-4a：方法体迁出至 {@link TurnLifecycleService}（公共 API 签名零变）。</p>
      */
     public void interruptTurn(Long userId, String sessionId, String clientMessageId) {
-        ChatSession session = requireOwnedSession(userId, sessionId);
-        if (clientMessageId == null || clientMessageId.isBlank()) {
-            throw new BusinessException(ErrorCode.IDEMPOTENCY_KEY_REQUIRED.code(),
-                    ErrorCode.IDEMPOTENCY_KEY_REQUIRED.message());
-        }
-        boolean flipped = chatPersistenceStep.markTurnInterrupted(sessionId, clientMessageId);
-        if (flipped) {
-            breakpointStore.markInterrupted(clientMessageId);
-            cancellationRegistry.cancel(clientMessageId);
-            cancellationBroadcaster.publishCancel(sessionId, clientMessageId);
-            log.info("[ChatInterrupt] 轮次已中断: sessionId={}, key={}", sessionId, clientMessageId);
-        }
+        turnLifecycleService.interruptTurn(userId, sessionId, clientMessageId);
     }
 
     /**
      * M6-36：清除断点（用户发新消息时前端调用；prepareStream 侧另有双保险）。
+     * <p>Z-4a：方法体迁出至 {@link TurnLifecycleService}（公共 API 签名零变）。</p>
      */
     public void clearBreakpoint(Long userId, String sessionId, String clientMessageId) {
-        ChatSession session = requireOwnedSession(userId, sessionId);
-        breakpointStore.clearBreakpoint(sessionId, clientMessageId);
-        // T-5e：单清同步——断点与台账同生共死（开关开时）
-        if (resumeLedgerEnabled && supervisorResultLedger != null) {
-            supervisorResultLedger.clear(sessionId, clientMessageId);
-        }
-        cancellationRegistry.cancel(clientMessageId);
-        cancellationBroadcaster.publishCancel(sessionId, clientMessageId);
-        log.info("[ChatInterrupt] 断点已清除: sessionId={}, key={}", sessionId, clientMessageId);
+        turnLifecycleService.clearBreakpoint(userId, sessionId, clientMessageId);
     }
 
     /**
@@ -304,29 +317,10 @@ public class ChatService implements ChatStreamExecutor {
      *
      * <p>resumable = INTERRUPTED 且断点快照仍存在（Redis 30min TTL 窗口内）；
      * 新消息已把旧轮次置 FAILED，故返回 FAILED 时前端不显示重试。</p>
+     * <p>Z-4a：方法体迁出至 {@link TurnLifecycleService}（结果 record 留守=公共 FQN 零变）。</p>
      */
     public TurnStatusResult getTurnStatus(Long userId, String sessionId, String clientMessageId) {
-        ChatSession session = requireOwnedSession(userId, sessionId);
-        if (clientMessageId == null || clientMessageId.isBlank()) {
-            throw new BusinessException(ErrorCode.IDEMPOTENCY_KEY_REQUIRED.code(),
-                    ErrorCode.IDEMPOTENCY_KEY_REQUIRED.message());
-        }
-        ChatMessageIdem row = chatPersistenceStep.findTurn(sessionId, clientMessageId);
-        if (row == null) {
-            return new TurnStatusResult(null, false, null);
-        }
-        boolean hasBreakpoint =
-                !breakpointStore.loadBreakpoint(sessionId, clientMessageId).isEmpty();
-        boolean resumable =
-                ChatMessageIdem.STATUS_INTERRUPTED.equals(row.getStatus()) && hasBreakpoint;
-        String userMessage = null;
-        if (row.getUserMessageId() != null) {
-            ChatMessage m = sessionStorePort.findMessageById(row.getUserMessageId());
-            if (m != null) {
-                userMessage = m.getContent();
-            }
-        }
-        return new TurnStatusResult(row.getStatus(), resumable, userMessage);
+        return turnLifecycleService.getTurnStatus(userId, sessionId, clientMessageId);
     }
 
     /** M6-42：轮次状态查询结果（status 为 null 表示无登记记录）。 */
@@ -339,24 +333,10 @@ public class ChatService implements ChatStreamExecutor {
      * <p>浏览器刷新/关闭页面时前端不会执行 handleStop（localStorage 无 key），
      * 因此刷新恢复不能依赖前端本地状态——由后端按"INTERRUPTED + 断点存在"
      * 权威查询，前端进入会话时直接获取。</p>
+     * <p>Z-4a：方法体迁出至 {@link TurnLifecycleService}（结果 record 留守=公共 FQN 零变）。</p>
      */
     public LatestInterruptedTurn getLatestInterruptedTurn(Long userId, String sessionId) {
-        ChatSession session = requireOwnedSession(userId, sessionId);
-        ChatMessageIdem row = chatPersistenceStep.findLatestInterrupted(sessionId);
-        if (row == null) {
-            return new LatestInterruptedTurn(null, null, false);
-        }
-        boolean hasBreakpoint =
-                !breakpointStore.loadBreakpoint(sessionId, row.getClientMessageId()).isEmpty();
-        String userMessage = null;
-        if (row.getUserMessageId() != null) {
-            ChatMessage m = sessionStorePort.findMessageById(row.getUserMessageId());
-            if (m != null) {
-                userMessage = m.getContent();
-            }
-        }
-        return new LatestInterruptedTurn(
-                row.getClientMessageId(), userMessage, hasBreakpoint && userMessage != null);
+        return turnLifecycleService.getLatestInterruptedTurn(userId, sessionId);
     }
 
     /** M6-47：最近可恢复中断轮次（clientMessageId 为 null 表示无可恢复轮次）。 */
@@ -975,26 +955,10 @@ public class ChatService implements ChatStreamExecutor {
      * <p>幂等：已 ARCHIVED 直接返回；条件更新 ACTIVE→ARCHIVED 防并发双关；
      * 归档后同步尽力收口（超时/失败转隐式待办，启动补偿/空闲扫描兜底）。
      * history 查询不受归档影响（只读）。</p>
+     * <p>Z-4b：方法体迁出至 {@link ChatSessionQueryService}（结果 record 留守=公共 FQN 零变）。</p>
      */
     public CloseSessionResult closeSession(Long userId, String sessionId) {
-        ChatSession session = requireOwnedSession(userId, sessionId);
-        if (SessionStatus.ARCHIVED.name().equals(session.getStatus())) {
-            return new CloseSessionResult(true, session.getSummaryFinal() != null);
-        }
-        int updated = sessionStorePort.updateStatus(
-                sessionId, SessionStatus.ACTIVE.name(), SessionStatus.ARCHIVED.name());
-        if (updated == 0) {
-            // 并发 close：重读判定幂等语义
-            ChatSession fresh = sessionStorePort.findBySessionId(sessionId);
-            if (fresh != null
-                    && SessionStatus.ARCHIVED.name().equals(fresh.getStatus())) {
-                return new CloseSessionResult(true, fresh.getSummaryFinal() != null);
-            }
-            throw new BusinessException(ErrorCode.SESSION_STATE_CONFLICT.code(),
-                    ErrorCode.SESSION_STATE_CONFLICT.message());
-        }
-        boolean finalized = sessionFinalizer.finalizeSession(sessionId);
-        return new CloseSessionResult(true, finalized);
+        return chatSessionQueryService.closeSession(userId, sessionId);
     }
 
     /**
