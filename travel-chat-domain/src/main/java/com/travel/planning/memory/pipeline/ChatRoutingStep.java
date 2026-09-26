@@ -2,6 +2,7 @@ package com.travel.planning.memory.pipeline;
 
 import com.travel.planning.service.ResponseTexts;
 import com.travel.planning.agent.supervisor.TravelSupervisorAgent;
+import com.travel.planning.agent.supervisor.StreamRouteSupport;
 import com.travel.planning.agent.supervisor.SupervisorResponseSupport;
 import com.travel.planning.agent.support.AttractionGroundingChecker;
 import com.travel.planning.agent.support.ChatWeatherContextPort;
@@ -46,19 +47,6 @@ public class ChatRoutingStep implements ChatPipelineStep {
     void setRagQualityCounters(com.travel.planning.memory.knowledge.RagQualityCounters ragQualityCounters) {
         this.ragQualityCounters = ragQualityCounters;
     }
-
-    private static int countOccurrences(String text, String mark) {
-        if (text == null || text.isEmpty()) {
-            return 0;
-        }
-        int count = 0, idx = 0;
-        while ((idx = text.indexOf(mark, idx)) >= 0) {
-            count++;
-            idx += mark.length();
-        }
-        return count;
-    }
-
 
     /** S-B6c：Span 采集挂点（Z-4e：构造注入统一——SpanCollector 为 @Component bean，注入语义与 optional setter 等价） */
     private final SpanCollector spanCollector;
@@ -212,18 +200,10 @@ public class ChatRoutingStep implements ChatPipelineStep {
                     response = result.answer();
                     // F27：assistant 消息 tokens = 本次全部 LLM 调用的真实 totalTokens 之和
                     aiTokens = result.totalTokens();
-                    // M8-2：组装回答后做确定性引用校验（候选名从 composed 提取）
-                    SupervisorResponseSupport.recordGrounding(groundingChecker, composed, response);
-                    // S-D1：strict-attraction 未命中标注（鹤鸣茶社/南桥夜 scenery 类编造可见化）
-                    String beforeAnnotate = response;
-                    response = SupervisorResponseSupport.annotateGrounding(
-                            groundingChecker, composed, response);
-                    // S-D2：幻觉标注计数入 Redis metrics 族（RK-13 通道）
-                    String mark = com.travel.planning.agent.support.AttractionGroundingChecker.UNKNOW_SOURCE_MARK;
-                    int flagged = countOccurrences(response, mark) - countOccurrences(beforeAnnotate, mark);
-                    if (flagged > 0 && ragQualityCounters != null) {
-                        ragQualityCounters.recordHallucinationFlagged(flagged);
-                    }
+                    // M8-2 引用校验 + S-D1 未命中标注 + S-D2 幻觉计数（AA-7：共用段收敛
+                    // StreamRouteSupport，方法体逐字搬运）
+                    response = StreamRouteSupport.annotateGroundingWithCount(
+                            groundingChecker, composed, response, ragQualityCounters);
                     // M8-6：REFINE 保留性观测（原行程 vs 新输出静默丢失率写 trace）
                     if (intent == ChatIntent.REFINE) {
                         SupervisorResponseSupport.recordRetention(
@@ -329,22 +309,13 @@ public class ChatRoutingStep implements ChatPipelineStep {
                                         withWeather(intent, composed),
                                         userId, sessionId, think, sink, cancellation, resumeSeed);
                             }
-                            SupervisorResponseSupport.recordGrounding(
-                                    groundingChecker, composed, r.answer());
                             // W-5：graph-stream 分支补 S-D1 未命中标注——静态核实证伪（本分支
                             // 此前仅 recordGrounding 观测，"（非知识库来源，请核实）"标注在
                             // 流式默认路径缺失，与阻塞 route() default 分支不对齐）。
                             // 仅改最终全文/落库文本（SSE 已发出 token 无法追溯），实弹归待审计
-                            String beforeAnnotate = r.answer();
-                            String annotatedAnswer = SupervisorResponseSupport.annotateGrounding(
-                                    groundingChecker, composed, r.answer());
-                            // S-D2：幻觉标注计数与阻塞分支对齐（RK-13 通道）
-                            String mark = com.travel.planning.agent.support.AttractionGroundingChecker.UNKNOW_SOURCE_MARK;
-                            int flagged = countOccurrences(annotatedAnswer, mark)
-                                    - countOccurrences(beforeAnnotate, mark);
-                            if (flagged > 0 && ragQualityCounters != null) {
-                                ragQualityCounters.recordHallucinationFlagged(flagged);
-                            }
+                            // AA-7：引用校验+标注+计数共用段收敛 StreamRouteSupport（逐字搬运）
+                            String annotatedAnswer = StreamRouteSupport.annotateGroundingWithCount(
+                                    groundingChecker, composed, r.answer(), ragQualityCounters);
                             observeConflictIfEnabled(composed, r.routePlanJson());
                             writeItineraryChunks(sessionId, r.routePlanJson());
                             Long writtenId = writebackIfEnabled(intent, userId, sessionId, composed,
@@ -477,85 +448,30 @@ public class ChatRoutingStep implements ChatPipelineStep {
     }
 
     /**
-     * M8-9：把 Supervisor 规划结果按天切片写入当前会话知识。
-     *
-     * <p>先按 seq 前缀 {@code itin:<sessionId>:} 删除旧版本（REFINE/重生成覆盖），
-     * 再写入新切片；任一步失败仅 WARN（残留旧切片只影响观测，不阻断主流程）。</p>
+     * M8-9：把 Supervisor 规划结果按天切片写入当前会话知识（AA-7：方法体迁
+     * StreamRouteSupport 逐字搬运，本委托行为零变）。
      */
     private void writeItineraryChunks(String sessionId, String routePlanJson) {
-        if (sessionId == null || sessionId.isBlank()
-                || routePlanJson == null || routePlanJson.isBlank()) {
-            return;
-        }
-        try {
-            String trimmed = routePlanJson.trim();
-            // state 的 routePlan 是 {"days":[...]}；chunkItinerary 期望 {"routePlan": {...}}
-            String itineraryJson = trimmed.startsWith("{") && trimmed.contains("\"days\"")
-                    ? "{\"routePlan\":" + trimmed + "}" : trimmed;
-            String prefix = "itin:" + sessionId + ":";
-            sessionKnowledgeWriter.deleteBySeqPrefix(sessionId, prefix);
-            sessionKnowledgeWriter.writeAsync(sessionId,
-                    sessionContextChunker.chunkItinerary(sessionId, itineraryJson, null));
-            log.info("[ChatRouting] itinerary_day 切片已写入会话知识: sessionId={}", sessionId);
-        } catch (Exception e) {
-            log.warn("[ChatRouting] itinerary_day 切片写入失败（不影响主流程）: sessionId={}, error={}",
-                    sessionId, e.getMessage());
-        }
+        StreamRouteSupport.writeItineraryChunks(sessionKnowledgeWriter, sessionContextChunker,
+                sessionId, routePlanJson);
     }
 
     /**
-     * M13-2：聊天规划/REFINE 结果同步为行程资产（create-on-chat / REFINE 回写建版）。
-     * 仅观测/资产层变化，不参与回答组装；失败静默降级。
+     * M13-2：聊天规划/REFINE 结果同步为行程资产（AA-7：方法体迁
+     * StreamRouteSupport 逐字搬运，本委托行为零变）。
      */
     private Long writebackIfEnabled(ChatIntent intent, Long userId, String sessionId,
                                     String userInput, String routePlanJson, String budgetJson) {
-        final Long[] writtenIdHolder = {null}; // M23（P-D）：lambda 内赋值用数组持有
-        if (!itineraryWritebackEnabled || itineraryVersionPort == null
-                || intent != ChatIntent.PLANNING && intent != ChatIntent.REFINE) {
-            return null;
-        }
-        if (routePlanJson == null || routePlanJson.isBlank()) {
-            // M20-1：不再静默——2026-09-06 实证 REFINE 因图流输出丢失而无声跳过建版，
-            // 用户仅在详情页发现"少了一个版本"。WARN 暴露原因供诊断。
-            log.warn("[ItineraryWriteback] 跳过回写（routePlan 为空，图流子Agent 输出未合并或走了直答兜底）: "
-                    + "sessionId={}, intent={}, answer将不建版", sessionId, intent);
-            return null;
-        }
-        // S-B6c：回写桥 span（requestId 取自既有 TraceContext 同线程读——不新增 ThreadLocal）
-        String rid = com.travel.planning.trace.TraceContext.active()
-                ? com.travel.planning.trace.TraceContext.current().requestId : null;
-        SpanCollector.Span wbSpan = rid == null ? null : spanCollector.startSpan(rid, "writeback", "bridge");
-        try {
-            java.util.Optional<Long> itineraryId = itineraryVersionPort.syncAfterPlanning(
-                    userId, sessionId, userInput, routePlanJson, budgetJson);
-            itineraryId.ifPresent(id -> {
-                writtenIdHolder[0] = id;
-                log.info("[ItineraryWriteback] 行程资产已同步: itineraryId={}, sessionId={}, intent={}",
-                        id, sessionId, intent);
-            });
-            if (wbSpan != null) {
-                spanCollector.endSpan(rid, wbSpan, "ok",
-                        Map.of("written", itineraryId.isPresent(),
-                               "itineraryId", itineraryId.orElse(-1L)));
-            }
-        } catch (Exception e) {
-            if (wbSpan != null) {
-                spanCollector.endSpan(rid, wbSpan, "error", Map.of("error", String.valueOf(e.getMessage())));
-            }
-            log.warn("[ItineraryWriteback] 同步失败（不影响主流程）: sessionId={}, error={}",
-                    sessionId, e.getMessage());
-        }
-        return writtenIdHolder[0];
+        return StreamRouteSupport.writebackIfEnabled(itineraryWritebackEnabled, itineraryVersionPort,
+                spanCollector, intent, userId, sessionId, userInput, routePlanJson, budgetJson);
     }
 
     /**
-     * M9-4：规划成功后做观测级冲突校验（只写 trace，不阻断、不重试）。
+     * M9-4：规划成功后做观测级冲突校验（AA-7：方法体迁 StreamRouteSupport
+     * 逐字搬运，本委托行为零变）。
      */
     private void observeConflictIfEnabled(String composed, String routePlanJson) {
-        if (!conflictObserveEnabled || itineraryConflictPort == null) {
-            return;
-        }
-        SupervisorResponseSupport.recordChatConflict(
-                itineraryConflictPort, routePlanJson, composed);
+        StreamRouteSupport.observeConflictIfEnabled(conflictObserveEnabled, itineraryConflictPort,
+                composed, routePlanJson);
     }
 }

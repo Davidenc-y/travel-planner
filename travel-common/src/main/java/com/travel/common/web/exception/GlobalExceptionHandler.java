@@ -1,6 +1,7 @@
 package com.travel.common.web.exception;
 
 import com.travel.common.exception.BusinessException;
+import com.travel.common.exception.ControlFlowException;
 import com.travel.common.exception.ErrorCode;
 import com.travel.common.exception.ExternalApiException;
 import com.travel.common.result.R;
@@ -129,8 +130,23 @@ public class GlobalExceptionHandler {
             log.debug("[GlobalExceptionHandler] SSE 流客户端已断开，忽略异常: {}", e.getMessage());
             return null;
         }
+        // AA-1a：控制流中断标记收编（M7-8 同根异径——prepareStream 阶段 SSE 头未
+        // flush、Content-Type 仍 JSON，预期轮次中断此前落入 ERROR+50000）。
+        // 序位于 SSE 检查之后：SSE 已建立路径保持 M7-8 DEBUG 降噪不回归。
+        if (findRootCause(e) instanceof ControlFlowException) {
+            log.info("控制流中断: {}", e.getMessage());
+            return R.fail(40906, "轮次已中断");
+        }
         log.error("系统异常", e);
         return R.fail(50000, "系统异常，请稍后重试");
+    }
+
+    private Throwable findRootCause(Throwable e) {
+        Throwable root = e;
+        while (root.getCause() != null && root.getCause() != root) {
+            root = root.getCause();
+        }
+        return root;
     }
 
     private boolean isSseResponse(HttpServletResponse response) {

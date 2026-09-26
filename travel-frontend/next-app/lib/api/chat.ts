@@ -51,6 +51,21 @@ export const chatApi = {
   getLatestInterruptedTurn: (sessionId: string) =>
     planningApi.get<R<import('@/types').LatestInterruptedTurn>>(
       `/api/v1/chat/sessions/${sessionId}/interrupted-turn`),
+  /** AA-2（T4）：幂等预写——发送前 sendBeacon 落占位行（fire-and-forget 必达），
+   *  刷新竞态窗口内至少幂等行必达，刷新后 getTurnStatus 凭同键恢复。
+   *  sendBeacon 不可用（旧浏览器/非浏览器环境）或无 token=静默降级现状（主 fetch 幂等链兜底）。 */
+  prewriteTurn: (sessionId: string, clientMessageId: string, message: string) => {
+    if (typeof navigator === 'undefined' || typeof navigator.sendBeacon !== 'function') return;
+    const token = typeof window !== 'undefined' ? localStorage.getItem('accessToken') : null;
+    if (!token) return;
+    navigator.sendBeacon(
+      `${STREAM_BASE}/api/v1/chat/turns/prewrite`,
+      new Blob(
+        [JSON.stringify({ clientMessageId, sessionId, body: message, accessToken: token })],
+        { type: 'application/json' },
+      ),
+    );
+  },
   /** M6：流式发送（SSE）——POST /messages/stream，事件回调驱动思考气泡与流式文本。
    *  V-3d：SSE 基址=STREAM_BASE 单路径（网关 8083 或 planning 8081，无 fallback）。 */
   sendMessageStream: (
@@ -86,6 +101,9 @@ export const chatApi = {
         signal,
         handlers,
     );
+
+    // AA-2（T4）：发送前置幂等预写（fire-and-forget，失败不影响主链路）
+    chatApi.prewriteTurn(sessionId, clientMessageId, message);
 
     // V-3d：STREAM_BASE 单路径（网关或 planning，无 fallback=P0⑭）
     return attempt(STREAM_BASE);

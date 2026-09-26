@@ -1,6 +1,7 @@
 package com.travel.planning.memory.pipeline;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.travel.common.entity.ChatMessage;
 import com.travel.common.entity.ChatMessageIdem;
@@ -93,7 +94,26 @@ public class ChatPersistenceStep implements ChatPipelineStep {
                 case ChatMessageIdem.STATUS_COMPLETED -> {
                     return replayOf(existing);
                 }
-                case ChatMessageIdem.STATUS_PENDING -> throw new BusinessException(40904, "消息处理中，请稍后重试");
+                case ChatMessageIdem.STATUS_PENDING -> {
+                    // AA-2（T4）：预写占位行（PENDING+userMessageId NULL，无用户消息）——
+                    // 收编为本轮幂等行：补追加用户消息+条件回填（仅 NULL 可抢，并发双发仍 40904）；
+                    // 真实在途行（userMessageId 非空）保持原 40904 语义零变。
+                    if (existing.getUserMessageId() == null) {
+                        Long userMessageId = sessionStorePort.appendMessage(
+                                sessionId, ChatRole.USER, message, TextTokens.estimate(message));
+                        existing.setUserMessageId(userMessageId);
+                        existing.setUpdatedAt(LocalDateTime.now());
+                        int adopted = idemMapper.update(existing,
+                                new UpdateWrapper<ChatMessageIdem>()
+                                        .eq("client_message_id", existing.getClientMessageId())
+                                        .isNull("user_message_id"));
+                        if (adopted == 0) {
+                            throw new BusinessException(40904, "消息处理中，请稍后重试");
+                        }
+                        return TurnGate.freshAppended();
+                    }
+                    throw new BusinessException(40904, "消息处理中，请稍后重试");
+                }
                 default -> { // FAILED：重新执行，复用原用户消息，不重复追加
                     existing.setStatus(ChatMessageIdem.STATUS_PENDING);
                     existing.setAssistantMessageId(null);

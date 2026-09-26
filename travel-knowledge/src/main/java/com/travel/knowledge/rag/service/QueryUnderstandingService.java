@@ -139,7 +139,7 @@ public class QueryUnderstandingService {
     private String detectType(String query) {
         String matched = null;
         for (Map.Entry<String, List<String>> entry : properties.getTypeKeywords().entrySet()) {
-            if (containsAny(query, entry.getValue().toArray(new String[0]))) {
+            if (containsAnyType(query, entry.getValue().toArray(new String[0]))) {
                 if (matched != null) {
                     // F74：多类型并存（如 美食+购物）→ 不按单一类型过滤，交给 BM25/KNN 语义匹配
                     return null;
@@ -153,6 +153,30 @@ public class QueryUnderstandingService {
     private boolean containsAny(String text, String... tokens) {
         for (String t : tokens) {
             if (text.contains(t)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * AA-3（记录项清偿·授权行为修正）：type 命中放宽——复合关键词拆词元任一命中。
+     *
+     * <p>词元=≥3 字词的头/尾 2 字连续子串（如「美食街」→美食+食街、「文化景点」→文化+景点）。
+     * 等价性：全词在场=原 contains 语义原样（单关键词行为零变）；仅放宽复合词被间隔/
+     * 变体拆开的过紧场景（如「美食 街区」未含整串「美食街」）。freeOnly 免费语义
+     * 不走本方法（保持严格 contains，防「花钱」类误判）。</p>
+     */
+    private boolean containsAnyType(String text, String... tokens) {
+        for (String t : tokens) {
+            if (t == null || t.isEmpty()) {
+                continue;
+            }
+            if (text.contains(t)) {
+                return true;
+            }
+            if (t.length() >= 3
+                    && (text.contains(t.substring(0, 2)) || text.contains(t.substring(t.length() - 2)))) {
                 return true;
             }
         }
@@ -193,7 +217,7 @@ public class QueryUnderstandingService {
                 properties.getTypeKeywords().getOrDefault(t, List.of()));
         // M8-2：同义词表并入配置单源（默认值与迁移前逐字一致，行为等价）
         triggers.addAll(properties.getTypeSynonyms().getOrDefault(t, List.of()));
-        if (!containsAny(query, triggers.toArray(new String[0]))) {
+        if (!containsAnyType(query, triggers.toArray(new String[0]))) {
             log.debug("[QueryUnderstanding] LLM 推断 type={} 但原始查询无对应关键词，置为 null: query={}",
                     t, query);
             return null;
@@ -208,7 +232,7 @@ public class QueryUnderstandingService {
             List<String> words = new ArrayList<>(
                     properties.getTypeKeywords().getOrDefault(typeKey, List.of()));
             words.addAll(properties.getTypeSynonyms().getOrDefault(typeKey, List.of()));
-            if (containsAny(query, words.toArray(new String[0]))) {
+            if (containsAnyType(query, words.toArray(new String[0]))) {
                 matchedTypes++;
             }
         }

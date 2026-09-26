@@ -214,6 +214,10 @@ public class ChatStreamService extends AbstractStreamingPipeline {
                 // 前端据此展示“模型额度不足”明确提示；其余异常仍按 50000 原始信息
                 if (e instanceof BusinessException be) {
                     sink.next(StreamEvent.error(meta, be.getCode(), be.getMessage()));
+                } else if (e instanceof TurnInterruptedException) {
+                    // AA-1a/AR-2：控制流中断=预期事件（40906），与 GlobalExceptionHandler
+                    // 标记分支同口径——SSE 内部路径不经全局处理器，须独立收敛
+                    sink.next(StreamEvent.error(meta, 40906, "轮次已中断"));
                 } else {
                     sink.next(StreamEvent.error(meta, 50000,
                             e.getMessage() == null ? "流式处理失败" : e.getMessage()));

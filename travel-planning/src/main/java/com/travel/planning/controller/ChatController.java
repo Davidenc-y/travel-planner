@@ -11,6 +11,7 @@ import com.travel.core.stream.StreamRequest;
 import com.travel.stream.service.ChatStreamService;
 import com.travel.stream.service.ChatTransportAttrs;
 import com.travel.planning.service.ChatService;
+import com.travel.planning.service.ChatTurnPrewriteService;
 import com.travel.stream.service.TurnCancellationRegistry;
 import com.travel.stream.ChatStreamProperties;
 import com.travel.stream.StreamErrorMapper;
@@ -42,6 +43,8 @@ import java.util.Map;
 public class ChatController {
 
     private final ChatService chatService;
+    /** AA-2（T4）：幂等预写（sendBeacon fire-and-forget 占位行） */
+    private final ChatTurnPrewriteService chatTurnPrewriteService;
     /** M28-15：系统提示消息落库（t_chat_message 唯一直连类） */
     private final com.travel.planning.memory.sessionstore.SessionStoreServiceImpl sessionStoreService;
     private final ChatStreamService chatStreamService;
@@ -212,6 +215,20 @@ public class ChatController {
             @PathVariable String clientMessageId) {
         return R.ok(chatService.getTurnStatus(
                 AuthUtils.resolveUserId(), sessionId, clientMessageId));
+    }
+
+    /**
+     * AA-2（T4）：幂等预写——sendBeacon fire-and-forget，刷新竞态窗口内
+     * 至少占位行必达，刷新后前端凭 getTurnStatus 恢复。本批唯一授权新端点。
+     * 身份=body 内 accessToken 自校验（sendBeacon 无法携带 Authorization 头）。
+     */
+    @PostMapping("/turns/prewrite")
+    public R<Void> prewriteTurn(@RequestBody Map<String, Object> body) {
+        chatTurnPrewriteService.prewrite(
+                (String) body.get("clientMessageId"),
+                (String) body.get("sessionId"),
+                (String) body.get("accessToken"));
+        return R.ok();
     }
 
     /**

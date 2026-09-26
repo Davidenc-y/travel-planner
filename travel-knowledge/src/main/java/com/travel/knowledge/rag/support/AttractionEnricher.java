@@ -170,23 +170,27 @@ public class AttractionEnricher {
     }
 
     /**
-     * S-E1：前置防抖查询——7 天内已 web_enrich（enrich_source + enrich_updated_at，
-     * 与 WebEnrichWritebackService 回写 WHERE 同口径）。fail-open：异常返回 false（不防抖）。
+     * S-E1：前置防抖查询（AA-5a 批量化）——候选集一次 IN 查询取 7 天内已 web_enrich 的
+     * id 集（enrich_source + enrich_updated_at，与 WebEnrichWritebackService 回写 WHERE
+     * 同口径），替代逐候选 selectCount 点查（N+1 收口）。
+     * fail-open：异常返回空集（全部不防抖，与原逐条异常→false 语义一致）。
      */
-    private boolean recentlyEnriched(Long attractionId) {
-        if (attractionId == null) {
-            return false;
+    private Set<Long> recentlyEnrichedIds(List<Long> ids) {
+        if (ids == null || ids.isEmpty()) {
+            return Set.of();
         }
         try {
-            Long count = attractionMapper.selectCount(
-                    new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<Attraction>()
-                            .eq(Attraction::getId, attractionId)
-                            .eq(Attraction::getEnrichSource, "web_enrich")
-                            .ge(Attraction::getEnrichUpdatedAt,
-                                    java.time.LocalDateTime.now().minusDays(7)));
-            return count != null && count > 0;
+            return attractionMapper.selectList(
+                            new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<Attraction>()
+                                    .in(Attraction::getId, ids)
+                                    .eq(Attraction::getEnrichSource, "web_enrich")
+                                    .ge(Attraction::getEnrichUpdatedAt,
+                                            java.time.LocalDateTime.now().minusDays(7)))
+                    .stream()
+                    .map(Attraction::getId)
+                    .collect(Collectors.toSet());
         } catch (Exception e) {
-            return false;
+            return Set.of();
         }
     }
 
@@ -220,6 +224,12 @@ public class AttractionEnricher {
                 ? List.of() : webSearchProperties.getEnrichFields();
         Set<String> attempted = new HashSet<>();
         int skippedDebounce = 0; // S-E1：防抖跳过计数
+        // AA-5a：防抖前置批量化——候选集一次 IN 查询替代逐候选 selectCount（N+1 收口）
+        Set<Long> recentlyEnriched = recentlyEnrichedIds(results.stream()
+                .map(r -> parseId(r.getDocId()))
+                .filter(Objects::nonNull)
+                .distinct()
+                .toList());
         for (SearchResult r : results) {
             String id = r.getDocId();
             if (id == null || !attempted.add(id)) {
@@ -232,7 +242,7 @@ public class AttractionEnricher {
             }
             // S-E1（P2-⑤）：前置防抖——7 天内已 web_enrich 且目标字段仍空 → 跳过搜索（省配额）
             Long debounceId = parseId(id);
-            if (debounceId != null && recentlyEnriched(debounceId)) {
+            if (debounceId != null && recentlyEnriched.contains(debounceId)) {
                 skippedDebounce++;
                 log.info("[Enrich] 前置防抖跳过搜索（7 天内已 web_enrich）: docId={}, 累计跳过={}",
                         id, skippedDebounce);
