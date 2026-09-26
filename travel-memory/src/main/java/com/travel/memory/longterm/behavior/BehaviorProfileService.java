@@ -5,6 +5,7 @@ import com.travel.common.entity.AgentTrace;
 import com.travel.common.entity.ChatSession;
 import com.travel.common.util.JsonUtils;
 import com.travel.common.repository.AgentTraceMapper;
+import com.travel.memory.longterm.ProfileSlotPort;
 import com.travel.memory.repository.ChatSessionMapper;
 import com.travel.memory.repository.UserBehaviorProfileMapper;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
@@ -46,6 +47,8 @@ public class BehaviorProfileService {
     private final ChatSessionMapper sessionMapper;
     private final ObjectProvider<TripFactsPort> tripFactsPort;
     private final BehaviorProfileProperties props;
+    /** AB-5d：画像结构化端口（optional；缺省=slot/model 查询返回空，E-33 关闭态零行为）。 */
+    private final ObjectProvider<ProfileSlotPort> profileSlotPort;
 
     /** 单用户重算单飞（防并发重复聚合） */
     private final ConcurrentHashMap<Long, Boolean> inFlight = new ConcurrentHashMap<>();
@@ -54,12 +57,113 @@ public class BehaviorProfileService {
                                    AgentTraceMapper traceMapper,
                                    ChatSessionMapper sessionMapper,
                                    ObjectProvider<TripFactsPort> tripFactsPort,
-                                   BehaviorProfileProperties props) {
+                                   BehaviorProfileProperties props,
+                                   ObjectProvider<ProfileSlotPort> profileSlotPort) {
         this.behaviorMapper = behaviorMapper;
         this.traceMapper = traceMapper;
         this.sessionMapper = sessionMapper;
         this.tripFactsPort = tripFactsPort;
         this.props = props;
+        this.profileSlotPort = profileSlotPort;
+    }
+
+    /**
+     * AB-5d：6 段时段画像（零填充口径=方案"LEFT JOIN 全段返回零填充"——无行段
+     * useCount=0/topTag/topModel=null；slot 0~5 之外行防御性忽略；端口缺省=空列表）。
+     */
+    public List<SlotBucket> getSlotProfile(Long userId) {
+        ProfileSlotPort port = profileSlotPort != null ? profileSlotPort.getIfAvailable() : null;
+        if (port == null || userId == null) {
+            return List.of();
+        }
+        Map<Integer, ProfileSlotPort.SlotUsage> bySlot = new LinkedHashMap<>();
+        for (ProfileSlotPort.SlotUsage row : port.querySlots(userId)) {
+            if (row.slotId() >= 0 && row.slotId() <= 5) {
+                bySlot.put(row.slotId(), row);
+            }
+        }
+        List<SlotBucket> buckets = new ArrayList<>(6);
+        for (int slot = 0; slot < 6; slot++) {
+            ProfileSlotPort.SlotUsage row = bySlot.get(slot);
+            buckets.add(row == null
+                    ? new SlotBucket(slot, 0, null, null)
+                    : new SlotBucket(slot, row.useCount(),
+                        topOfJsonArray(row.preferredTags(), "tag"),
+                        topOfJsonArray(row.preferredModels(), "model")));
+        }
+        return buckets;
+    }
+
+    /**
+     * AB-5d：按模型聚合摘要（sum 次数/sum tokens/ttft 按行 useCount 加权平均——
+     * 仅对非 null ttft 行计权；<b>slot=-1 汇总行排除</b>：其定义为"不限时段汇总行"，
+     * 并入会与分时段行双计——裁定记录）。
+     */
+    public List<ModelSummary> getModelUsageSummary(Long userId) {
+        ProfileSlotPort port = profileSlotPort != null ? profileSlotPort.getIfAvailable() : null;
+        if (port == null || userId == null) {
+            return List.of();
+        }
+        // acc: [0]=useCount 累计, [1]=tokens 累计, [2]=ttft 加权和, [3]=ttft 权重
+        Map<String, long[]> acc = new LinkedHashMap<>();
+        for (ProfileSlotPort.ModelUsage row : port.queryModelUsage(userId)) {
+            if (row.slotId() == -1) {
+                continue;
+            }
+            long[] a = acc.computeIfAbsent(row.modelKey(), k -> new long[4]);
+            a[0] += row.useCount();
+            a[1] += row.totalTokens();
+            if (row.avgTtftMs() != null && row.useCount() > 0) {
+                a[2] += (long) row.avgTtftMs() * row.useCount();
+                a[3] += row.useCount();
+            }
+        }
+        List<ModelSummary> out = new ArrayList<>(acc.size());
+        acc.forEach((key, a) -> out.add(new ModelSummary(key, a[0], a[1],
+                a[3] == 0 ? null : (double) a[2] / a[3])));
+        return out;
+    }
+
+    /** AB-5d：单时段桶（零填充形态：无行段 useCount=0/top=null）。 */
+    public record SlotBucket(int slotId, int useCount, String topTag, String topModel) {
+    }
+
+    /** AB-5d：单模型聚合摘要（avgTtftMs=null=无有效 ttft 行）。 */
+    public record ModelSummary(String modelKey, long useCount, long totalTokens,
+                               Double avgTtftMs) {
+    }
+
+    /**
+     * AB-5d：[{"tag|model":"x","cnt":n},...] 取 cnt 最大项的键值
+     * （解析失败/空/无文本键=null 容忍；cnt 缺省视为 0）。
+     */
+    static String topOfJsonArray(String json, String keyField) {
+        if (json == null || json.isBlank()) {
+            return null;
+        }
+        try {
+            com.fasterxml.jackson.databind.JsonNode arr = JsonUtils.getMapper().readTree(json);
+            if (!arr.isArray()) {
+                return null;
+            }
+            String best = null;
+            int bestCnt = -1;
+            for (com.fasterxml.jackson.databind.JsonNode item : arr) {
+                com.fasterxml.jackson.databind.JsonNode key = item.get(keyField);
+                if (key == null || !key.isTextual()) {
+                    continue;
+                }
+                com.fasterxml.jackson.databind.JsonNode cnt = item.get("cnt");
+                int c = cnt != null && cnt.canConvertToInt() ? cnt.asInt() : 0;
+                if (c > bestCnt) {
+                    bestCnt = c;
+                    best = key.asText();
+                }
+            }
+            return best;
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     /**

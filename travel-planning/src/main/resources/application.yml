@@ -3,6 +3,16 @@
 # M16-3：chat-domain 域共享配置照旧经 application-chat.yml 自动装载。
 # 本文件仅保留：接线键（nacos/sentinel/openfeign）+ E 层占位键 + Y 系列契约键（health.rabbit）。
 # ============================================================
+# ============ AB-2a：Tomcat 连接器保护三键（L13） ============
+# 三键=Spring Boot 默认值显式化（E-33 零行为变更）：80VUS 复压暴露连接器无显式保护面（L13），
+# 显式化后极端保护调优有唯一落点；Nacos dataId 同步指令见 docs/zcode/20260926_review/AB批人工操作手册.md 操作④。
+server:
+  tomcat:
+    threads:
+      max: 200  # 默认值显式（Boot 默认=200）
+    max-connections: 8192  # 默认值显式（Boot 默认=8192）
+    accept-count: 100  # 默认值显式（Boot 默认=100，OS backlog）
+
 spring:
   # X-1b：Nacos 配置中心接线（E-33：NACOS_ENABLED=false=整体关闭，禁用解析器跳过 import=零键值变化；
   # optional: 前缀容忍 dataId 缺席；dataId 灌配见 docs/zcode/20260924_review/Nacos部署与灌配手册.md）
@@ -61,6 +71,17 @@ spring:
             groupId: TRAVEL
             data-id: travel-sentinel-degrade-planning.json
             rule-type: degrade
+        # AB-2b：system 规则 Nacos 数据源（系统自适应保护=L13 极端并发第二层，avgRt/maxThread/qps
+        # 系统级阈值；与 flow/degrade 同构，属性名口径 groupId（AR-3）；dataId 模板已由审计先行产出
+        # docs/zcode/20260926_review/sentinel_system/，灌配归人工（AB批人工操作手册.md 操作②同流程）；
+        # 未灌配=无规则=零行为（E-33，同 flow/degrade 模式））
+        system-ds:
+          nacos:
+            server-addr: ${NACOS_ADDR:192.168.253.129:8848}
+            namespace: dev
+            groupId: TRAVEL
+            data-id: travel-sentinel-system-planning.json
+            rule-type: system
 
   # ============ 数据源 ============
   datasource:
@@ -114,6 +135,10 @@ travel:
   # M11-3：可靠性看板管理员白名单（空=无管理员，生产用环境变量 ADMIN_USER_IDS 注入）
   admin:
     user-ids: ${ADMIN_USER_IDS:2}
+  # AB-5c：用户画像结构化采集开关（默认关=E-33 关闭态零调用零 DB 写，审计实弹开启；
+  # Nacos dataId 同步指令见 docs/zcode/20260926_review/AB批人工操作手册.md 操作④）
+  profile:
+    slot-enabled: false
   # F104 P1：MinIO 业务对象存储（头像 avatars 桶）
   minio:
     endpoint: http://${MIDDLEWARE_HOST:192.168.253.129}:9000

@@ -2,6 +2,16 @@
 # travel-knowledge 服务配置（端口 8082；Y-4a 生产切换：C/S 层已删，Nacos 为准）
 # 本文件仅保留：接线键 + E 层占位键（datasource/redis/dashscope/es/milvus host-port/internal/minio/etl.import-base-dir）
 # ============================================================
+# ============ AB-2a：Tomcat 连接器保护三键（L13） ============
+# 三键=Spring Boot 默认值显式化（E-33 零行为变更）：80VUS 复压暴露连接器无显式保护面（L13），
+# 显式化后极端保护调优有唯一落点；Nacos dataId 同步指令见 docs/zcode/20260926_review/AB批人工操作手册.md 操作④。
+server:
+  tomcat:
+    threads:
+      max: 200  # 默认值显式（Boot 默认=200）
+    max-connections: 8192  # 默认值显式（Boot 默认=8192）
+    accept-count: 100  # 默认值显式（Boot 默认=100，OS backlog）
+
 spring:
   # X-1b：Nacos 配置中心接线（E-33：NACOS_ENABLED=false=整体关闭，禁用解析器跳过 import=零键值变化；
   # optional: 前缀容忍 dataId 缺席；dataId 灌配见 docs/zcode/20260924_review/Nacos部署与灌配手册.md）
@@ -38,6 +48,17 @@ spring:
             groupId: TRAVEL  # AR-3（Y 审计修复）：SCA datasource 属性名是 groupId，group 被静默忽略→DEFAULT_GROUP 拉空
             data-id: travel-sentinel-flow-knowledge.json
             rule-type: flow
+        # AB-2b：system 规则 Nacos 数据源（系统自适应保护=L13 极端并发第二层；与 flow 同构，
+        # 属性名口径 groupId（AR-3）；dataId 模板已由审计先行产出
+        # docs/zcode/20260926_review/sentinel_system/，灌配归人工（AB批人工操作手册.md 操作②同流程）；
+        # 未灌配=无规则=零行为（E-33，同 flow 模式））
+        system-ds:
+          nacos:
+            server-addr: ${NACOS_ADDR:192.168.253.129:8848}
+            namespace: dev
+            groupId: TRAVEL
+            data-id: travel-sentinel-system-knowledge.json
+            rule-type: system
   # ============ 数据源 ============
   datasource:
     url: jdbc:mysql://${MYSQL_HOST:localhost}:${MYSQL_PORT:3306}/travel_planner?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true

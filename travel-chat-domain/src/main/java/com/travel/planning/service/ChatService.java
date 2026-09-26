@@ -33,6 +33,7 @@ import com.travel.planning.memory.pipeline.ChatSessionGuardProperties;
 import com.travel.planning.memory.pipeline.ChatTitleProperties;
 import com.travel.memory.shortterm.SessionFinalizer;
 import com.travel.planning.trace.ModelRouteTracker;
+import com.travel.planning.trace.TtftChannel;
 import com.travel.planning.trace.TraceContext;
 import io.lettuce.core.RedisCommandInterruptedException;
 import lombok.RequiredArgsConstructor;
@@ -132,6 +133,27 @@ public class ChatService implements ChatStreamExecutor {
     /** MI-4：轮次取消链状态机（可选注入；缺省时跳过接线断言）。 */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.travel.planning.cancellation.TurnStateMachine stateMachine;
+
+    /** AB-5c：时段画像采集开关（默认关=E-33 关闭态零调用零 DB 写；审计实弹开启）。 */
+    @org.springframework.beans.factory.annotation.Value(
+            "${travel.profile.slot-enabled:false}")
+    private boolean profileSlotEnabled = false;
+
+    /** AB-5c：画像结构化端口（optional 注入；null 或开关关=零采集）。 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.travel.memory.longterm.ProfileSlotPort profileSlotPort;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    void setProfileSlotPort(com.travel.memory.longterm.ProfileSlotPort profileSlotPort) {
+        this.profileSlotPort = profileSlotPort;
+    }
+
+    /** AB-5c：测试直连（同包；生产装配走 @Value 字段注入）。 */
+    void setProfileSlotCollector(boolean enabled,
+                                 com.travel.memory.longterm.ProfileSlotPort port) {
+        this.profileSlotEnabled = enabled;
+        this.profileSlotPort = port;
+    }
 
     /**
      * 创建会话
@@ -275,6 +297,18 @@ public class ChatService implements ChatStreamExecutor {
         chatGuardStep.check(req.userId(), req.message());
         // M3-11：步骤 2 持久化（会话校验 + 用户消息落库）
         ChatSession session = requireOwnedSession(req.userId(), req.sessionId());
+        // AB-5c：时段画像采集——sendMessage/prepareStream 全重载汇于本方法（每轮有效入口恰好一次，
+        // 重放/重复发送亦为该时段真实用户动作）；E-33：travel.profile.slot-enabled 默认 false=零调用
+        // 零 DB 写；fail-open（采集异常不阻断主流程，同画像更新降级口径）
+        if (profileSlotEnabled && profileSlotPort != null) {
+            try {
+                profileSlotPort.upsertSlotUsage(req.userId(),
+                        slotOf(java.time.LocalDateTime.now()));
+            } catch (Exception e) {
+                log.warn("[ProfileSlot] 时段画像采集失败（不影响主流程）: userId={}, err={}",
+                        req.userId(), e.getMessage());
+            }
+        }
         // M4-3：幂等门禁（在用户消息落库之前；未命中时用户消息已在门禁事务内追加）
         TurnGate gate = chatPersistenceStep.beginTurn(
                 req.sessionId(), req.userId(), req.clientMessageId(), req.message());
@@ -291,6 +325,14 @@ public class ChatService implements ChatStreamExecutor {
         return new ChatStreamExecutor.ChatStreamPrepared(
                 req.sessionId(), req.message(), req.userId(), req.clientMessageId(), gate, updatedSessionTitle, req.model(),
                 anchorIds, req.preferences());
+    }
+
+    /**
+     * AB-5c：时段编号计算（hour/4 → 0~5 共 6 段，与 t_user_profile_slot.slot_id 口径一致）。
+     * package-static 供测试直连（V-1 recordBlockingTtft 先例）。
+     */
+    static int slotOf(java.time.LocalDateTime t) {
+        return t.getHour() / 4;
     }
 
     /**
@@ -357,7 +399,10 @@ public class ChatService implements ChatStreamExecutor {
                 prepared.sessionId(), prepared.clientMessageId(), prepared.model());
         return ModelRoutingContext.runWith(prepared.model(), () -> {
             try {
-                return runStreamInternal(prepared, listener);
+                ChatStreamExecutor.ChatStreamResult result = runStreamInternal(prepared, listener);
+                // AB-5c-2：模型×时段使用采集（成功轮；异常轮无 tokens 不计）——守卫同 5c-1，fail-open
+                collectModelUsage(prepared, result);
+                return result;
             } finally {
                 // M8-9j：异常（如额度 403）也必须记录实际路由模型——
                 // 否则 t_agent_trace.model_name 停留在默认值，无法区分“请求未带模型”
@@ -365,6 +410,37 @@ public class ChatService implements ChatStreamExecutor {
                 recordRoutedModel();
             }
         });
+    }
+
+    /**
+     * AB-5c-2：模型×时段使用采集（runStream 返回侧=JSON/SSE 两路径公共完成点——
+     * runStreamInternal 阻塞至图完成，SSE 仅经 listener 旁路推送）。E-33：flag 默认关=
+     * 零调用零 DB 写；fail-open 不影响主流程。模型 key 取实际路由值（ModelRoutingContext
+     * .routed()，本方法仍在 runWith 作用域内=ThreadLocal 未清），无路由回落请求级模型，
+     * 双空则不计。ttft 经 TtftChannel.take(requestId) 尽力取值（TraceContext 未激活=null
+     * 容忍，Port 侧 CASE WHEN 不触碰均值）。package 供测试直连（V-1 先例）。
+     */
+    void collectModelUsage(ChatStreamExecutor.ChatStreamPrepared prepared,
+                           ChatStreamExecutor.ChatStreamResult result) {
+        if (!profileSlotEnabled || profileSlotPort == null) {
+            return;
+        }
+        try {
+            String routed = ModelRoutingContext.routed();
+            String modelKey = routed != null && !routed.isBlank() ? routed : prepared.model();
+            if (modelKey == null || modelKey.isBlank()) {
+                return;
+            }
+            Long ttftRaw = TraceContext.active()
+                    ? TtftChannel.take(TraceContext.current().requestId) : null;
+            Integer ttftMs = ttftRaw == null ? null : ttftRaw.intValue();
+            profileSlotPort.incrementModelUsage(prepared.userId(), modelKey,
+                    slotOf(java.time.LocalDateTime.now()),
+                    result == null ? 0L : result.aiTokens(), ttftMs);
+        } catch (Exception e) {
+            log.warn("[ProfileSlot] 模型使用采集失败（不影响主流程）: userId={}, err={}",
+                    prepared.userId(), e.getMessage());
+        }
     }
 
     /** MI-4：取消链状态接线断言（非法迁移抛 IllegalStateException → 上报；可选注入，缺省跳过）。 */

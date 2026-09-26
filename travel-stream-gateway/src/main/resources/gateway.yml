@@ -37,6 +37,17 @@ spring:
             groupId: TRAVEL  # AR-3（Y 审计修复）：SCA datasource 属性名是 groupId，group 被静默忽略→DEFAULT_GROUP 拉空
             data-id: travel-sentinel-flow-stream-gateway.json
             rule-type: flow
+        # AB-2b：system 规则 Nacos 数据源（系统自适应保护=L13 极端并发第二层；与 flow 同构，
+        # 属性名口径 groupId（AR-3）；dataId 模板已由审计先行产出（svc 后缀=artifact 名 stream-gateway，
+        # 与 flow dataId 命名先例一致），灌配归人工（AB批人工操作手册.md 操作②同流程）；
+        # 未灌配=无规则=零行为（E-33，同 flow 模式））
+        system-ds:
+          nacos:
+            server-addr: ${NACOS_ADDR:192.168.253.129:8848}
+            namespace: dev
+            groupId: TRAVEL
+            data-id: travel-sentinel-system-stream-gateway.json
+            rule-type: system
 travel:
   # Y-2b：旧限流拦截器退役开关（显式登记现状值=true；网关为 reactive 无 MVC 拦截器，
   # 本键为三服务统一口径的惰性登记，当前零消费者=零行为）

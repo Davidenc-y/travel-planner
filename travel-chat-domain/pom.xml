@@ -16,8 +16,7 @@
 
     <name>travel-chat-domain</name>
     <description>M6-31 聊天领域中立模块：ChatService 九步流水线/Agent/记忆/防护/追溯/仓储。
-        不引入任何 Web Starter，供 MVC（travel-planning）与 WebFlux（travel-stream-webflux）
-        双传输层共用同一业务域</description>
+        不引入任何 Web Starter，供 MVC（travel-planning）传输层共用同一业务域（U 批 webflux 双传输退役后单传输）</description>
 
     <dependencies>
         <!-- 中立流式端口与 payload 映射（无 Web Starter） -->

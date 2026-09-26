@@ -34,6 +34,27 @@ public class ContextComposer {
     private final ShortTermMemoryProperties memoryProps;
     private final MemoryFacade memoryFacade;
 
+    /** AB-5e：画像结构化查询（optional 注入；缺省=画像段原样）。 */
+    private com.travel.memory.longterm.behavior.BehaviorProfileService behaviorProfileService;
+
+    @Autowired(required = false)
+    void setBehaviorProfileService(
+            com.travel.memory.longterm.behavior.BehaviorProfileService behaviorProfileService) {
+        this.behaviorProfileService = behaviorProfileService;
+    }
+
+    /** AB-5e：E-33 采集/注入开关（同 travel.profile.slot-enabled 键，默认关=关闭态逐字节等价）。 */
+    @org.springframework.beans.factory.annotation.Value(
+            "${travel.profile.slot-enabled:false}")
+    private boolean profileSlotEnabled = false;
+
+    /** AB-5e：测试直连（同包；生产装配走字段注入）。 */
+    void setProfileSlotInjection(boolean enabled,
+                                 com.travel.memory.longterm.behavior.BehaviorProfileService svc) {
+        this.profileSlotEnabled = enabled;
+        this.behaviorProfileService = svc;
+    }
+
     public record ComposedContext(String text, int tokens, String profileContext,
                                   String historySection) {
     }
@@ -88,6 +109,9 @@ public class ContextComposer {
                                     String consensus, String sessionContext,
                                     String candidates, String message, String anchorSection,
                                     String preferenceSection) {
+        // AB-5e：画像段增强（"用户常在 X 时段使用，偏好 Y 模型"）——E-33：travel.profile.slot-enabled
+        // 默认 false=profileContext 原样返回=关闭态逐字节等价；fail-open 不影响组装主流程
+        profileContext = augmentProfileContext(userId, profileContext);
         ComposedInput ci = composeWithTokens(profileContext, historySection, consensus,
                 sessionContext, candidates, message, anchorSection, preferenceSection);
         String composed = ci.text();
@@ -172,5 +196,54 @@ public class ContextComposer {
     }
 
     private record ComposedInput(String text, int tokens) {
+    }
+
+    /**
+     * AB-5e：画像段增强——按 6 段画像取使用次数最高时段+按使用次数最高模型，追加
+     * "用户常在 X 时段使用，偏好 Y 模型"文本（方案 §一 AB-5e 原文案）。开关关/服务缺省/
+     * userId 无效/画像段空白/无任何使用数据=原样返回（逐字节等价）；异常 fail-open。
+     */
+    String augmentProfileContext(Long userId, String profileContext) {
+        if (!profileSlotEnabled || behaviorProfileService == null
+                || userId == null || userId <= 0
+                || profileContext == null || profileContext.isBlank()) {
+            return profileContext;
+        }
+        try {
+            var buckets = behaviorProfileService.getSlotProfile(userId);
+            var models = behaviorProfileService.getModelUsageSummary(userId);
+            int bestSlot = -1;
+            int bestSlotCnt = 0;
+            for (var b : buckets) {
+                if (b.useCount() > bestSlotCnt) {
+                    bestSlotCnt = b.useCount();
+                    bestSlot = b.slotId();
+                }
+            }
+            String modelText = null;
+            long bestModelCnt = 0;
+            for (var m : models) {
+                if (m.useCount() > bestModelCnt) {
+                    bestModelCnt = m.useCount();
+                    modelText = m.modelKey();
+                }
+            }
+            if (bestSlot < 0 && modelText == null) {
+                return profileContext;
+            }
+            StringBuilder extra = new StringBuilder();
+            if (bestSlot >= 0) {
+                extra.append("用户常在 ").append(bestSlot * 4).append('-')
+                        .append(bestSlot * 4 + 3).append(" 时段使用");
+            }
+            if (modelText != null) {
+                extra.append(extra.length() == 0 ? "用户偏好 " : "，偏好 ")
+                        .append(modelText).append(" 模型");
+            }
+            return profileContext + "\n" + extra;
+        } catch (Exception e) {
+            log.warn("[ContextComposer] 时段画像注入失败（不影响主流程）: {}", e.getMessage());
+            return profileContext;
+        }
     }
 }
