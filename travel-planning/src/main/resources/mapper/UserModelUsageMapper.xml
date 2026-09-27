@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.travel.planning.repository.UserModelUsageMapper">
+
+    <!--
+        滚动均值赋值序陷阱（接口 javadoc 同文）：MySQL ON DUPLICATE KEY UPDATE 赋值自左向右求值、
+        后位赋值可见前位更新值——故 avg 赋值必须在前（此时 use_count 仍为旧值，权重正确：
+        new_avg = (old_avg*old_cnt + ttft) / (old_cnt+1)），use_count 自增在后；序颠倒则权重失真。
+        ttftMs=null 时不触碰既有均值；整数除法截断=滚动均值近似口径。
+    -->
+    <insert id="incrementModelUsage">
+        INSERT INTO t_user_model_usage (user_id, model_key, slot_id, use_count, total_tokens, avg_ttft_ms)
+        VALUES (#{userId}, #{modelKey}, #{slotId}, 1, #{tokens}, #{ttftMs})
+        ON DUPLICATE KEY UPDATE
+        avg_ttft_ms = CASE WHEN #{ttftMs} IS NULL THEN avg_ttft_ms
+        WHEN avg_ttft_ms IS NULL THEN #{ttftMs}
+        ELSE (avg_ttft_ms * use_count + #{ttftMs}) / (use_count + 1) END,
+        use_count = use_count + 1,
+        total_tokens = total_tokens + #{tokens}
+    </insert>
+
+    <!-- 拉取用户全部模型使用行（含 slot_id=-1 汇总行；聚合在服务层，AB-5d） -->
+    <select id="selectByUser" resultType="com.travel.common.entity.UserModelUsage">
+        SELECT user_id, model_key, slot_id, use_count, total_tokens, avg_ttft_ms, updated_at
+        FROM t_user_model_usage WHERE user_id = #{userId} ORDER BY slot_id, model_key
+    </select>
+</mapper>

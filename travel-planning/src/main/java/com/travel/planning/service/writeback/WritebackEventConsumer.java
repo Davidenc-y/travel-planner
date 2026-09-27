@@ -2,7 +2,7 @@ package com.travel.planning.service.writeback;
 
 import com.travel.common.config.GrayReleaseManager;
 import com.travel.planning.service.ItineraryDetailCache;
-import com.travel.planning.service.ItinerarySliceWriter;
+import com.travel.planning.service.itinerary.ItinerarySliceWriter;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Range;

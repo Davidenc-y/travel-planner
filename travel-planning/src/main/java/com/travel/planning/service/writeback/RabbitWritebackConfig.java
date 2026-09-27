@@ -5,7 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.travel.common.config.GrayReleaseManager;
 import com.travel.common.event.EventEnvelope;
 import com.travel.planning.service.ItineraryDetailCache;
-import com.travel.planning.service.ItinerarySliceWriter;
+import com.travel.planning.service.itinerary.ItinerarySliceWriter;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.amqp.core.Binding;
 import org.springframework.amqp.core.BindingBuilder;

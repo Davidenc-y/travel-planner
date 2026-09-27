@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.travel.knowledge.repository.AttractionMapper">
+
+    <!-- 查询未索引的景点（indexed=0） -->
+    <select id="findUnindexed" resultType="com.travel.common.entity.Attraction">
+        SELECT * FROM t_attraction WHERE indexed = 0 ORDER BY id LIMIT #{limit}
+    </select>
+
+    <!-- 标记景点已索引 -->
+    <update id="markIndexed">
+        UPDATE t_attraction SET indexed = 1 WHERE id = #{id}
+    </update>
+
+    <!-- 按城市查询景点 -->
+    <select id="findByCity" resultType="com.travel.common.entity.Attraction">
+        SELECT * FROM t_attraction WHERE city = #{city} ORDER BY rating DESC
+    </select>
+
+    <!-- 统计景点总数 -->
+    <select id="countAll" resultType="long">
+        SELECT COUNT(*) FROM t_attraction
+    </select>
+
+    <!-- 统计已索引数 -->
+    <select id="countIndexed" resultType="long">
+        SELECT COUNT(*) FROM t_attraction WHERE indexed = 1
+    </select>
+
+    <!-- M5-1：全部城市去重列表（景点"浏览全部"下拉数据源） -->
+    <select id="listCities" resultType="java.lang.String">
+        SELECT DISTINCT city FROM t_attraction ORDER BY city
+    </select>
+</mapper>

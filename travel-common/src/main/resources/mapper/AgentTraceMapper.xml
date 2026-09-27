@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.travel.common.repository.AgentTraceMapper">
+
+    <!-- E-5b：窗口内逐轮（模型, 时长）明细（供服务层按模型聚合 P50/P95；
+         MySQL 8 无 PERCENTILE_CONT，百分位在 Java 侧计算）。 -->
+    <select id="selectModelDurationsSince" resultType="map">
+        SELECT model_name AS modelName, duration_ms AS durationMs
+        FROM t_agent_trace
+        WHERE start_time >= #{since} AND duration_ms IS NOT NULL
+    </select>
+
+    <!-- E-5b：窗口内 Top N 慢轮次明细（duration_ms 降序）。 -->
+    <select id="selectTopSlowTurns" resultType="map">
+        SELECT id, request_id AS requestId, model_name AS modelName,
+        duration_ms AS durationMs, endpoint, start_time AS startTime
+        FROM t_agent_trace
+        WHERE start_time >= #{since} AND duration_ms IS NOT NULL
+        ORDER BY duration_ms DESC LIMIT 10
+    </select>
+</mapper>

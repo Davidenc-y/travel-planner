@@ -36,9 +36,11 @@ public class TraceAspect {
     // 切点字符串不能引用该符号（IDEA 静态分析报 Cannot resolve symbol；Maven 编译不校验
     // 字符串）。用同包通配 *Service.generate(..) 等价匹配——当前该包仅有
     // ItineraryService.generate，未来新增 generate 需确认是否应纳入追溯。
-    @Around("execution(* com.travel.planning.service.ChatService.sendMessage(..))"
-            + " || execution(* com.travel.planning.service.ChatService.runStream(..))"
-            + " || execution(* com.travel.planning.service.*Service.generate(..))")
+    // AD-2a：ChatService 接口化后 runStream 经 ChatStreamExecutor 继承链声明，
+    // 类型限定须用 + 子类型通配否则 execution 切点静默失配（trace 丢失）。
+    @Around("execution(* com.travel.planning.service.ChatService+.sendMessage(..))"
+            + " || execution(* com.travel.planning.service.ChatService+.runStream(..))"
+            + " || execution(* com.travel.planning.service..*Service+.generate(..))")
     public Object around(ProceedingJoinPoint pjp) throws Throwable {
         memoryFacade.beginRequest();
         TraceContext.Holder holder = null;

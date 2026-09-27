@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.travel.planning.repository.ItineraryTaskSnapshotMapper">
+
+    <!-- 按任务取全部快照（最新在前；调用方按 node 取每节点最新） -->
+    <select id="findByTaskId" resultType="com.travel.common.entity.ItineraryTaskSnapshot">
+        SELECT * FROM t_itinerary_task_snapshot WHERE task_id = #{taskId} ORDER BY id DESC
+    </select>
+
+    <!-- resume 前清理该任务旧快照（重新执行被跳过节点前的兜底，幂等） -->
+    <delete id="deleteByTaskId">
+        DELETE FROM t_itinerary_task_snapshot WHERE task_id = #{taskId}
+    </delete>
+</mapper>

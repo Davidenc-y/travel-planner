@@ -1,5 +1,7 @@
 package com.travel.planning.service;
 
+import com.travel.planning.service.itinerary.ItineraryVersionPortImpl;
+
 import com.travel.common.config.GrayReleaseManager;
 import com.travel.common.dto.ItineraryResponseDTO;
 import com.travel.common.util.JsonUtils;

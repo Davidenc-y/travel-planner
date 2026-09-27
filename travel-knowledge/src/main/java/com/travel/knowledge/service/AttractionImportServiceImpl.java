@@ -1,0 +1,194 @@
+package com.travel.knowledge.service;
+
+import com.travel.common.entity.Attraction;
+import com.travel.core.data.SourceConfidence;
+import com.travel.common.util.JsonUtils;
+import com.travel.knowledge.etl.AttractionEtlService;
+import com.travel.knowledge.etl.AttractionFieldNormalizer;
+import com.travel.knowledge.etl.EtlOutboxService;
+import com.travel.knowledge.etl.FieldMergePolicy;
+import com.travel.knowledge.repository.AttractionMapper;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+import java.io.File;
+import java.util.ArrayList;
+import java.util.List;
+
+/**
+ * 景点数据导入服务
+ *
+ * <p>从 JSON 文件导入景点数据到 MySQL，并触发 ETL 写入 Milvus + ES。</p>
+ *
+ * @author david_ency
+ * @since 1.0-SNAPSHOT
+ */
+@Slf4j
+@Service
+@RequiredArgsConstructor
+public class AttractionImportServiceImpl implements AttractionImportService {
+
+    private final AttractionMapper attractionMapper;
+    private final AttractionEtlService etlService;
+    /** DG-3b：变更事件 outbox 写入（兜底一致性通道；与导入同事务） */
+    private final EtlOutboxService etlOutboxService;
+
+    /**
+     * 从 JSON 文件导入景点
+     *
+     * @param filePath JSON 文件路径
+     * @return 成功导入数量
+     */
+    @Transactional
+    public int importFromJsonFile(String filePath) throws Exception {
+        return importFromJsonFile(filePath, "insert");
+    }
+
+    /**
+     * 从 JSON 文件导入景点（F104 2.9：支持 insert/upsert 去重与更新）
+     *
+     * @param filePath JSON 文件路径
+     * @param mode     insert（默认，已存在跳过）/ upsert（已存在更新，爬虫刷新用）
+     * @return 成功新增数量（保持与 TC-13 口径兼容；updated/skip 记日志）
+     */
+    @Transactional
+    public int importFromJsonFile(String filePath, String mode) throws Exception {
+        return importWithStats(filePath, mode).stats().inserted();
+    }
+
+    /**
+     * 从 JSON 文件导入景点并返回统计（F104 2.9：insert/upsert）
+     *
+     * @return {inserted, updated, skipped}
+     */
+    @Transactional
+    public ImportResult importWithStats(String filePath, String mode) throws Exception {
+        // F30：统一路径分隔符（Windows 反斜杠 → 正斜杠），
+        // 避免 Postman 传入原始反斜杠或 URL 编码差异导致 File 定位失败；跨平台均安全。
+        String normalizedPath = filePath == null ? null : filePath.replace('\\', '/');
+        log.info("开始导入景点数据: {}", normalizedPath);
+        File file = new File(normalizedPath);
+        if (!file.exists()) {
+            throw new IllegalArgumentException("文件不存在: " + normalizedPath);
+        }
+
+        // M8-1 附带加固：显式 try-with-resources 关闭输入流，避免任何平台上
+        // 文件句柄延迟释放（Windows 文件锁/扫描器场景下影响临时目录清理）。
+        List<Attraction> attractions;
+        try (java.io.InputStream in = java.nio.file.Files.newInputStream(file.toPath())) {
+            attractions = JsonUtils.getMapper().readValue(in,
+                    JsonUtils.getMapper().getTypeFactory().constructCollectionType(List.class, Attraction.class));
+        }
+
+        int success = 0;
+        int updated = 0;
+        int skip = 0;
+        List<Attraction> affected = new ArrayList<>();
+        for (Attraction a : attractions) {
+            try {
+                // 检查是否已存在（按名称+城市去重）
+                Attraction existing = findExisting(a);
+                if (existing != null) {
+                    if (!"upsert".equalsIgnoreCase(mode)) {
+                        skip++;
+                        continue;
+                    }
+                    // F110-B：字段级合并策略（非空 且 来源置信度不低于现有值才覆盖），
+                    // 取代 F108 的空值保护特例；身份字段 name/city/poiId 不覆盖。
+                    mergeFields(existing, a,
+                            SourceConfidence.ofSource(existing.getSource()),
+                            SourceConfidence.ofSource(a.getSource()));
+                    existing.setIndexed(0);
+                    attractionMapper.updateById(existing);
+                    // DG-3b：同事务写 outbox 变更事件（兜底一致性通道；XADD 接线随 DG-3c/审计裁决）
+                    etlOutboxService.writeEvent(existing.getId(), "UPDATE");
+                    affected.add(existing);
+                    updated++;
+                    continue;
+                }
+
+                // 设置默认值
+                if (a.getIndexed() == null) a.setIndexed(0);
+                if (a.getFreeEntry() == null) a.setFreeEntry(0);
+                if (a.getSource() == null) a.setSource("manual");
+
+                attractionMapper.insert(a);
+                // DG-3b：同事务写 outbox 变更事件（新增行同样进入兜底一致性通道）
+                etlOutboxService.writeEvent(a.getId(), "INSERT");
+                affected.add(a);
+                success++;
+            } catch (Exception e) {
+                log.error("导入失败: name={}, city={}, error={}",
+                        a.getName(), a.getCity(), e.getMessage());
+            }
+        }
+
+        log.info("导入完成(mode={}): 总计={}, 新增={}, 更新={}, 跳过={}",
+                mode, attractions.size(), success, updated, skip);
+        return new ImportResult(new ImportStats(success, updated, skip), affected);
+    }
+
+    /** 存在性查询：优先 poi_id（F110-B 幂等键），其次 name+city */
+    private Attraction findExisting(Attraction a) {
+        if (a.getPoiId() != null && !a.getPoiId().isBlank()) {
+            Attraction byPoi = attractionMapper.selectOne(
+                    new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<Attraction>()
+                            .eq(Attraction::getPoiId, a.getPoiId()));
+            if (byPoi != null) {
+                return byPoi;
+            }
+        }
+        return attractionMapper.selectOne(
+                new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<Attraction>()
+                        .eq(Attraction::getName, a.getName())
+                        .eq(Attraction::getCity, a.getCity()));
+    }
+
+    /** F110-B 字段级合并：DG-2 起统一委托 {@link FieldMergePolicy}（口径单点；身份字段永不覆盖） */
+    private void mergeFields(Attraction t, Attraction incoming,
+                             SourceConfidence tConf, SourceConfidence inConf) {
+        t.setDistrict(FieldMergePolicy.choose(t.getDistrict(), tConf, incoming.getDistrict(), inConf));
+        t.setType(FieldMergePolicy.choose(t.getType(), tConf, incoming.getType(), inConf));
+        t.setDescription(FieldMergePolicy.choose(t.getDescription(), tConf, incoming.getDescription(), inConf));
+        t.setLat(FieldMergePolicy.choose(t.getLat(), tConf, incoming.getLat(), inConf));
+        t.setLng(FieldMergePolicy.choose(t.getLng(), tConf, incoming.getLng(), inConf));
+        t.setAddress(FieldMergePolicy.choose(t.getAddress(), tConf, incoming.getAddress(), inConf));
+        t.setOpenHours(FieldMergePolicy.choose(t.getOpenHours(), tConf, incoming.getOpenHours(), inConf));
+        t.setTicketPrice(FieldMergePolicy.choose(t.getTicketPrice(), tConf, incoming.getTicketPrice(), inConf));
+        t.setFreeEntry(FieldMergePolicy.choose(t.getFreeEntry(), tConf, incoming.getFreeEntry(), inConf));
+        t.setRating(FieldMergePolicy.choose(t.getRating(), tConf, incoming.getRating(), inConf));
+        t.setRatingCount(FieldMergePolicy.choose(t.getRatingCount(), tConf, incoming.getRatingCount(), inConf));
+        t.setTags(FieldMergePolicy.choose(t.getTags(), tConf, incoming.getTags(), inConf));
+        t.setRecommendedDuration(FieldMergePolicy.choose(
+                t.getRecommendedDuration(), tConf, incoming.getRecommendedDuration(), inConf));
+        t.setImageUrl(FieldMergePolicy.choose(t.getImageUrl(), tConf, incoming.getImageUrl(), inConf));
+        t.setSource(FieldMergePolicy.choose(t.getSource(), tConf, incoming.getSource(), inConf));
+        // DG-2：身份字段（poiId）经策略单点——永不覆盖，仅旧值空时回填
+        t.setPoiId(FieldMergePolicy.chooseIdentity(t.getPoiId(), incoming.getPoiId()));
+        // DG-1b：合并完成后生成规范化附加列（open_hours_norm/recommended_duration_min；
+        // 列 DDL 见 scripts/sql/dg1_normalizer.sql，由人工/审计执行——E-13）
+        t.setOpenHoursNorm(AttractionFieldNormalizer.normalizeOpenHours(t.getOpenHours()));
+        t.setRecommendedDurationMin(
+                AttractionFieldNormalizer.normalizeDuration(t.getRecommendedDuration()));
+    }
+
+    /**
+     * 导入单个景点
+     */
+    @Transactional
+    public boolean importOne(Attraction attraction) {
+        try {
+            attractionMapper.insert(attraction);
+            // DG-3c 修订版：importOne 补接线（防御性闭合"三处更新点"字面；main 侧暂无调用方）
+            etlOutboxService.writeEvent(attraction.getId(), "INSERT");
+            etlService.etlOne(attraction);
+            log.info("景点导入成功: name={}", attraction.getName());
+            return true;
+        } catch (Exception e) {
+            log.error("景点导入失败: name={}, error={}", attraction.getName(), e.getMessage());
+            return false;
+        }
+    }
+}

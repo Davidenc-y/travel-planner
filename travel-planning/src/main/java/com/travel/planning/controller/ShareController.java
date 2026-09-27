@@ -2,7 +2,7 @@ package com.travel.planning.controller;
 
 import com.travel.common.dto.ItineraryResponseDTO;
 import com.travel.common.result.R;
-import com.travel.planning.service.ItineraryService;
+import com.travel.planning.service.itinerary.ItineraryService;
 import com.travel.planning.service.share.ShareTokenService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;

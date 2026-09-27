@@ -1,0 +1,257 @@
+package com.travel.planning.service.itinerary;
+
+import com.travel.planning.service.ItineraryDetailCache;
+import com.travel.planning.service.itinerary.ItineraryGenerationOrchestrator;
+import com.travel.planning.service.itinerary.ItineraryGraphExecutor;
+import com.travel.planning.service.itinerary.ItineraryPersistenceService;
+import com.travel.planning.service.itinerary.ItineraryResumeCoordinator;
+import com.travel.planning.service.itinerary.ItineraryVersionService;
+import com.travel.planning.service.itinerary.MindmapGenerator;
+
+import com.travel.planning.service.itinerary.ItineraryService;
+
+import com.travel.planning.service.itinerary.ItinerarySliceWriter;
+
+import com.travel.planning.service.itinerary.ItineraryDtoAssembler;
+
+import com.travel.planning.service.itinerary.ItineraryCoordinateDecorator;
+
+import com.travel.common.dto.ItineraryGenerateRequestDTO;
+import com.travel.common.dto.ItineraryResponseDTO;
+import com.travel.common.entity.Itinerary;
+import com.travel.common.exception.BusinessException;
+import com.travel.common.exception.ErrorCode;
+import com.travel.common.exception.ItineraryGenerationException;
+import com.travel.common.result.PageResult;
+import com.travel.common.util.JsonUtils;
+import com.travel.planning.guard.GuardService;
+import com.travel.planning.memory.knowledge.SessionContextChunker;
+import com.travel.planning.memory.knowledge.SessionKnowledgeWriter;
+import com.travel.planning.memory.longterm.ProfileContextAssembler;
+import com.travel.memory.prompt.PromptTemplates;
+import com.travel.planning.repository.ItineraryMapper;
+import com.travel.planning.workflow.ItineraryStateMachineProperties;
+import com.travel.planning.workflow.ItineraryTaskSnapshotPort;
+import com.travel.planning.workflow.TravelWorkflowBuilder;
+import com.travel.aigateway.core.GatewayException;
+import com.travel.aigateway.core.ModelRegistry;
+import com.travel.aigateway.route.ModelRoutingContext;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.ai.chat.messages.UserMessage;
+import org.springframework.stereotype.Service;
+
+import java.util.List;
+import java.util.Map;
+
+/**
+ * 行程服务入口（M2-2 增强版，M10-1c 编排拆分后收口）。
+ *
+ * <p>仅保留：模型校验 + ModelRoutingContext 包装、generate/resume 门面、查询/删除，
+ * 以及为既有测试保留的静态兼容委托。生成编排见
+ * {@link ItineraryGenerationOrchestrator}，续跑见 {@link ItineraryResumeCoordinator}。</p>
+ */
+@Slf4j
+@Service
+@RequiredArgsConstructor
+public class ItineraryServiceImpl implements ItineraryService {
+
+    private final ItineraryMapper itineraryMapper;
+    private final TravelWorkflowBuilder workflowBuilder;
+    private final MindmapGenerator mindmapGenerator;
+    private final ProfileContextAssembler profileContextAssembler;
+    private final SessionContextChunker sessionContextChunker;
+    private final SessionKnowledgeWriter sessionKnowledgeWriter;
+    private final GuardService guardService;
+    /** HC-3：详情读缓存（可选注入；未注入/停用时全部降级为原库读路径） */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private ItineraryDetailCache detailCache;
+    private final PromptTemplates promptTemplates;
+    private final ItineraryPersistenceService persistenceService;
+    private final ItineraryTaskSnapshotPort snapshotPort;
+    private final ItineraryStateMachineProperties stateMachineProps;
+    private final ModelRegistry modelRegistry;
+
+    // M14-1a：拆分五件套 + 坐标装饰器改为 Spring 构造注入（删除 setter/懒加载兜底）
+    private final ItineraryDtoAssembler dtoAssembler;
+    private final ItinerarySliceWriter sliceWriter;
+    private final ItineraryResumeCoordinator resumeCoordinator;
+    private final ItineraryGraphExecutor graphExecutor;
+    private final ItineraryGenerationOrchestrator generationOrchestrator;
+    private final ItineraryCoordinateDecorator coordinateDecorator;
+
+    /**
+     * 生成行程（编排已下沉 {@link ItineraryGenerationOrchestrator}）。
+     */
+    public ItineraryResponseDTO generate(ItineraryGenerateRequestDTO req, Long userId) {
+        validateModel(req.getModel());
+        // T-1（缺口③）：表单显式目的地不经 ChatRoutingStep，同点嵌套注入 DestinationContext
+        //（行程图执行器同点读取写入 metadata，attraction_search 工具城市约束同样生效）
+        return ModelRoutingContext.runWith(req.getModel(),
+                () -> com.travel.planning.agent.support.DestinationContext.runWith(
+                        req.getDestination(),
+                        () -> generationOrchestrator.generate(req, userId)));
+    }
+
+    /**
+     * 断点续跑（语义下沉 {@link ItineraryResumeCoordinator}）。
+     */
+    public ItineraryResponseDTO resume(Long id, Long userId) {
+        return ModelRoutingContext.runWith(null,
+                () -> resumeCoordinator.resume(id, userId));
+    }
+
+    /**
+     * 查询行程详情（M21-2 SEC-02-01 止血：增加归属校验——非本人行程 40302，
+     * 与 ItineraryVersionService.requireOwner 同语义）。
+     */
+    public ItineraryResponseDTO getById(Long id, Long userId) {
+        // HC-3：详情读缓存——命中且归属匹配时零 DB 直返；未命中走原路径并回写（TTL 10min）。
+        // 归属校验语义不变：命中但非本人 → 落回原库路径抛 40401/40302。
+        ItineraryDetailCache.CachedDetail cached = detailCache == null ? null : detailCache.get(id);
+        if (cached != null && userId.equals(cached.ownerId())) {
+            return cached.dto();
+        }
+        Itinerary entity = itineraryMapper.selectById(id);
+        if (entity == null) {
+            // M22-3：缺失统一 40401（原 ItineraryGenerationException 被兜底为 50001，
+            // 与 delete 语义不一致；前端 getErrorMessage 走后端 message，天然兼容）
+            throw new BusinessException(40401, "行程不存在: " + id);
+        }
+        if (!userId.equals(entity.getUserId())) {
+            throw new BusinessException(40302, "无权访问该行程");
+        }
+        ensureMindmap(entity);
+        ItineraryResponseDTO dto = toResponseDTO(entity);
+        // M12-5：坐标装饰只保留在详情/地图路径（列表页不再按城市回查坐标）
+        coordinateDecorator.decorate(dto);
+        if (detailCache != null) {
+            // HC-3：回写缓存（写点主动失效见 ItineraryController 四写端点；TTL 10min 兜底）
+            detailCache.put(id, dto, entity.getUserId());
+        }
+        return dto;
+    }
+
+    /** M15-3：历史/聊天写入缺少 mindmap 时，读取详情惰性确定性补齐并持久化。 */
+    private void ensureMindmap(Itinerary entity) {
+        if (entity == null || entity.getContent() == null || entity.getContent().isBlank()
+                || entity.getMindmapData() != null && !entity.getMindmapData().isBlank()) {
+            return;
+        }
+        try {
+            var mindmap = mindmapGenerator.generate(
+                    entity.getTitle() == null || entity.getTitle().isBlank()
+                            ? entity.getDestination() + entity.getDays() + "日游"
+                            : entity.getTitle(),
+                    entity.getDestination(),
+                    entity.getDays(),
+                    entity.getBudget() != null ? entity.getBudget().toPlainString() : null,
+                    entity.getContent());
+            if (mindmap == null) {
+                return;
+            }
+            String json = JsonUtils.toJson(mindmap);
+            entity.setMindmapData(json);
+            Itinerary patch = new Itinerary();
+            patch.setId(entity.getId());
+            patch.setMindmapData(json);
+            itineraryMapper.updateById(patch);
+            log.info("[ItineraryMindmap] 读取详情惰性补齐思维导图: id={}", entity.getId());
+        } catch (Exception e) {
+            log.warn("[ItineraryMindmap] 惰性补齐失败（保留 null）: id={}, error={}",
+                    entity.getId(), e.getMessage());
+        }
+    }
+
+    /** 分页查询用户行程 */
+    public PageResult<ItineraryResponseDTO> listByUserId(Long userId, int page, int size) {
+        int offset = (page - 1) * size;
+        List<Itinerary> list = itineraryMapper.findByUserId(userId, offset, size);
+        long total = itineraryMapper.countByUserId(userId);
+        return PageResult.of(list.stream().map(this::toResponseDTO).toList(), total, page, size);
+    }
+
+    /** 删除行程（M21-2 SEC-02-01 止血：归属校验——不存在 40401，非本人 40302） */
+    public void delete(Long id, Long userId) {
+        Itinerary entity = itineraryMapper.selectById(id);
+        if (entity == null) {
+            throw new BusinessException(40401, "行程不存在: " + id);
+        }
+        if (!userId.equals(entity.getUserId())) {
+            throw new BusinessException(40302, "无权访问该行程");
+        }
+        itineraryMapper.deleteById(id);
+        log.info("行程删除: id={}, userId={}", id, userId);
+    }
+
+    /**
+     * M25（E5）：分享只读读取——凭有效签名 token 授权（无用户校验；
+     * DTO 不含用户字段天然脱敏）。不做坐标装饰（分享页无地图）。
+     */
+    public ItineraryResponseDTO getByIdForShare(Long id) {
+        Itinerary entity = itineraryMapper.selectById(id);
+        if (entity == null) {
+            throw new com.travel.common.exception.BusinessException(40401, "行程不存在: " + id);
+        }
+        return toResponseDTO(entity);
+    }
+
+    /** M26-F2：按 session_id 查行程 id 列表（webflux 内部桥：suggestion 资格判定）。 */
+    public java.util.List<Long> findSessionItineraryIds(String sessionId) {
+        if (sessionId == null || sessionId.isBlank()) {
+            return java.util.List.of();
+        }
+        return itineraryMapper.selectList(new com.baomidou.mybatisplus.core.conditions.query.QueryWrapper<Itinerary>()
+                        .eq("session_id", sessionId).select("id"))
+                .stream().map(Itinerary::getId).toList();
+    }
+
+    /** M7 D6：未知/禁用/不可选模型 → 40005，不静默回退。 */
+    private void validateModel(String model) {
+        if (model == null || model.isBlank()) {
+            return;
+        }
+        try {
+            modelRegistry.requireSelectable(model);
+        } catch (GatewayException e) {
+            throw new BusinessException(ErrorCode.MODEL_NOT_FOUND.code(),
+                    ErrorCode.MODEL_NOT_FOUND.message() + ": " + model);
+        }
+    }
+
+    /** 兼容既有静态测试：断点解析委托 ResumeCoordinator。 */
+    public static String resolveResumeFrom(Map<String, String> snapshots) {
+        return ItineraryResumeCoordinator.resolveResumeFrom(snapshots);
+    }
+
+    /** 兼容既有静态测试：快照污染过滤委托 ResumeCoordinator。 */
+    public static Map<String, String> sanitizeSnapshots(Map<String, String> snapshots) {
+        return ItineraryResumeCoordinator.sanitizeSnapshots(snapshots);
+    }
+
+    /** 兼容既有静态测试：resume 消息构建委托 ResumeCoordinator。 */
+    public static UserMessage buildResumeMessage(String userInput, Map<String, String> snapshots) {
+        return ItineraryResumeCoordinator.buildResumeMessage(userInput, snapshots);
+    }
+
+    /** GENERATING 僵尸判定（供 DTO 可续标志） */
+    private boolean isZombie(Itinerary task) {
+        return resumeCoordinator.isZombie(task);
+    }
+
+    /** Entity → ResponseDTO */
+    private ItineraryResponseDTO toResponseDTO(Itinerary entity) {
+        ItineraryResponseDTO dto = dtoAssembler.toResponseDTO(entity, isResumable(entity));
+        return dto;
+    }
+
+    /** M6-52：行程是否可断点续跑（与 resume 端点守卫同口径）。 */
+    private boolean isResumable(Itinerary entity) {
+        if (entity == null || entity.getStatus() == null) {
+            return false;
+        }
+        String status = entity.getStatus();
+        return "FAILED".equals(status)
+                || ("GENERATING".equals(status) && isZombie(entity));
+    }
+}

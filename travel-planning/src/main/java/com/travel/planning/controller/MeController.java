@@ -5,7 +5,7 @@ import com.travel.common.entity.User;
 import com.travel.common.result.R;
 import com.travel.planning.repository.UserMapper;
 import com.travel.planning.service.AdminAccessService;
-import com.travel.planning.service.UserUsageStatsService;
+import com.travel.planning.service.monitoring.UserUsageStatsService;
 import com.travel.planning.service.UserService;
 import com.travel.planning.util.AuthUtils;
 import lombok.RequiredArgsConstructor;

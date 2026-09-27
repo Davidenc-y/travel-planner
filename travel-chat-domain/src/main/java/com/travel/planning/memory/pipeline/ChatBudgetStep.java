@@ -127,14 +127,35 @@ public class ChatBudgetStep implements ChatPipelineStep {
         // F63：确定性预检索注入——把知识库候选景点放入上下文，确保聊天链消费知识库。
         // F66：非检索意图（画像/偏好/闲聊类）跳过预检索，避免无关候选污染上下文。
         // M4-2：topK 配置化（travel.rag.*，默认值等于 F63/F83 硬编码）
-        String candidates = needsKnowledgeRetrievalByIntent(intent)
-                ? knowledgeRetrievalService.retrieveCandidates(
+        // AD-4a：知识库检索与会话检索并行（两调用输入独立：query=message+suffix、
+        // sessionId+message——互不依赖；CompletableFuture.allOf 汇合）。
+        // 异常语义保持：join 的 CompletionException 解包重抛原异常（额度 40303/熔断
+        // 上抛类型不得被包装改变）；意图门控语义不变（非检索意图不发起知识库调用，
+        // 会话检索本就无条件执行）。
+        boolean needRetrieval = needsKnowledgeRetrievalByIntent(intent);
+        java.util.concurrent.CompletableFuture<String> candidatesFuture = needRetrieval
+                ? java.util.concurrent.CompletableFuture.supplyAsync(() -> knowledgeRetrievalService.retrieveCandidates(
                         message + (preferenceQuerySuffix == null ? "" : preferenceQuerySuffix),
-                        ragInjectionProperties.getAttractionCandidatesTopK()) : "[]";
+                        ragInjectionProperties.getAttractionCandidatesTopK()))
+                : java.util.concurrent.CompletableFuture.completedFuture("[]");
+        java.util.concurrent.CompletableFuture<List<Map<String, Object>>> sessionHitsFuture =
+                java.util.concurrent.CompletableFuture.supplyAsync(() -> sessionKnowledgeWriter.searchStructured(
+                        sessionId, message, ragInjectionProperties.getSessionContextTopK()));
+        String candidates;
+        List<Map<String, Object>> sessionHits;
+        try {
+            java.util.concurrent.CompletableFuture.allOf(candidatesFuture, sessionHitsFuture).join();
+            candidates = candidatesFuture.join();
+            sessionHits = sessionHitsFuture.join();
+        } catch (java.util.concurrent.CompletionException ce) {
+            Throwable cause = ce.getCause() == null ? ce : ce.getCause();
+            if (cause instanceof RuntimeException re) {
+                throw re;
+            }
+            throw ce;
+        }
         // Phase C/F78（C3）：按需检索本会话历史知识（结构化，供共识层与注入共用，只检索一次）
         // F83：topK 放大（默认 8），避免类型加分把行程切片挤出注入（E4 召回问题）
-        List<Map<String, Object>> sessionHits = sessionKnowledgeWriter.searchStructured(
-                sessionId, message, ragInjectionProperties.getSessionContextTopK());
         // MR-C3：语义召回注入——按前缀附加召回近会话蒸馏产物（type∈{semantic,entity}，seq 前缀
         // distill:，与 C2 落库口径同源）。K=travel.memory.recall-semantic-top-k，默认 0=关闭：
         // 零额外调用、sessionHits 原样（逐字节等价，E-33）；按 seq 去重、上限 K 条。

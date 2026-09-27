@@ -3,7 +3,7 @@ package com.travel.planning.service.export;
 import com.travel.common.entity.Itinerary;
 import com.travel.common.exception.BusinessException;
 import com.travel.planning.repository.ItineraryMapper;
-import com.travel.planning.service.ItineraryDtoAssembler;
+import com.travel.planning.service.itinerary.ItineraryDtoAssembler;
 import com.travel.common.dto.ItineraryResponseDTO;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;

@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.travel.planning.repository.ProfileSlotMapper">
+
+    <!-- 计数 upsert：行不存在插入（use_count=1），存在则 use_count+1（updated_at 由 DB ON UPDATE 维护） -->
+    <insert id="upsertSlotUsage">
+        INSERT INTO t_user_profile_slot (user_id, slot_id, use_count)
+        VALUES (#{userId}, #{slotId}, 1)
+        ON DUPLICATE KEY UPDATE use_count = use_count + 1
+    </insert>
+
+    <!-- 拉取用户全部时段行（聚合/零填充在服务层，AB-5d） -->
+    <select id="selectByUser" resultType="com.travel.common.entity.ProfileSlot">
+        SELECT user_id, slot_id, use_count, preferred_tags, preferred_models, updated_at
+        FROM t_user_profile_slot WHERE user_id = #{userId} ORDER BY slot_id
+    </select>
+
+    <!-- AC-1c（L16）：聚合写前确保行在（零计数行，不污染 use_count 语义；已存在=无操作） -->
+    <insert id="ensureRow">
+        INSERT IGNORE INTO t_user_profile_slot (user_id, slot_id, use_count)
+        VALUES (#{userId}, #{slotId}, 0)
+    </insert>
+
+    <!-- AC-1c（L16）：聚合列整行回写（两列成对透传，未涉及侧原值保持） -->
+    <update id="updateAggregates">
+        UPDATE t_user_profile_slot SET preferred_tags = #{tags}, preferred_models = #{models}
+        WHERE user_id = #{userId} AND slot_id = #{slotId}
+    </update>
+</mapper>

@@ -16,8 +16,9 @@ import org.springframework.boot.builder.SpringApplicationBuilder;
 @SpringBootApplication(scanBasePackages = "com.travel.gateway")
 // 审计修复：common 全包扫描拉入 servlet-dependent GlobalExceptionHandler（WebFlux 无 servlet）——
 // 改为仅扫 gateway 包 + 显式 @Import 需要的 common bean
+// AR-3（AD 审计）：AD-2d TokenAuthService 接口化后 @Import 必须指向 Impl（接口不可实例化）
 @org.springframework.context.annotation.Import({
-    com.travel.common.auth.TokenAuthService.class
+    com.travel.common.auth.TokenAuthServiceImpl.class
 })
 public class TravelStreamGatewayApplication {
 

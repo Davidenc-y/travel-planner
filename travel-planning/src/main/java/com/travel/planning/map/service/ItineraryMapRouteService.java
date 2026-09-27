@@ -19,7 +19,7 @@ import com.travel.planning.map.support.HotelAnchorResolver;
 import com.travel.planning.map.support.MapRouteSegmentizer;
 import com.travel.planning.map.support.MapRouteSegmentizer.Leg;
 import com.travel.planning.map.support.RouteModeResolver;
-import com.travel.planning.service.ItineraryService;
+import com.travel.planning.service.itinerary.ItineraryService;
 import com.travel.planning.weather.DailyWeather;
 import com.travel.planning.weather.WeatherPort;
 import com.travel.planning.weather.WeatherProperties;

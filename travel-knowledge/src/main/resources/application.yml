@@ -13,6 +13,9 @@ server:
     accept-count: 100  # 默认值显式（Boot 默认=100，OS backlog）
 
 spring:
+  # AD-4b: Virtual Threads（行为等价）
+  threads:
+    virtual: true
   # X-1b：Nacos 配置中心接线（E-33：NACOS_ENABLED=false=整体关闭，禁用解析器跳过 import=零键值变化；
   # optional: 前缀容忍 dataId 缺席；dataId 灌配见 docs/zcode/20260924_review/Nacos部署与灌配手册.md）
   config:

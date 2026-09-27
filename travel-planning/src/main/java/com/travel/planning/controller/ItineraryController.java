@@ -8,9 +8,9 @@ import com.travel.core.stream.StreamPreflight;
 import com.travel.core.stream.StreamRequest;
 import com.travel.planning.map.model.ItineraryMapRouteResponse;
 import com.travel.planning.map.service.ItineraryMapRouteService;
-import com.travel.planning.service.ItineraryStreamingPipeline;
-import com.travel.planning.service.ItineraryService;
-import com.travel.planning.service.ItineraryVersionService;
+import com.travel.planning.service.itinerary.ItineraryStreamingPipeline;
+import com.travel.planning.service.itinerary.ItineraryService;
+import com.travel.planning.service.itinerary.ItineraryVersionService;
 import com.travel.planning.stream.ItineraryStreamProperties;
 import com.travel.stream.StreamErrorMapper;
 import com.travel.stream.SseStreamAdapter;
@@ -44,9 +44,9 @@ public class ItineraryController {
     private final com.travel.planning.service.share.ShareTokenService shareTokenService;
     private final ItineraryMapRouteService itineraryMapRouteService;
     private final com.travel.planning.service.export.ItineraryIcsService itineraryIcsService;
-    private final com.travel.planning.service.ItineraryRenameService itineraryRenameService;
+    private final com.travel.planning.service.itinerary.ItineraryRenameService itineraryRenameService;
     /** M28-13：偏好元数据（party/interests）显式持久化 */
-    private final com.travel.planning.service.ItineraryPreferenceConstraintsService itineraryPreferenceConstraintsService;
+    private final com.travel.planning.service.itinerary.ItineraryPreferenceConstraintsService itineraryPreferenceConstraintsService;
     /** HC-3：详情读缓存失效挂钩（可选注入；缺省/停用时为 null，直接跳过） */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.travel.planning.service.ItineraryDetailCache itineraryDetailCache;

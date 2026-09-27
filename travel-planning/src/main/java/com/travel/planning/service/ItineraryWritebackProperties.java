@@ -1,5 +1,7 @@
 package com.travel.planning.service;
 
+import com.travel.planning.service.itinerary.ItineraryVersionPortImpl;
+
 import lombok.Data;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.stereotype.Component;

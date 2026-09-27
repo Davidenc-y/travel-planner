@@ -4,7 +4,7 @@ import com.travel.common.config.GrayFlags;
 import com.travel.common.result.R;
 import com.travel.common.web.support.InternalTokenSupport;
 import com.travel.planning.agent.support.ItineraryVersionPort;
-import com.travel.planning.service.ItineraryVersionPortImpl;
+import com.travel.planning.service.itinerary.ItineraryVersionPortImpl;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;

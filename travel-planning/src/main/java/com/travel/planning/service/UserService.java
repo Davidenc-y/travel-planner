@@ -1,175 +1,38 @@
 package com.travel.planning.service;
 
-import com.travel.common.auth.TokenAuthService;
 import com.travel.common.entity.User;
-import com.travel.common.exception.BusinessException;
-import com.travel.common.exception.ErrorCode;
-import com.travel.planning.repository.UserMapper;
-import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
-import org.springframework.data.redis.core.StringRedisTemplate;
-import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
-import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 
 import java.util.Map;
-import java.util.concurrent.TimeUnit;
-import java.util.regex.Pattern;
 
 /**
- * 用户服务
+ * UserService 公共契约（AD-2d 接口化）。
  *
- * <p>M2-4-F18 增强：refreshToken 存入 Redis，支持 Token 刷新；
- * M3-7 收口：头像更新走本服务（AvatarController 不再直连 Mapper）。</p>
- *
- * @author david_ency
- * @since 1.0-SNAPSHOT
+ * <p>实现见 {@link UserServiceImpl}（@Service 在 Impl）；
+ * 公有方法签名逐字提取（零语义变更）。</p>
  */
-@Slf4j
-@Service
-@RequiredArgsConstructor
-public class UserService {
+public interface UserService {
 
-    private final UserMapper userMapper;
-    // M6-25：JWT 逻辑下沉 travel-common（TokenAuthService），行为与旧 JwtUtil 等价
-    private final TokenAuthService tokenAuthService;
-    private final StringRedisTemplate redisTemplate;
-    private final BCryptPasswordEncoder passwordEncoder = new BCryptPasswordEncoder();
+    /** 注册。 */
+    Map<String, Object> register(String username, String password, String email);
 
-    private static final String REFRESH_TOKEN_KEY = "refresh_token:";
-    private static final long REFRESH_TOKEN_TTL_DAYS = 7;
-    /** M5-1：邮箱格式（与前端一致） */
-    private static final Pattern EMAIL_PATTERN =
-            Pattern.compile("^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}$");
-    /** M5-1：邮箱最大长度（表结构 VARCHAR(100)） */
-    private static final int EMAIL_MAX_LENGTH = 100;
+    /** 登录。 */
+    Map<String, Object> login(String username, String password);
 
-    /**
-     * 注册（注册即登录，返回 Token 对）
-     */
-    public Map<String, Object> register(String username, String password, String email) {
-        if (userMapper.findByUsername(username) != null) {
-            throw new BusinessException(40003, "用户名已存在");
-        }
-        User user = new User();
-        user.setUsername(username);
-        user.setPassword(passwordEncoder.encode(password));
-        user.setEmail(email);
-        userMapper.insert(user);
-        log.info("用户注册成功: id={}, username={}", user.getId(), username);
-        return generateTokenPair(user);
-    }
+    /** 按 id 查询（不存在返回 null）。 */
+    User findById(Long userId);
 
-    /**
-     * 登录
-     */
-    public Map<String, Object> login(String username, String password) {
-        User user = userMapper.findByUsername(username);
-        if (user == null || !passwordEncoder.matches(password, user.getPassword())) {
-            throw new BusinessException(40101, "用户名或密码错误");
-        }
-        log.info("用户登录成功: id={}, username={}", user.getId(), username);
-        return generateTokenPair(user);
-    }
+    /** 按 id 查询（不存在抛业务异常）。 */
+    User getById(Long userId);
 
-    /**
-     * 根据 ID 查询用户
-     */
-    public User findById(Long userId) {
-        User user = userMapper.selectById(userId);
-        if (user == null) {
-            throw new BusinessException(40403, "用户不存在");
-        }
-        return user;
-    }
+    /** 更新头像。 */
+    void updateAvatar(Long userId, String avatarUrl);
 
-    /** M3-7：可空查询（头像清理等 best-effort 场景） */
-    public User getById(Long userId) {
-        return userMapper.selectById(userId);
-    }
+    /** 更新邮箱。 */
+    void updateEmail(Long userId, String email);
 
-    /** M3-7：更新头像 URL（独立事务） */
-    @Transactional
-    public void updateAvatar(Long userId, String avatarUrl) {
-        User user = new User();
-        user.setId(userId);
-        user.setAvatar(avatarUrl);
-        userMapper.updateById(user);
-    }
+    /** 刷新令牌。 */
+    Map<String, Object> refreshToken(String refreshToken);
 
-    /**
-     * M5-1：绑定邮箱（注册未填时后补；格式校验 + 唯一性查重）。
-     */
-    @Transactional
-    public void updateEmail(Long userId, String email) {
-        String normalized = email == null ? "" : email.trim();
-        if (normalized.isEmpty()) {
-            throw new BusinessException(40001, "邮箱不能为空");
-        }
-        if (normalized.length() > EMAIL_MAX_LENGTH || !EMAIL_PATTERN.matcher(normalized).matches()) {
-            throw new BusinessException(40001, "邮箱格式不正确");
-        }
-        User existing = userMapper.findByEmail(normalized);
-        if (existing != null && !existing.getId().equals(userId)) {
-            throw new BusinessException(ErrorCode.EMAIL_EXISTS.code(), ErrorCode.EMAIL_EXISTS.message());
-        }
-        User user = new User();
-        user.setId(userId);
-        user.setEmail(normalized);
-        userMapper.updateById(user);
-        log.info("邮箱绑定成功: userId={}, email={}", userId, normalized);
-    }
-
-    /**
-     * 刷新 Token
-     */
-    public Map<String, Object> refreshToken(String refreshToken) {
-        // M21-4（SEC-01-02）：refresh 端点只收 refresh 类型（access 冒充 refresh 被拒）
-        if (!tokenAuthService.validateRefreshToken(refreshToken)) {
-            throw new BusinessException(40102, "refreshToken 无效或已过期");
-        }
-
-        Long userId = tokenAuthService.getUserIdFromToken(refreshToken);
-        String username = tokenAuthService.getUsernameFromToken(refreshToken);
-
-        String redisKey = REFRESH_TOKEN_KEY + userId;
-        String storedToken = redisTemplate.opsForValue().get(redisKey);
-        if (storedToken == null || !refreshToken.equals(storedToken)) {
-            throw new BusinessException(40103, "refreshToken 已失效，请重新登录");
-        }
-
-        User user = findById(userId);
-
-        log.info("Token 刷新成功: userId={}", userId);
-        return generateTokenPair(user);
-    }
-
-    /**
-     * 退出登录（注销 refreshToken）
-     */
-    public void logout(Long userId) {
-        String redisKey = REFRESH_TOKEN_KEY + userId;
-        redisTemplate.delete(redisKey);
-        log.info("用户退出登录: userId={}", userId);
-    }
-
-    /**
-     * 生成 Token 对并存入 Redis
-     */
-    private Map<String, Object> generateTokenPair(User user) {
-        String accessToken = tokenAuthService.generateAccessToken(user.getId(), user.getUsername());
-        String refreshToken = tokenAuthService.generateRefreshToken(user.getId(), user.getUsername());
-
-        String redisKey = REFRESH_TOKEN_KEY + user.getId();
-        redisTemplate.opsForValue().set(redisKey, refreshToken, REFRESH_TOKEN_TTL_DAYS, TimeUnit.DAYS);
-
-        log.info("Token 对已生成并存储 Redis: userId={}, key={}", user.getId(), redisKey);
-
-        return Map.of(
-                "accessToken", accessToken,
-                "refreshToken", refreshToken,
-                "userId", user.getId(),
-                "username", user.getUsername()
-        );
-    }
+    /** 登出。 */
+    void logout(Long userId);
 }

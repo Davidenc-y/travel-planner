@@ -3,11 +3,12 @@ package com.travel.planning.repository;
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
 import com.travel.common.entity.TravelProfile;
 import org.apache.ibatis.annotations.Mapper;
-import org.apache.ibatis.annotations.Select;
 
+/**
+ * SQL 语句统一在 resources/mapper/TravelProfileMapper.xml（AD-1d 注解→XML，方法签名与语义逐字段不变）。
+ */
 @Mapper
 public interface TravelProfileMapper extends BaseMapper<TravelProfile> {
 
-    @Select("SELECT * FROM t_travel_profile WHERE user_id = #{userId}")
     TravelProfile findByUserId(Long userId);
 }

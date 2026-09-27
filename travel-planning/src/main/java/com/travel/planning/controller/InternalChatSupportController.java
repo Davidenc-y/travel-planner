@@ -6,7 +6,7 @@ import com.travel.common.result.R;
 import com.travel.planning.agent.support.ChatWeatherContextPort;
 import com.travel.memory.anchor.ItineraryBrief;
 import com.travel.memory.anchor.ItineraryBriefPort;
-import com.travel.planning.service.ItineraryService;
+import com.travel.planning.service.itinerary.ItineraryService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;

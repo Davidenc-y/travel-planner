@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.travel.planning.repository.ChatMessageMapper">
+
+    <select id="findBySessionId" resultType="com.travel.common.entity.ChatMessage">
+        SELECT * FROM t_chat_message WHERE session_id = #{sessionId} ORDER BY created_at ASC
+    </select>
+</mapper>
