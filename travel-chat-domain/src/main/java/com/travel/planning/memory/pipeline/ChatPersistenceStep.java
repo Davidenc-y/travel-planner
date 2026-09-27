@@ -3,6 +3,7 @@ package com.travel.planning.memory.pipeline;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.travel.common.entity.ChatMessage;
 import com.travel.common.entity.ChatMessageIdem;
 import com.travel.common.entity.ChatSession;
@@ -10,10 +11,13 @@ import com.travel.common.enums.ChatRole;
 import com.travel.common.exception.BusinessException;
 import com.travel.common.util.TextTokens;
 import com.travel.core.stream.TurnGate;
+import com.travel.memory.anchor.SessionAnchorStore;
 import com.travel.memory.sessionstore.SessionStorePort;
 import com.travel.planning.repository.ChatMessageIdemMapper;
+import com.travel.planning.repository.ChatMessageMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
@@ -59,6 +63,22 @@ public class ChatPersistenceStep implements ChatPipelineStep {
     private final SessionStorePort sessionStorePort;
     private final ChatMessageIdemMapper idemMapper;
     private final ChatIdempotencyProperties idemProps;
+
+    /** AC-1a（L14）：M23 per-turn 锚定快照读源/写面——optional setter 注入（AB-5c-1
+     * optional-setter 先例），缺省（未注入）=快照零动作，既有 3 参构造点全部零 diff。 */
+    private SessionAnchorStore sessionAnchorStore;
+    private ChatMessageMapper chatMessageMapper;
+    private final ObjectMapper anchorSnapshotMapper = new ObjectMapper();
+
+    @Autowired(required = false)
+    void setSessionAnchorStore(SessionAnchorStore sessionAnchorStore) {
+        this.sessionAnchorStore = sessionAnchorStore;
+    }
+
+    @Autowired(required = false)
+    void setChatMessageMapper(ChatMessageMapper chatMessageMapper) {
+        this.chatMessageMapper = chatMessageMapper;
+    }
 
     /**
      * 校验会话存在；不存在抛 40404（语义与 ChatService 原实现一致）。
@@ -319,9 +339,41 @@ public class ChatPersistenceStep implements ChatPipelineStep {
     /**
      * 保存 AI 响应；tokens 为本次全部 LLM 调用的真实 totalTokens（F27 口径）。
      *
+     * <p>AC-1a（L14）：落库后附 M23 per-turn 锚定快照（{@link #snapshotAnchors}）——
+     * try-catch 副作用，失败只 WARN，不影响消息 id 返回与主链路。</p>
+     *
      * @return 消息 id（M4-3：幂等登记回填）
      */
     public Long appendAssistantMessage(String sessionId, String response, long aiTokens) {
-        return sessionStorePort.appendMessage(sessionId, ChatRole.ASSISTANT, response, (int) aiTokens);
+        Long messageId = sessionStorePort.appendMessage(sessionId, ChatRole.ASSISTANT, response, (int) aiTokens);
+        snapshotAnchors(sessionId, messageId);
+        return messageId;
+    }
+
+    /**
+     * AC-1a（L14）：M23 per-turn 锚定快照——assistant 消息落库后，把会话当前锚定集
+     * （session 上下文=t_chat_session.anchored_itinerary_ids，即轮次完成时的锚定视图，
+     * 非最终态）JSON 序列化快照进本消息行 anchored_itinerary_ids 列。
+     *
+     * <p>P0⑥ 红线：整段 try-catch 副作用——读锚定/序列化/UPDATE 任何异常只 WARN
+     * 不上抛，消息落库主链路零阻断；依赖未注入（缺省装配面）或空锚定集
+     * （列默认 NULL 即空集语义，S-E5 同值免写先例）时跳过 UPDATE。</p>
+     */
+    private void snapshotAnchors(String sessionId, Long messageId) {
+        if (sessionAnchorStore == null || chatMessageMapper == null || messageId == null) {
+            return;
+        }
+        try {
+            List<Long> anchors = sessionAnchorStore.getAnchors(sessionId);
+            if (anchors == null || anchors.isEmpty()) {
+                return;
+            }
+            String json = anchorSnapshotMapper.writeValueAsString(anchors);
+            chatMessageMapper.update(null, new UpdateWrapper<ChatMessage>()
+                    .eq("id", messageId)
+                    .set("anchored_itinerary_ids", json));
+        } catch (Exception e) {
+            log.warn("[Anchor] 消息级锚定快照写入失败（不阻断落库主链路）: messageId={}", messageId, e);
+        }
     }
 }

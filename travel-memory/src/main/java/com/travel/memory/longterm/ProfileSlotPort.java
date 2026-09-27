@@ -41,6 +41,19 @@ public interface ProfileSlotPort {
      */
     List<ModelUsage> queryModelUsage(Long userId);
 
+    /**
+     * AC-1c（L16）：景点标签并入 (user_id, slot_id) 行 preferred_tags 聚合
+     * （JSON 数组合并+计数重排+保留 top5；行不存在先建零计数行）。
+     * JSON 形态=[{"tag":"x","cnt":n},...]（与 AB-5d topOfJsonArray 读契约一致）。
+     */
+    void enrichSlotTags(Long userId, int slotId, List<String> tags);
+
+    /**
+     * AC-1c（L16）：模型键并入 (user_id, slot_id) 行 preferred_models 聚合
+     * （合并+计数+top5 语义同 enrichSlotTags；形态=[{"model":"x","cnt":n},...]）。
+     */
+    void enrichSlotModels(Long userId, int slotId, List<String> models);
+
     /** 单时段画像（t_user_profile_slot 行的最小字段集） */
     record SlotUsage(
             int slotId,

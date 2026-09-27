@@ -7,12 +7,16 @@ import com.travel.common.lock.LockPort;
 import com.travel.common.util.JsonUtils;
 import com.travel.memory.config.LlmGovernor;
 import com.travel.memory.longterm.ProfilePort;
+import com.travel.memory.longterm.ProfileSlotPort;
 import com.travel.memory.longterm.behavior.BehaviorProfileService;
+import com.travel.memory.longterm.behavior.InferredStylePort;
 import com.travel.memory.prompt.PromptTemplates;
 import com.travel.planning.repository.TravelProfileMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.model.ChatModel;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
@@ -31,7 +35,7 @@ import java.util.List;
  */
 @Slf4j
 @Service
-public class TravelProfileService implements ProfilePort {
+public class TravelProfileService implements ProfilePort, InferredStylePort {
 
     /** 历史行程条目数超阈值触发 LLM 压缩（F64/B2） */
     private static final int HISTORY_COMPACT_THRESHOLD = 10;
@@ -55,6 +59,22 @@ public class TravelProfileService implements ProfilePort {
     // X-7a/X-7b：画像锁端口（NoOp 默认=进程内串行语义等价；travel.lock.redisson.enabled=true
     // 时 RedissonLockPort @Primary 接管=跨实例分布式可重入）
     private final LockPort lockPort;
+
+    // AC-1c（L16）：slot 聚合端口——optional setter 注入（AC-1a/AB-5c-1 先例，6 参构造零变动）；
+    // E-33：travel.profile.slot-enabled 与 ChatService 同键（默认 false=关闭态零 DB 写）
+    private ProfileSlotPort slotEnrichPort;
+
+    @Value("${travel.profile.slot-enabled:false}")
+    private boolean slotEnrichEnabled = false;
+
+    @Autowired(required = false)
+    void setSlotEnrichPort(ProfileSlotPort slotEnrichPort) {
+        this.slotEnrichPort = slotEnrichPort;
+    }
+
+    void setSlotEnrichEnabled(boolean slotEnrichEnabled) {
+        this.slotEnrichEnabled = slotEnrichEnabled;
+    }
 
     // M7-6：画像压缩为低频后台任务 → light 角色（压缩质量由校验与回退守护）
     public TravelProfileService(TravelProfileMapper profileMapper,
@@ -201,6 +221,10 @@ public class TravelProfileService implements ProfilePort {
         lockPort.executeWithLock("profile:" + userId, () -> {
         try {
             int tripsSize = recordTripWithRetry(userId, destination, interests, title, budget, party);
+
+            // AC-1c（L16）：interests→当前时段 preferred_tags 聚合
+            // （E-33 travel.profile.slot-enabled 同键 gate；fail-open 不影响画像更新主链路）
+            enrichSlotTagsFromInterests(userId, interests);
 
             // F64/B2：历史行程条目超阈值时异步 LLM 压缩（控体积）。
             if (tripsSize > HISTORY_COMPACT_THRESHOLD) {
@@ -398,6 +422,91 @@ public class TravelProfileService implements ProfilePort {
             log.warn("画像历史行程压缩失败（不影响主流程）: userId={}, error={}", userId, e.getMessage());
         }
         return null;
+        });
+    }
+
+    /**
+     * AC-1c（L16）：行程完成后把 interests 标签并入当前时段 slot 的 preferred_tags
+     * （interests 为 JSON 数组字符串；slotId=ChatService.slotOf 同源 hour/4 六桶；
+     * 整段 try-catch 副作用——任何异常只 WARN，不影响 recordTrip 主链路）。
+     */
+    private void enrichSlotTagsFromInterests(Long userId, String interests) {
+        if (!slotEnrichEnabled || slotEnrichPort == null) {
+            return;
+        }
+        try {
+            List<String> tags = JsonUtils.parseList(interests, String.class);
+            if (tags == null || tags.isEmpty()) {
+                return;
+            }
+            slotEnrichPort.enrichSlotTags(userId, ChatService.slotOf(LocalDateTime.now()), tags);
+        } catch (Exception e) {
+            log.warn("[ProfileSlot] 行程标签聚合失败（不影响画像更新）: userId={}, err={}",
+                    userId, e.getMessage());
+        }
+    }
+
+    /**
+     * AC-2b：推断风格回写（InferredStylePort 实现，BehaviorProfileService 重算后调用）。
+     *
+     * <p>方案条件：推断非 null（调用方保证+本方法再防御）+ updated_source≠"update"
+     * （保留用户显式设置值）。乐观锁同 update 路径（@Version 重读重试，X-7b 锁内）；
+     * updated_source="inferred"；值域防御=F70/M11-4 校验器过滤（AC-2a 输出已合法，
+     * 双保险）；整段 try-catch fail-open（P0⑥ 同构：不外抛）。</p>
+     */
+    @Override
+    public void applyInferredStyle(Long userId, String travelStyle, String consumeLevel) {
+        if (userId == null) {
+            return;
+        }
+        // 值域防御：非法值置 null（不更新该列），双 null 直接返回
+        if (travelStyle != null && !isValidTravelStyle(travelStyle)) {
+            log.warn("[Profile] 推断 travelStyle 非法值域，忽略: userId={}, value={}", userId, travelStyle);
+            travelStyle = null;
+        }
+        if (consumeLevel != null && !isValidConsumeLevel(consumeLevel)) {
+            log.warn("[Profile] 推断 consumeLevel 非法值域，忽略: userId={}, value={}", userId, consumeLevel);
+            consumeLevel = null;
+        }
+        if (travelStyle == null && consumeLevel == null) {
+            return;
+        }
+        final String style = travelStyle;
+        final String consume = consumeLevel;
+        lockPort.executeWithLock("profile:" + userId, () -> {
+            try {
+                for (int attempt = 0; ; attempt++) {
+                    TravelProfile p = getByUserId(userId);
+                    // 方案条件：updated_source="update"（用户显式设置）优先保留，跳过回写
+                    if ("update".equals(p.getUpdatedSource())) {
+                        log.debug("[Profile] 用户显式设置风格，跳过推断回写: userId={}", userId);
+                        return null;
+                    }
+                    if (style != null) {
+                        p.setTravelStyle(style);
+                    }
+                    if (consume != null) {
+                        p.setConsumeLevel(consume);
+                    }
+                    p.setUpdatedSource("inferred");
+                    p.setUpdatedAt(LocalDateTime.now());
+                    if (profileMapper.updateById(p) > 0) {
+                        log.info("[Profile] 推断风格回写: userId={}, style={}, consume={}",
+                                userId, p.getTravelStyle(), p.getConsumeLevel());
+                        return null;
+                    }
+                    if (attempt >= OPTIMISTIC_RETRY_TIMES) {
+                        log.warn("[Profile] 推断回写乐观锁冲突重试耗尽: userId={}", userId);
+                        return null;
+                    }
+                    log.info("[Profile] 推断回写乐观锁冲突，重读重试: userId={}, attempt={}",
+                            userId, attempt + 1);
+                }
+            } catch (Exception e) {
+                log.warn("[Profile] 推断风格回写失败（不影响主流程）: userId={}, error={}",
+                        userId, e.getMessage());
+            }
+            return null;
         });
     }
 

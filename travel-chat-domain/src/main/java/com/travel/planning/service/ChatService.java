@@ -134,25 +134,22 @@ public class ChatService implements ChatStreamExecutor {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.travel.planning.cancellation.TurnStateMachine stateMachine;
 
-    /** AB-5c：时段画像采集开关（默认关=E-33 关闭态零调用零 DB 写；审计实弹开启）。 */
-    @org.springframework.beans.factory.annotation.Value(
-            "${travel.profile.slot-enabled:false}")
-    private boolean profileSlotEnabled = false;
-
-    /** AB-5c：画像结构化端口（optional 注入；null 或开关关=零采集）。 */
+    /** AC-3a：画像采集门面（AB-5 增量面拆出，optional 注入；null=未注入零采集，同 flag 关等价）。 */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
-    private com.travel.memory.longterm.ProfileSlotPort profileSlotPort;
+    private ProfileCollector profileCollector;
 
     @org.springframework.beans.factory.annotation.Autowired(required = false)
-    void setProfileSlotPort(com.travel.memory.longterm.ProfileSlotPort profileSlotPort) {
-        this.profileSlotPort = profileSlotPort;
+    void setProfileCollector(ProfileCollector profileCollector) {
+        this.profileCollector = profileCollector;
     }
 
-    /** AB-5c：测试直连（同包；生产装配走 @Value 字段注入）。 */
+    /** AB-5c：测试直连兼容面（AC-3a 起委托 ProfileCollector；缺省懒建仅测试路径触达，生产走 Spring 注入）。 */
     void setProfileSlotCollector(boolean enabled,
                                  com.travel.memory.longterm.ProfileSlotPort port) {
-        this.profileSlotEnabled = enabled;
-        this.profileSlotPort = port;
+        if (profileCollector == null) {
+            profileCollector = new ProfileCollector();
+        }
+        profileCollector.setProfileSlotCollector(enabled, port);
     }
 
     /**
@@ -297,17 +294,10 @@ public class ChatService implements ChatStreamExecutor {
         chatGuardStep.check(req.userId(), req.message());
         // M3-11：步骤 2 持久化（会话校验 + 用户消息落库）
         ChatSession session = requireOwnedSession(req.userId(), req.sessionId());
-        // AB-5c：时段画像采集——sendMessage/prepareStream 全重载汇于本方法（每轮有效入口恰好一次，
-        // 重放/重复发送亦为该时段真实用户动作）；E-33：travel.profile.slot-enabled 默认 false=零调用
-        // 零 DB 写；fail-open（采集异常不阻断主流程，同画像更新降级口径）
-        if (profileSlotEnabled && profileSlotPort != null) {
-            try {
-                profileSlotPort.upsertSlotUsage(req.userId(),
-                        slotOf(java.time.LocalDateTime.now()));
-            } catch (Exception e) {
-                log.warn("[ProfileSlot] 时段画像采集失败（不影响主流程）: userId={}, err={}",
-                        req.userId(), e.getMessage());
-            }
+        // AB-5c/AC-3a：时段画像采集委托 ProfileCollector（sendMessage/prepareStream 全重载
+        // 汇于本方法每轮一次；E-33 默认关/fail-open 语义随门面保留；未注入=null 零采集）
+        if (profileCollector != null) {
+            profileCollector.collectSlotUsage(req.userId());
         }
         // M4-3：幂等门禁（在用户消息落库之前；未命中时用户消息已在门禁事务内追加）
         TurnGate gate = chatPersistenceStep.beginTurn(
@@ -328,11 +318,11 @@ public class ChatService implements ChatStreamExecutor {
     }
 
     /**
-     * AB-5c：时段编号计算（hour/4 → 0~5 共 6 段，与 t_user_profile_slot.slot_id 口径一致）。
-     * package-static 供测试直连（V-1 recordBlockingTtft 先例）。
+     * AB-5c：时段编号计算（AC-3a 起薄委托 {@link ProfileCollector#slotOf}——
+     * TravelProfileService（AC-1c）与既有测试的 package-static 调用面零 diff 保持）。
      */
     static int slotOf(java.time.LocalDateTime t) {
-        return t.getHour() / 4;
+        return ProfileCollector.slotOf(t);
     }
 
     /**
@@ -413,33 +403,13 @@ public class ChatService implements ChatStreamExecutor {
     }
 
     /**
-     * AB-5c-2：模型×时段使用采集（runStream 返回侧=JSON/SSE 两路径公共完成点——
-     * runStreamInternal 阻塞至图完成，SSE 仅经 listener 旁路推送）。E-33：flag 默认关=
-     * 零调用零 DB 写；fail-open 不影响主流程。模型 key 取实际路由值（ModelRoutingContext
-     * .routed()，本方法仍在 runWith 作用域内=ThreadLocal 未清），无路由回落请求级模型，
-     * 双空则不计。ttft 经 TtftChannel.take(requestId) 尽力取值（TraceContext 未激活=null
-     * 容忍，Port 侧 CASE WHEN 不触碰均值）。package 供测试直连（V-1 先例）。
+     * AB-5c-2：模型×时段使用采集（AC-3a 起薄委托 {@link ProfileCollector#collectModelUsage}
+     * ——语义/javadoc 随门面迁移；既有测试与 runStream 调用点零 diff）。
      */
     void collectModelUsage(ChatStreamExecutor.ChatStreamPrepared prepared,
                            ChatStreamExecutor.ChatStreamResult result) {
-        if (!profileSlotEnabled || profileSlotPort == null) {
-            return;
-        }
-        try {
-            String routed = ModelRoutingContext.routed();
-            String modelKey = routed != null && !routed.isBlank() ? routed : prepared.model();
-            if (modelKey == null || modelKey.isBlank()) {
-                return;
-            }
-            Long ttftRaw = TraceContext.active()
-                    ? TtftChannel.take(TraceContext.current().requestId) : null;
-            Integer ttftMs = ttftRaw == null ? null : ttftRaw.intValue();
-            profileSlotPort.incrementModelUsage(prepared.userId(), modelKey,
-                    slotOf(java.time.LocalDateTime.now()),
-                    result == null ? 0L : result.aiTokens(), ttftMs);
-        } catch (Exception e) {
-            log.warn("[ProfileSlot] 模型使用采集失败（不影响主流程）: userId={}, err={}",
-                    prepared.userId(), e.getMessage());
+        if (profileCollector != null) {
+            profileCollector.collectModelUsage(prepared, result);
         }
     }
 

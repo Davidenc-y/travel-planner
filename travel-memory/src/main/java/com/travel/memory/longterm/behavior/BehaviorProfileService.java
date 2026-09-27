@@ -11,6 +11,8 @@ import com.travel.memory.repository.UserBehaviorProfileMapper;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
@@ -65,6 +67,24 @@ public class BehaviorProfileService {
         this.tripFactsPort = tripFactsPort;
         this.props = props;
         this.profileSlotPort = profileSlotPort;
+    }
+
+    // AC-2b：推断回写接线依赖——optional setter 注入（AC-1a/AC-1c 先例，6 参构造零变动）；
+    // E-33：travel.profile.style-inference-enabled 与 planning yml 同键（默认 false=零回写）
+    private ObjectProvider<InferredStylePort> inferredStylePort;
+
+    @Value("${travel.profile.style-inference-enabled:false}")
+    private boolean styleInferenceEnabled = false;
+
+    @Autowired(required = false)
+    void setInferredStylePort(ObjectProvider<InferredStylePort> inferredStylePort) {
+        this.inferredStylePort = inferredStylePort;
+    }
+
+    void setInferredStylePortForTest(ObjectProvider<InferredStylePort> inferredStylePort,
+                                     boolean styleInferenceEnabled) {
+        this.inferredStylePort = inferredStylePort;
+        this.styleInferenceEnabled = styleInferenceEnabled;
     }
 
     /**
@@ -187,16 +207,42 @@ public class BehaviorProfileService {
         if (userId == null || userId <= 0 || !props.isComputeEnabled()) {
             return;
         }
-        recompute(userId);
+        UserBehaviorProfile row = recompute(userId);
+        applyInferredStyleIfEnabled(userId, row);
     }
 
-    /** 同步重算（有界查询 + upsert；异常不外抛）。 */
-    public void recompute(Long userId) {
-        if (userId == null || userId <= 0) {
+    /**
+     * AC-2b：推断→回写接线（recompute 成功收口后调；仅 recomputeIfEnabled 触发点回写，
+     * getBehavior 懒重算路径不回写）。E-33：flag 默认关=零回写；推断双 null（样本不足，
+     * AC-2a 规则）不调端口；整段 try-catch fail-open 不影响重算主链路（P0⑥ 同构）。
+     */
+    void applyInferredStyleIfEnabled(Long userId, UserBehaviorProfile row) {
+        if (!styleInferenceEnabled || inferredStylePort == null || row == null) {
             return;
         }
+        try {
+            String style = inferTravelStyle(row);
+            String consume = inferConsumeLevel(row);
+            if (style == null && consume == null) {
+                return;
+            }
+            InferredStylePort port = inferredStylePort.getIfAvailable();
+            if (port != null) {
+                port.applyInferredStyle(userId, style, consume);
+            }
+        } catch (Exception e) {
+            log.warn("[BehaviorProfile] 风格推断回写失败（不影响重算）: userId={}, error={}",
+                    userId, e.getMessage());
+        }
+    }
+
+    /** 同步重算（有界查询 + upsert；异常不外抛）。AC-2b：返回成功重算行（失败/单飞让位=null，供回写接线消费）。 */
+    public UserBehaviorProfile recompute(Long userId) {
+        if (userId == null || userId <= 0) {
+            return null;
+        }
         if (inFlight.putIfAbsent(userId, Boolean.TRUE) != null) {
-            return; // 已有重算在进行
+            return null; // 已有重算在进行
         }
         try {
             LocalDateTime now = LocalDateTime.now();
@@ -219,9 +265,11 @@ public class BehaviorProfileService {
             behaviorMapper.insert(row);
             log.info("[BehaviorProfile] 重算完成: userId={}, trips={}, sessions={}, peak={}",
                     userId, agg.tripCount, agg.sessionCount, activeHourPeakText(agg.activeHours));
+            return row;
         } catch (Exception e) {
             log.warn("[BehaviorProfile] 重算失败（不影响主流程，下次重试）: userId={}, error={}",
                     userId, e.getMessage());
+            return null;
         } finally {
             inFlight.remove(userId);
         }
@@ -434,5 +482,69 @@ public class BehaviorProfileService {
         boolean sessionsOk = row.getSessionCount() != null
                 && row.getSessionCount() >= props.getMinSessions();
         return tripsOk || sessionsOk;
+    }
+
+    // ==== AC-2a：行为→风格推断引擎（纯静态函数；接线归 AC-2b，E-33 默认关）====
+
+    /** AC-2a：travel_style 推断分位阈值（方案 §一 AC-2a 硬编码：p75<2000 经济 / 2000~8000 舒适 / >8000 豪华） */
+    static final BigDecimal STYLE_P75_ECO_UPPER = new BigDecimal("2000");
+    static final BigDecimal STYLE_P75_LUX_LOWER = new BigDecimal("8000");
+    /** AC-2a：consume_level 推断分位阈值（p50 三档：方案"类似映射"具体化，设计依据=预算分位数与档位经验对齐） */
+    static final BigDecimal CONSUME_P50_ECO_UPPER = new BigDecimal("1500");
+    static final BigDecimal CONSUME_P50_STD_UPPER = new BigDecimal("5000");
+    /** AC-2a：样本量门槛（方案：trip_count<3→null，样本不足不推断） */
+    static final int INFERENCE_MIN_TRIPS = 3;
+
+    /**
+     * AC-2a：budget_p75 分位数 → travel_style 推断（纯函数零副作用；接线归 AC-2b）。
+     *
+     * <p><b>值域裁定（非 P0 留痕）</b>：方案写 "&lt;2000→ECONOMICAL"，但既有校验器
+     * F70（{@code isValidTravelStyle}）合法值域=ECONOMY/COMFORT/LUXURY——推断输出若为
+     * ECONOMICAL 将被写路径校验拒绝。以既有值域为准：输出 ECONOMY。</p>
+     *
+     * @return ECONOMY/COMFORT/LUXURY；trip_count&lt;3 或 budget_p75 缺失=null（样本不足不推断）
+     */
+    public static String inferTravelStyle(UserBehaviorProfile p) {
+        if (p == null || p.getTripCount() == null || p.getTripCount() < INFERENCE_MIN_TRIPS) {
+            return null;
+        }
+        BigDecimal p75 = p.getBudgetP75();
+        if (p75 == null) {
+            return null;
+        }
+        if (p75.compareTo(STYLE_P75_ECO_UPPER) < 0) {
+            return "ECONOMY";
+        }
+        if (p75.compareTo(STYLE_P75_LUX_LOWER) > 0) {
+            return "LUXURY";
+        }
+        return "COMFORT";
+    }
+
+    /**
+     * AC-2a：budget_p50 分位数 → consume_level 推断（纯函数零副作用；接线归 AC-2b）。
+     *
+     * <p><b>值域裁定（非 P0 留痕）</b>：方案写"ECONOMICAL/STANDARD/PREMIUM/DELUXE"四档，
+     * 但既有校验器 M11-4（{@code isValidConsumeLevel}）合法值域仅
+     * ECONOMICAL/STANDARD/COMFORT 三档（无 PREMIUM/DELUXE）——按合法值域三档映射，
+     * 原方案高档并入 COMFORT（当前列值域的最高合法档）。</p>
+     *
+     * @return ECONOMICAL/STANDARD/COMFORT；trip_count&lt;3 或 budget_p50 缺失=null
+     */
+    public static String inferConsumeLevel(UserBehaviorProfile p) {
+        if (p == null || p.getTripCount() == null || p.getTripCount() < INFERENCE_MIN_TRIPS) {
+            return null;
+        }
+        BigDecimal p50 = p.getBudgetP50();
+        if (p50 == null) {
+            return null;
+        }
+        if (p50.compareTo(CONSUME_P50_ECO_UPPER) < 0) {
+            return "ECONOMICAL";
+        }
+        if (p50.compareTo(CONSUME_P50_STD_UPPER) > 0) {
+            return "COMFORT";
+        }
+        return "STANDARD";
     }
 }

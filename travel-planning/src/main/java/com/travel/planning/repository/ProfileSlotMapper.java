@@ -5,6 +5,7 @@ import org.apache.ibatis.annotations.Insert;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.annotations.Select;
+import org.apache.ibatis.annotations.Update;
 
 import java.util.List;
 
@@ -27,4 +28,15 @@ public interface ProfileSlotMapper {
     @Select("SELECT user_id, slot_id, use_count, preferred_tags, preferred_models, updated_at "
             + "FROM t_user_profile_slot WHERE user_id = #{userId} ORDER BY slot_id")
     List<ProfileSlot> selectByUser(@Param("userId") Long userId);
+
+    /** AC-1c（L16）：聚合写前确保行在（零计数行，不污染 use_count 语义；已存在=无操作） */
+    @Insert("INSERT IGNORE INTO t_user_profile_slot (user_id, slot_id, use_count) "
+            + "VALUES (#{userId}, #{slotId}, 0)")
+    int ensureRow(@Param("userId") Long userId, @Param("slotId") int slotId);
+
+    /** AC-1c（L16）：聚合列整行回写（两列成对透传，未涉及侧原值保持） */
+    @Update("UPDATE t_user_profile_slot SET preferred_tags = #{tags}, preferred_models = #{models} "
+            + "WHERE user_id = #{userId} AND slot_id = #{slotId}")
+    int updateAggregates(@Param("userId") Long userId, @Param("slotId") int slotId,
+                         @Param("tags") String tags, @Param("models") String models);
 }

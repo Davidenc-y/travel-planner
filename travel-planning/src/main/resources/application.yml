@@ -137,8 +137,10 @@ travel:
     user-ids: ${ADMIN_USER_IDS:2}
   # AB-5c：用户画像结构化采集开关（默认关=E-33 关闭态零调用零 DB 写，审计实弹开启；
   # Nacos dataId 同步指令见 docs/zcode/20260926_review/AB批人工操作手册.md 操作④）
+  # AC-2b：行为推断风格回写开关（默认关=E-33 零回写，AC-2c/审计实弹开启）
   profile:
     slot-enabled: false
+    style-inference-enabled: false
   # F104 P1：MinIO 业务对象存储（头像 avatars 桶）
   minio:
     endpoint: http://${MIDDLEWARE_HOST:192.168.253.129}:9000
