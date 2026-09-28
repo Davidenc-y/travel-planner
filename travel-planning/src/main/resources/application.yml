@@ -14,9 +14,10 @@ server:
     accept-count: 100  # 默认值显式（Boot 默认=100，OS backlog）
 
 spring:
-  # AD-4b: Virtual Threads（Boot 3.5 行为等价=容量倍增）
+  # AE-1a: Virtual Threads 键名修正（spring.threads.virtual.enabled 嵌套结构；AD-4b 平铺 virtual: true 为无效键=Boot 不识别，VT 从未生效）
   threads:
-    virtual: true
+    virtual:
+      enabled: true
   # X-1b：Nacos 配置中心接线（E-33：NACOS_ENABLED=false=整体关闭，禁用解析器跳过 import=零键值变化；
   # optional: 前缀容忍 dataId 缺席；dataId 灌配见 docs/zcode/20260924_review/Nacos部署与灌配手册.md）
   config:
@@ -138,12 +139,9 @@ travel:
   # M11-3：可靠性看板管理员白名单（空=无管理员，生产用环境变量 ADMIN_USER_IDS 注入）
   admin:
     user-ids: ${ADMIN_USER_IDS:2}
-  # AB-5c：用户画像结构化采集开关（默认关=E-33 关闭态零调用零 DB 写，审计实弹开启；
-  # Nacos dataId 同步指令见 docs/zcode/20260926_review/AB批人工操作手册.md 操作④）
-  # AC-2b：行为推断风格回写开关（默认关=E-33 零回写，AC-2c/审计实弹开启）
-  profile:
-    slot-enabled: false
-    style-inference-enabled: false
+  # AE-2b：profile.slot-enabled/style-inference-enabled 已上收 Nacos travel-planning.yaml（wave-1 集中化；
+  # 消费点 @Value 代码默认均 false=E-33 关闭态——chat-domain ContextComposer/ProfileCollector/
+  # TravelProfileServiceImpl + travel-memory BehaviorProfileServiceImpl，键缺省即默认关，各环境行为中性）
   # F104 P1：MinIO 业务对象存储（头像 avatars 桶）
   minio:
     endpoint: http://${MIDDLEWARE_HOST:192.168.253.129}:9000

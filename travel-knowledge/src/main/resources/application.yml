@@ -5,17 +5,20 @@
 # ============ AB-2a：Tomcat 连接器保护三键（L13） ============
 # 三键=Spring Boot 默认值显式化（E-33 零行为变更）：80VUS 复压暴露连接器无显式保护面（L13），
 # 显式化后极端保护调优有唯一落点；Nacos dataId 同步指令见 docs/zcode/20260926_review/AB批人工操作手册.md 操作④。
+# AE 审计 AR-2：max 200→400 对齐 planning 域口径（AD AR-2 声称 200→400 实仅落 planning/local 面，
+# 本处为第三面遗留；三面同查 local/tracked/Nacos 均已 400）。
 server:
   tomcat:
     threads:
-      max: 200  # 默认值显式（Boot 默认=200）
+      max: 400  # AE 审计 AR-2：200→400 对齐 planning（VT 开启下按需创建零代价）
     max-connections: 8192  # 默认值显式（Boot 默认=8192）
     accept-count: 100  # 默认值显式（Boot 默认=100，OS backlog）
 
 spring:
-  # AD-4b: Virtual Threads（行为等价）
+  # AE-1a: Virtual Threads 键名修正（spring.threads.virtual.enabled 嵌套结构；AD-4b 平铺 virtual: true 为无效键=Boot 不识别，VT 从未生效）
   threads:
-    virtual: true
+    virtual:
+      enabled: true
   # X-1b：Nacos 配置中心接线（E-33：NACOS_ENABLED=false=整体关闭，禁用解析器跳过 import=零键值变化；
   # optional: 前缀容忍 dataId 缺席；dataId 灌配见 docs/zcode/20260924_review/Nacos部署与灌配手册.md）
   config:
