@@ -2,6 +2,7 @@ package com.travel.knowledge.rag.service;
 
 import com.travel.common.exception.RagRetrievalException;
 import com.travel.common.util.JsonUtils;
+import com.travel.knowledge.rag.config.TravelConfigKeys;
 import com.travel.knowledge.rag.model.QueryIntent;
 import com.travel.knowledge.rag.model.SearchResult;
 import com.travel.knowledge.rag.router.AutoRagRouterAgent;
@@ -63,7 +64,7 @@ public class RagDispatcher {
     private HedgeInFlightRegistry hedgeRegistry;
 
     /** S-B2b：hedge-enabled 默认 false=预启关闭（关闭态逐字节等价，E-33） */
-    @Value("${travel.rag.hedge-enabled:false}")
+    @Value("${" + TravelConfigKeys.RAG_HEDGE_ENABLED + ":false}")
     private boolean hedgeEnabled;
 
     /** S-B2b：预启专用虚拟线程池（F46：与两 router 同 idiom，每类自有池，不共用公共 ForkJoinPool） */

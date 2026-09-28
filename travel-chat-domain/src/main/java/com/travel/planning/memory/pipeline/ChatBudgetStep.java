@@ -208,6 +208,16 @@ public class ChatBudgetStep implements ChatPipelineStep {
                 candidates = "[]";
             }
         }
+        // AF 审计 AR-4 终点守卫（2026-09-28 实弹命中幻觉链闭环）：PLANNING/REFINE 下候选终态为
+        // 空（检索空/RagJudge 剥离/hard-filter 全滤）时注入拒答指引——ContextComposer:191 对 "[]"
+        // 省略整段，监督者收不到任何知识段即按模板编造景点（实测"中科院物理研究所 评分4.7"）；
+        // 服务层 abstain 文本（KnowledgeRetrievalServiceImpl 空分支/all-low 分支）也会被 Judge
+        // 剥回 "[]"，故守卫必须位于 judge 之后、compose 之前。RECALL 豁免（回顾类依赖会话知识
+        // 而非景点候选，注入拒答会误伤合法回顾回答）。回滚=删除本 if 块。
+        if ((intent == ChatIntent.PLANNING || intent == ChatIntent.REFINE)
+                && (candidates == null || candidates.isBlank() || "[]".equals(candidates.trim()))) {
+            candidates = com.travel.common.util.PromptFiles.get("rag_abstain_note");
+        }
         // M3-9：上下文组装与四档预算兜底收敛到 ContextComposer（行为等价）
         ContextComposer.ComposedContext cc = contextComposer.compose(sessionId, userId,
                 profileContext, historySection, consensus, sessionContext, candidates, message,

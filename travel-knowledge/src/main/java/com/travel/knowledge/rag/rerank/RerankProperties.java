@@ -26,4 +26,7 @@ public class RerankProperties {
 
     /** MR-B1：rerank 低置信阈值门控（E-33 默认 0.0=关闭；(0,1] 生效，topScore&lt;threshold 判低置信） */
     private double gateThreshold = 0.0;
+
+    /** AF-1a：hard 级阈值（0.0=关闭 hard 标记，E-33；初值建议 0.02 由 Nacos 审计实弹窗配置，代码默认关闭） */
+    private double gateHardThreshold = 0.0;
 }

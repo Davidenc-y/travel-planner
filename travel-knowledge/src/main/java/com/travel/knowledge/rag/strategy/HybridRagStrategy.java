@@ -1,5 +1,6 @@
 package com.travel.knowledge.rag.strategy;
 
+import com.travel.knowledge.rag.config.TravelConfigKeys;
 import com.travel.knowledge.rag.retrieval.HydeQueryRewriter;
 import com.travel.knowledge.rag.retrieval.LlmQueryExpander;
 import com.travel.knowledge.rag.rerank.RerankGate;
@@ -67,7 +68,7 @@ public class HybridRagStrategy extends AbstractRagStrategy {
     /** S-B2/B-2a（L1c）：对冲单飞注册表（optional 注入，bean 缺省=关闭态零变更，构造签名零变更——MR-D2 先例） */
     private HedgeInFlightRegistry hedgeRegistry;
     /** S-B2：hedge-enabled 默认 false=关闭态逐字节等价（E-33） */
-    @Value("${travel.rag.hedge-enabled:false}")
+    @Value("${" + TravelConfigKeys.RAG_HEDGE_ENABLED + ":false}")
     private boolean hedgeEnabled;
 
     /** MR-D2：optional 注入（bean 缺省=现状单路，构造签名零变更） */

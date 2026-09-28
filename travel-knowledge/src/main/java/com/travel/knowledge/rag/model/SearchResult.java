@@ -48,6 +48,10 @@ public class SearchResult {
     @JsonInclude(JsonInclude.Include.NON_NULL)
     private Boolean lowConfidence;
 
+    /** AF-1a：hard 级低置信标记（topScore &lt; gate-hard-threshold；注入 hard-filter 态唯一丢弃依据；NON_NULL 同 lowConfidence 保门控关时字节等价，E-33） */
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    private Boolean hardLowConfidence;
+
     // ===== M8-1：结构化事实字段（由 AttractionEnricher 从 MySQL t_attraction 补全）=====
     // null 语义约定（全链统一，M8-2/3/4 依赖）：字段为 null 表示知识库无此数据
     //（触发 M8-4 联网兜底判定）；禁止使用空字符串（enricher 统一转换为 null）。

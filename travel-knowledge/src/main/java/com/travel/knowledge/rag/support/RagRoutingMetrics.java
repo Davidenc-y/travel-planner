@@ -25,6 +25,9 @@ public class RagRoutingMetrics {
     private final Counter rerankFallback;
     /** M8-2：检索降级计数（es_fail / milvus_fail / empty_relax / enrich_fail） */
     private final Counter degraded;
+    /** AF-2a：Tavily 上游抖动观测（G2：SNI 选择性阻断→IOException 重试一次，E-52） */
+    private final Counter tavilyRetryTotal;
+    private final Counter tavilyRetryRecovered;
 
     public RagRoutingMetrics(MeterRegistry registry) {
         this.registry = registry;
@@ -47,6 +50,12 @@ public class RagRoutingMetrics {
                 .register(registry);
         this.degraded = Counter.builder("rag.routing.degraded")
                 .description("检索链路降级次数（按 reason 分桶）")
+                .register(registry);
+        this.tavilyRetryTotal = Counter.builder("rag.tavily.retry.total")
+                .description("Tavily IOException 重试次数")
+                .register(registry);
+        this.tavilyRetryRecovered = Counter.builder("rag.tavily.retry.recovered")
+                .description("Tavily 重试恢复次数（重发 send 成功口径）")
                 .register(registry);
     }
 
@@ -93,5 +102,24 @@ public class RagRoutingMetrics {
                 .register(registry)
                 .increment();
         degraded.increment();
+    }
+
+    /** AF-2a：记录一次 Tavily IOException 重试（重发前计数，recordRerank 同款模式）。 */
+    public void recordTavilyRetry() {
+        tavilyRetryTotal.increment();
+    }
+
+    /** AF-2a：记录一次 Tavily 重试恢复（重发 send 成功口径，send 后 2xx/解析成败不再区分）。 */
+    public void recordTavilyRetryRecovered() {
+        tavilyRetryRecovered.increment();
+    }
+
+    /** AF-2a：重试计数读取（观测/单测断言面）。 */
+    public double tavilyRetryTotalCount() {
+        return tavilyRetryTotal.count();
+    }
+
+    public double tavilyRetryRecoveredCount() {
+        return tavilyRetryRecovered.count();
     }
 }

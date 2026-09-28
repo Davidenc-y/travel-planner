@@ -10,6 +10,7 @@ import com.travel.core.stream.StreamPreflight;
 import com.travel.core.stream.StreamRequest;
 import com.travel.stream.service.ChatStreamService;
 import com.travel.stream.service.ChatTransportAttrs;
+import com.travel.memory.sessionstore.SessionStorePort;
 import com.travel.planning.service.ChatService;
 import com.travel.planning.service.ChatTurnPrewriteService;
 import com.travel.stream.service.TurnCancellationRegistry;
@@ -46,7 +47,7 @@ public class ChatController {
     /** AA-2（T4）：幂等预写（sendBeacon fire-and-forget 占位行） */
     private final ChatTurnPrewriteService chatTurnPrewriteService;
     /** M28-15：系统提示消息落库（t_chat_message 唯一直连类） */
-    private final com.travel.planning.memory.sessionstore.SessionStoreServiceImpl sessionStoreService;
+    private final SessionStorePort sessionStoreService;
     private final ChatStreamService chatStreamService;
     private final SseStreamAdapter sseStreamAdapter;
     private final ChatStreamProperties chatStreamProps;

@@ -55,13 +55,25 @@ public class KnowledgeRetrievalServiceImpl implements KnowledgeRetrievalService 
             if (resp == null || resp.getData() == null || resp.getData().isEmpty()) {
                 log.warn("[KnowledgeRetrieval] 检索为空: query={}", query);
                 markDegraded("knowledge_empty", query);
-                return "[]";
+                // AF 审计 AR-4（2026-09-28 实弹命中）：空结果原先裸返回 "[]"——auto 路由对离域查询
+                // 按设计返回 0 条后，监督者 LLM 收到空候选仍按 PLANNING 形态生成，实测编造出
+                // 知识库不存在的景点（"中科院物理研究所 评分4.7"）；与 all-low-confidence 路径
+                // （rag_abstain_note）对齐，空结果同样注入拒答指引防幻觉。回滚=本分支改回 "[]"。
+                ragQualityCounters.recordAbstain();
+                return com.travel.common.util.PromptFiles.get("rag_abstain_note");
             }
             List<Map<String, Object>> compact = new ArrayList<>();
             int lowConfidenceDropped = 0;
             for (Map<String, Object> item : resp.getData()) {
                 // RK-1：filter 策略丢弃 RerankGate 标记的低置信候选（keep=旧全量注入行为）
-                if (injectionPolicy.isFilterEnabled() && Boolean.TRUE.equals(item.get("lowConfidence"))) {
+                // AF-1a：两级阈值解耦——hard-filter=只丢 hard 级（soft 级保留注入）；filter=现状丢全部 lowConfidence
+                boolean drop;
+                if (injectionPolicy.isHardFilterEnabled()) {
+                    drop = Boolean.TRUE.equals(item.get("hardLowConfidence")); // AF-1a：hard-filter 只丢 hard 级
+                } else {
+                    drop = injectionPolicy.isFilterEnabled() && Boolean.TRUE.equals(item.get("lowConfidence")); // 现状分支逐字保留
+                }
+                if (drop) {
                     lowConfidenceDropped++;
                     ragQualityCounters.recordLowConfidenceDropped(1);
                     continue;
@@ -90,7 +102,10 @@ public class KnowledgeRetrievalServiceImpl implements KnowledgeRetrievalService 
                 compact.add(c);
             }
             // RK-1：低置信过滤统计与全滤拒答语义（模板 rag_abstain_note 由 RK-2/A-3 落盘，同批推送）
-            if (injectionPolicy.isFilterEnabled() && lowConfidenceDropped > 0) {
+            // AF 审计 AR-1（2026-09-28）：全滤拒答块原先只认 filter 态——hard-filter 态全丢时不注入
+            // 拒答指引（幻觉防线缺口，flash R317 观察②裁决为缺陷）；两态统一纳入。
+            if ((injectionPolicy.isFilterEnabled() || injectionPolicy.isHardFilterEnabled())
+                    && lowConfidenceDropped > 0) {
                 log.info("[RagInjection] lowConfidenceDropped={} kept={}", lowConfidenceDropped, compact.size());
                 if (compact.isEmpty()) {
                     // 全部低置信 → 拒答语义：空资料 + 拒答指引，并按既有降级方式记录原因

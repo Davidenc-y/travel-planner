@@ -63,18 +63,29 @@ public class RerankGate {
      * 结构化有效查询（有城市/类型）仍走基础阈值，T6 不受影响。
      */
     public List<SearchResult> apply(List<SearchResult> results, boolean intentEmpty) {
-        if (properties.getGateThreshold() <= 0.0 || results == null || results.isEmpty()) {
+        // AF 审计 AR-2（2026-09-28）：早退条件改为双阈值联合——原 gate<=0 单键早退会把
+        // soft=0+hard>0 的 hard-only 组合一并吞掉（hard 段静默失效，flash R317 观察①裁决为缺陷）；
+        // 两阈值全关才走零路径（E-33 字节等价面不变）。
+        if ((properties.getGateThreshold() <= 0.0 && properties.getGateHardThreshold() <= 0.0)
+                || results == null || results.isEmpty()) {
             return results;
         }
         List<Double> scores = results.stream().map(SearchResult::getScore).toList();
-        double threshold = intentEmpty
-                ? Math.max(properties.getGateThreshold(), EMPTY_INTENT_THRESHOLD)
-                : properties.getGateThreshold();
         double topScore = scores.stream().mapToDouble(Double::doubleValue).max().orElse(0.0);
-        boolean gated = topScore < threshold;
-        if (gated) {
-            log.info("[RerankGate] topScore={} threshold={} intentEmpty={} gated=true", topScore, threshold, intentEmpty);
-            results.forEach(r -> r.setLowConfidence(Boolean.TRUE));
+        if (properties.getGateThreshold() > 0.0) {
+            double threshold = intentEmpty
+                    ? Math.max(properties.getGateThreshold(), EMPTY_INTENT_THRESHOLD)
+                    : properties.getGateThreshold();
+            if (topScore < threshold) {
+                log.info("[RerankGate] topScore={} threshold={} intentEmpty={} gated=true", topScore, threshold, intentEmpty);
+                results.forEach(r -> r.setLowConfidence(Boolean.TRUE));
+            }
+        }
+        // AF-1a：hard 级标记（默认 0.0=零路径；hard 阈值与 soft 独立判定，可同时命中）
+        double hardThreshold = properties.getGateHardThreshold();
+        if (hardThreshold > 0.0 && topScore < hardThreshold) {
+            log.info("[RerankGate] topScore={} hardThreshold={} hardGated=true", topScore, hardThreshold);
+            results.forEach(r -> r.setHardLowConfidence(Boolean.TRUE));
         }
         return results;
     }

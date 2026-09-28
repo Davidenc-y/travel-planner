@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.travel.common.util.JsonUtils;
 import com.travel.core.guard.CircuitBreaker;
 import com.travel.core.guard.RateLimiter;
+import com.travel.knowledge.rag.support.RagRoutingMetrics;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
@@ -35,19 +36,24 @@ public class TavilyWebSearchAdapter implements WebSearchPort {
     private final RateLimiter rateLimiter;
     private final CircuitBreaker circuitBreaker;
     private final TavilyQuotaManager quotaManager;
+    /** AF-2a：上游抖动观测（retry_total/retry_recovered，可空=测试容错，同 quotaManager 惯例） */
+    private final RagRoutingMetrics metrics;
 
     @Autowired
-    public TavilyWebSearchAdapter(WebSearchProperties properties, TavilyQuotaManager quotaManager) {
+    public TavilyWebSearchAdapter(WebSearchProperties properties, TavilyQuotaManager quotaManager,
+                                  RagRoutingMetrics metrics) {
         this(properties, HttpClient.newBuilder()
                 .connectTimeout(Duration.ofSeconds(5))
-                .build(), quotaManager);
+                .build(), quotaManager, metrics);
     }
 
     /** 测试注入：可替换 HttpClient（默认 JDK 内置，零新依赖） */
-    TavilyWebSearchAdapter(WebSearchProperties properties, HttpClient httpClient, TavilyQuotaManager quotaManager) {
+    TavilyWebSearchAdapter(WebSearchProperties properties, HttpClient httpClient,
+                           TavilyQuotaManager quotaManager, RagRoutingMetrics metrics) {
         this.properties = properties;
         this.httpClient = httpClient;
         this.quotaManager = quotaManager;
+        this.metrics = metrics;
         this.rateLimiter = new RateLimiter(Math.max(1, properties.getRateLimitPerMinute()));
         this.circuitBreaker = new CircuitBreaker(3, 60_000, 30_000);
     }
@@ -96,10 +102,28 @@ public class TavilyWebSearchAdapter implements WebSearchPort {
                 try {
                     response = httpClient.send(
                             request, HttpResponse.BodyHandlers.ofString());
-                } catch (java.io.IOException | InterruptedException e) {
-                    if (e instanceof InterruptedException) {
-                        Thread.currentThread().interrupt();
+                } catch (java.io.IOException first) {
+                    // AF-2a：SNI 选择性阻断缓解（G2）——IOException 后 sleep 200ms 同请求重发一次
+                    //（重发重新解析 DNS≈2/3 概率换 IP；E-52：重试不重复扣配额——consume 仍在成功解析后）；
+                    // InterruptedException 不重试（取消信号），第二次仍 IOException → 既有 IllegalStateException（failover 链不变）
+                    if (metrics != null) {
+                        metrics.recordTavilyRetry();
                     }
+                    try {
+                        Thread.sleep(200);
+                        response = httpClient.send(
+                                request, HttpResponse.BodyHandlers.ofString());
+                        if (metrics != null) {
+                            metrics.recordTavilyRetryRecovered();
+                        }
+                    } catch (InterruptedException ie) {
+                        Thread.currentThread().interrupt();
+                        throw new IllegalStateException("Tavily HTTP 调用失败", first);
+                    } catch (java.io.IOException second) {
+                        throw new IllegalStateException("Tavily HTTP 调用失败", second);
+                    }
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
                     throw new IllegalStateException("Tavily HTTP 调用失败", e);
                 }
                 if (response.statusCode() < 200 || response.statusCode() >= 300) {

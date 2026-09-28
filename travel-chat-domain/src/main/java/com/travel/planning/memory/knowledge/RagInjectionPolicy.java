@@ -14,11 +14,16 @@ import org.springframework.stereotype.Component;
 @ConfigurationProperties(prefix = "travel.rag.attraction-candidates")
 public class RagInjectionPolicy {
 
-    /** filter | keep */
+    /** filter（默认）| hard-filter（AF-1a）| keep */
     private String lowConfidencePolicy = "filter";
 
     public boolean isFilterEnabled() {
         return "filter".equalsIgnoreCase(lowConfidencePolicy);
+    }
+
+    /** AF-1a：hard-filter=只丢弃 hardLowConfidence 候选（soft 保留注入）；filter=现状丢全部 lowConfidence；keep=全注入 */
+    public boolean isHardFilterEnabled() {
+        return "hard-filter".equalsIgnoreCase(lowConfidencePolicy);
     }
 
     public String getLowConfidencePolicy() { return lowConfidencePolicy; }
