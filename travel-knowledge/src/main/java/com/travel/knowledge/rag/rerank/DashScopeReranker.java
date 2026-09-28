@@ -1,6 +1,7 @@
 package com.travel.knowledge.rag.rerank;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.travel.knowledge.rag.config.TravelConfigKeys;
 import com.travel.common.util.JsonUtils;
 import com.travel.knowledge.rag.model.SearchResult;
 import com.travel.knowledge.rag.support.RagRoutingMetrics;
@@ -39,7 +40,7 @@ import java.util.concurrent.TimeUnit;
  */
 @Slf4j
 @Component
-@ConditionalOnProperty(name = "travel.rag.rerank.type", havingValue = "dashscope")
+@ConditionalOnProperty(name = TravelConfigKeys.RAG_RERANK_TYPE, havingValue = "dashscope")
 public class DashScopeReranker implements Reranker {
 
     private static final String ENDPOINT =

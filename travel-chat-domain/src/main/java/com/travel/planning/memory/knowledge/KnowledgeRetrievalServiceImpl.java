@@ -44,6 +44,14 @@ public class KnowledgeRetrievalServiceImpl implements KnowledgeRetrievalService 
     /** RK-13/D-5：线上质量计数器（abstain/lowconf/degraded，fail-open） */
     private final RagQualityCounters ragQualityCounters;
 
+    /** AG-2b：feign 失败话术开关（travel.rag.failure-note-enabled，默认 false=失败裸 "[]" 现状，E-33）；包级 setter 供测试（HybridRagStrategy 可选 setter 先例） */
+    @org.springframework.beans.factory.annotation.Value("${travel.rag.failure-note-enabled:false}")
+    private boolean failureNoteEnabled;
+
+    void setFailureNoteEnabled(boolean v) {
+        this.failureNoteEnabled = v;
+    }
+
     /**
      * 检索候选景点并返回紧凑 JSON 数组（结构化事实卡片）；
      * 失败/空返回 "[]"，不阻断流程。
@@ -140,6 +148,12 @@ public class KnowledgeRetrievalServiceImpl implements KnowledgeRetrievalService 
             log.warn("[KnowledgeRetrieval] 检索失败，降级空候选: {}", e.getMessage());
             markDegraded("knowledge_feign_fail", query);
             ragQualityCounters.recordDegraded();
+            // AG-2b：失败话术分离（G4）——feign 异常=瞬时故障，与空结果的"相关度过低"拒答话术
+            // 语义不同；默认 false 维持裸 "[]" 现状（E-33），开启后注入 transient 指引防监督者
+            // LLM 在无知识段时编造景点（AF 审计 AR-4 幻觉链的失败路径补面）。
+            if (failureNoteEnabled) {
+                return com.travel.common.util.PromptFiles.get("rag_transient_note");
+            }
             return "[]";
         }
     }

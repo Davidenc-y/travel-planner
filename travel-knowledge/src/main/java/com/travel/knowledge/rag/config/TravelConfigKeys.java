@@ -19,7 +19,7 @@ public final class TravelConfigKeys {
     /** S-B2 同族键（键路径断裂事故面）：hedge 并行补采开关（@Value 默认 false=关闭态逐字节等价，E-33） */
     public static final String RAG_HEDGE_ENABLED = "travel.rag.hedge-enabled";
 
-    /** rerank 实现类型（@Cond prefix 形态 ×2，登记未替换——见类注释） */
+    /** rerank 实现类型（AG-2c 已接线：DashScopeReranker/NoopReranker 两 @Cond name 引用本常量） */
     public static final String RAG_RERANK_TYPE = "travel.rag.rerank.type";
 
     private TravelConfigKeys() {

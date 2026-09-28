@@ -1,6 +1,7 @@
 package com.travel.knowledge.rag.rerank;
 
 import com.travel.knowledge.rag.model.SearchResult;
+import com.travel.knowledge.rag.config.TravelConfigKeys;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
@@ -16,7 +17,7 @@ import java.util.List;
  */
 @Slf4j
 @Component
-@ConditionalOnProperty(name = "travel.rag.rerank.type", havingValue = "none", matchIfMissing = true)
+@ConditionalOnProperty(name = TravelConfigKeys.RAG_RERANK_TYPE, havingValue = "none", matchIfMissing = true)
 public class NoopReranker implements Reranker {
 
     @Override

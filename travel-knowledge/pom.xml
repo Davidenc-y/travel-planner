@@ -126,6 +126,13 @@
             <groupId>com.alibaba.csp</groupId>
             <artifactId>sentinel-datasource-nacos</artifactId>
         </dependency>
+
+        <!-- AG-1a：GraphRAG 图内核（JGraphT 不可变快照，E-53；~1.6MB 零传递依赖；审批项已批——方案确认即批准） -->
+        <dependency>
+            <groupId>org.jgrapht</groupId>
+            <artifactId>jgrapht-core</artifactId>
+            <version>1.5.2</version>
+        </dependency>
     </dependencies>
 
     <build>

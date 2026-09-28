@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.travel.knowledge.repository.GraphNodeMapper">
+
+    <!-- 全量节点（启动/日级刷新加载用；E-53 热路径禁调） -->
+    <select id="selectAllNodes" resultType="com.travel.common.entity.GraphNode">
+        SELECT * FROM graph_node
+    </select>
+
+    <!-- 脏节点 id 列表（增量刷新触发判定用） -->
+    <select id="selectDirtyNodeIds" resultType="java.lang.Long">
+        SELECT id FROM graph_node WHERE dirty = 1
+    </select>
+
+    <!-- 清理脏标记（AG-1b 日级重建后维护位复位；先判空守卫——空列表不调用，E-53 运行时零实际写） -->
+    <update id="clearDirty">
+        UPDATE graph_node SET dirty = 0 WHERE id IN
+        <foreach collection="list" item="id" open="(" separator="," close=")">#{id}</foreach>
+    </update>
+</mapper>

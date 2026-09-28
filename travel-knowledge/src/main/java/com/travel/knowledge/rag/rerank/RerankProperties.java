@@ -29,4 +29,7 @@ public class RerankProperties {
 
     /** AF-1a：hard 级阈值（0.0=关闭 hard 标记，E-33；初值建议 0.02 由 Nacos 审计实弹窗配置，代码默认关闭） */
     private double gateHardThreshold = 0.0;
+
+    /** AG-2a：hard 段逐条模式（默认 false=组级现状逐字保留，E-33；true=组内逐条 score&lt;hard 判定标记，G2 修复） */
+    private boolean gateHardPerItem = false;
 }

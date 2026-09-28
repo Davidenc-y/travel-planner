@@ -82,10 +82,21 @@ public class RerankGate {
             }
         }
         // AF-1a：hard 级标记（默认 0.0=零路径；hard 阈值与 soft 独立判定，可同时命中）
+        // AG-2a：hard 段双模式——gateHardPerItem 默认 false=组级现状逐字保留（E-33 字节等价）；
+        // true=逐条 score<hardThreshold 判定标记（组内低分条精准标记，topScore 组日志仍打）
         double hardThreshold = properties.getGateHardThreshold();
-        if (hardThreshold > 0.0 && topScore < hardThreshold) {
-            log.info("[RerankGate] topScore={} hardThreshold={} hardGated=true", topScore, hardThreshold);
-            results.forEach(r -> r.setHardLowConfidence(Boolean.TRUE));
+        if (hardThreshold > 0.0) {
+            if (properties.isGateHardPerItem()) {
+                List<SearchResult> lowItems = results.stream()
+                        .filter(r -> r.getScore() < hardThreshold)
+                        .toList();
+                lowItems.forEach(r -> r.setHardLowConfidence(Boolean.TRUE));
+                log.info("[RerankGate] topScore={} hardThreshold={} perItem=true marked={}",
+                        topScore, hardThreshold, lowItems.size());
+            } else if (topScore < hardThreshold) {
+                log.info("[RerankGate] topScore={} hardThreshold={} hardGated=true", topScore, hardThreshold);
+                results.forEach(r -> r.setHardLowConfidence(Boolean.TRUE));
+            }
         }
         return results;
     }

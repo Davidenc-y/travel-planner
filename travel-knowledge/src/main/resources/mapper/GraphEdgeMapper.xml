@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.travel.knowledge.repository.GraphEdgeMapper">
+
+    <!-- 全量边（启动/日级刷新加载用；E-53 热路径禁调） -->
+    <select id="selectAllEdges" resultType="com.travel.common.entity.GraphEdge">
+        SELECT * FROM graph_edge
+    </select>
+</mapper>

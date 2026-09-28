@@ -1,6 +1,7 @@
 package com.travel.knowledge.rag.strategy;
 
 import com.travel.knowledge.rag.config.TravelConfigKeys;
+import com.travel.knowledge.rag.graph.GraphExpander;
 import com.travel.knowledge.rag.retrieval.HydeQueryRewriter;
 import com.travel.knowledge.rag.retrieval.LlmQueryExpander;
 import com.travel.knowledge.rag.rerank.RerankGate;
@@ -81,6 +82,14 @@ public class HybridRagStrategy extends AbstractRagStrategy {
     @Autowired(required = false)
     void setHedgeRegistry(HedgeInFlightRegistry hedgeRegistry) {
         this.hedgeRegistry = hedgeRegistry;
+    }
+
+    /** AG-1c：GraphExpander 邻域扩展器（optional 注入=MR-D2 先例：构造签名零变更；bean 缺省=null=挂点直通 fail-open） */
+    private GraphExpander graphExpander;
+
+    @Autowired(required = false)
+    void setGraphExpander(GraphExpander graphExpander) {
+        this.graphExpander = graphExpander;
     }
 
     /** 包内可见（S-B2a 单测观察用） */
@@ -197,7 +206,12 @@ public class HybridRagStrategy extends AbstractRagStrategy {
                 .collect(Collectors.toList());
         long rerankStart = System.currentTimeMillis();
         SpanCollector.Span rerankSpan = spanCollector.start("rerank", "rerank");
-        List<SearchResult> reranked = reranker.rerank(intent.rawQuery(), merged);
+        // AG-1c：GraphExpander 邻域扩展——graph-expand.enabled 默认 false=expand() 首行直通返回原列表
+        //（字节等价 E-33）；开启时扩展项入池被既有 rerank/gate 消费（pool 放大语义）；bean 缺省=null 直通（fail-open 双保险）
+        List<SearchResult> expanded = graphExpander != null
+                ? graphExpander.expand(merged)
+                : merged;
+        List<SearchResult> reranked = reranker.rerank(intent.rawQuery(), expanded);
         routingMetrics.recordRerank(System.currentTimeMillis() - rerankStart);
         if (rerankSpan != null) {
             spanCollector.end(rerankSpan, "ok", Map.of("candidates", merged.size()));
