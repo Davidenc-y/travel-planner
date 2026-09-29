@@ -77,6 +77,11 @@ public class GraphKernel {
         // 终审定稿：单循环同时建边+类型索引（旧骨架双循环残留已清理）
         Map<String, String> typeIdx = new HashMap<>();
         for (GraphEdge e : edgeMapper.selectAllEdges()) {
+            // AG 审计实弹修复（2026-09-29）：语义边名称解析可产出 src==dst 自环（实证 id=212
+            // SAME_TYPE 自环致 JGraphT addEdge 抛 "loops not allowed" 启动失败）——防御性跳过。
+            if (e.getSrcId() != null && e.getSrcId().equals(e.getDstId())) {
+                continue;
+            }
             if (g.containsVertex(e.getSrcId()) && g.containsVertex(e.getDstId())) {
                 DefaultWeightedEdge de = g.addEdge(e.getSrcId(), e.getDstId());
                 if (de != null) {
