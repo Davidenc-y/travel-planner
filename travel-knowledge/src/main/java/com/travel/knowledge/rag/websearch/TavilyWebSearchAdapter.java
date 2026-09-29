@@ -126,6 +126,17 @@ public class TavilyWebSearchAdapter implements WebSearchPort {
                     Thread.currentThread().interrupt();
                     throw new IllegalStateException("Tavily HTTP 调用失败", e);
                 }
+                if (response.statusCode() == 432) {
+                    // 2026-09-30 审计修复：432=计划额度耗尽（Redis 计数与 API 实际口径可能不一致——
+                    // 本机 SNI 选择性阻断期间失败的调用未计数，实际消耗高于 Redis 读数）。
+                    // 对齐 J-2c exhausted 语义：静默降级 empty（非错误），并把 Redis 计数补推到硬限，
+                    // 使 canSearch()/currentMode() 立即进入 exhausted 态（后续调用零外发）。
+                    if (quotaManager != null) {
+                        quotaManager.markExternallyExhausted();
+                    }
+                    log.warn("[WebSearch] Tavily 432 计划额度耗尽（API 实际口径）——标记 exhausted 并静默降级");
+                    return Optional.empty();
+                }
                 if (response.statusCode() < 200 || response.statusCode() >= 300) {
                     throw new IllegalStateException("Tavily HTTP " + response.statusCode());
                 }

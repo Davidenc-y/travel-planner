@@ -55,6 +55,22 @@ public class TavilyQuotaManager {
         return usedCount < monthlyCreditLimit;
     }
 
+    /**
+     * 2026-09-30 审计修复：外部证据表明额度已耗尽（如 API 432）——把计数补推到硬限。
+     * 场景：SNI 选择性阻断期间失败调用未计数，Redis 读数低于实际消耗；432 是 API 侧
+     * 权威口径，补推后 canSearch()/currentMode() 立即 exhausted，后续零外发零浪费。
+     */
+    public void markExternallyExhausted() {
+        String key = currentMonthKey();
+        Long count = redis.opsForValue().increment(key, monthlyCreditLimit);
+        if (count != null && count == monthlyCreditLimit) {
+            redis.expire(key, Duration.between(
+                    LocalDateTime.now(),
+                    YearMonth.now().atEndOfMonth().atTime(23, 59, 59)));
+        }
+        log.warn("[TavilyQuota] 外部证据(432)标记 exhausted: 计数补推至硬限 {}/{}", monthlyCreditLimit, monthlyCreditLimit);
+    }
+
     /** 消耗 1 credit（搜索成功后调用） */
     public void consume() {
         String key = currentMonthKey();
