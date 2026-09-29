@@ -11,12 +11,14 @@ import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.ConfigurationPropertiesBinding;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Primary;
 import org.springframework.core.convert.converter.Converter;
 import org.springframework.core.env.Environment;
+import org.springframework.data.redis.core.StringRedisTemplate;
 
 /**
  * M7：模型网关自动装配。
@@ -53,13 +55,16 @@ public class GatewayAutoConfig {
     /**
      * E-55（2026-09-29）：LLM token 预算硬闸（默认 true=用户授权的保护性行为变更，事故后立规）。
      * 小时 60 万+日 300 万双层；382 万/时的事故形态将被截断在 60 万。调整仅经 Nacos 显式配置。
+     * AI-3a：可选 Redis 共享层（redis-enabled 默认 false=E-33 进程内现状零变化；true=多实例共享口径）。
      */
     @Bean
     public LLMBudgetGuard llmBudgetGuard(
             @Value("${travel.ai.budget.enabled:true}") boolean enabled,
             @Value("${travel.ai.budget.daily-tokens:3000000}") long dailyTokens,
-            @Value("${travel.ai.budget.hourly-tokens:600000}") long hourlyTokens) {
-        return new LLMBudgetGuard(enabled, dailyTokens, hourlyTokens);
+            @Value("${travel.ai.budget.hourly-tokens:600000}") long hourlyTokens,
+            @Value("${travel.ai.budget.redis-enabled:false}") boolean redisEnabled,
+            ObjectProvider<StringRedisTemplate> redisProvider) {
+        return new LLMBudgetGuard(enabled, dailyTokens, hourlyTokens, redisEnabled, redisProvider);
     }
 
     @Bean

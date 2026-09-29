@@ -30,6 +30,13 @@
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter</artifactId>
         </dependency>
+        <!-- AI-3a/AR-3：预算闸可选 Redis 层（StringRedisTemplate 经 ObjectProvider 弱耦合；
+            optional=不向下游传递，运行时自动配置激活面零变化=E-33；同 artifact 已在 common/planning 在用） -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-data-redis</artifactId>
+            <optional>true</optional>
+        </dependency>
         <!-- DashScope 核心 SDK（非 starter，避免自动配置；版本由父 pom 管理） -->
         <dependency>
             <groupId>com.alibaba.cloud.ai</groupId>

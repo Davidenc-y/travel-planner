@@ -1,9 +1,13 @@
 package com.travel.aigateway.route;
 
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.data.redis.core.StringRedisTemplate;
 
+import java.time.Duration;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
@@ -40,24 +44,61 @@ public final class LLMBudgetGuard {
     private final boolean enabled;
     private final long dailyTokens;
     private final long hourlyTokens;
+    /** AI-3a：Redis 共享口径开关（默认 false=E-33 进程内现状零变化；true=多实例共享计数，AK 批开启） */
+    private final boolean redisEnabled;
+    private final ObjectProvider<StringRedisTemplate> redisProvider;
+
+    /** AR-3：Redis 键（日/时滚动窗，TTL 自清理） */
+    private static final String DAY_KEY_PREFIX = "ai:budget:d:";
+    private static final String HOUR_KEY_PREFIX = "ai:budget:h:";
+    private static final DateTimeFormatter DAY_FMT = DateTimeFormatter.BASIC_ISO_DATE;
+    private static final DateTimeFormatter HOUR_FMT = DateTimeFormatter.ofPattern("yyyyMMddHH");
+    private static final Duration DAY_KEY_TTL = Duration.ofHours(26);
+    private static final Duration HOUR_KEY_TTL = Duration.ofHours(2);
 
     private volatile String dayKey = "";
     private volatile String hourKey = "";
     private final AtomicLong dayUsed = new AtomicLong();
     private final AtomicLong hourUsed = new AtomicLong();
 
+    /** E-55 既有三参构造（既有单测/装配零破坏）：委托五参=Redis 层关闭。 */
     public LLMBudgetGuard(boolean enabled, long dailyTokens, long hourlyTokens) {
+        this(enabled, dailyTokens, hourlyTokens, false, null);
+    }
+
+    /** AI-3a：完整构造（ObjectProvider 可选注入——无 Redis bean 时 getIfAvailable()=null，GrayReleaseManager 同款先例）。 */
+    public LLMBudgetGuard(boolean enabled, long dailyTokens, long hourlyTokens,
+                          boolean redisEnabled, ObjectProvider<StringRedisTemplate> redisProvider) {
         this.enabled = enabled;
         this.dailyTokens = Math.max(0, dailyTokens);
         this.hourlyTokens = Math.max(0, hourlyTokens);
+        this.redisEnabled = redisEnabled;
+        this.redisProvider = redisProvider;
     }
 
-    /** 调用前预算检查（超限抛 LLMBudgetExceededException；关=直通） */
+    /** 调用前预算检查（超限抛 LLMBudgetExceededException；关=直通；Redis 开=共享口径读数，异常降级进程内） */
     public void checkBeforeCall() {
         if (!enabled) {
             return;
         }
         rollIfNeeded();
+        if (redisEnabled) {
+            long[] used = redisGetUsed();
+            if (used != null) {
+                if (used[0] >= dailyTokens) {
+                    throw new LLMBudgetExceededException(
+                            "LLM daily token budget exceeded (redis): used=" + used[0] + " limit=" + dailyTokens
+                                    + " (travel.ai.budget.daily-tokens; E-55/AR-3)");
+                }
+                if (used[1] >= hourlyTokens) {
+                    throw new LLMBudgetExceededException(
+                            "LLM hourly token budget exceeded (redis): used=" + used[1] + " limit=" + hourlyTokens
+                                    + " (travel.ai.budget.hourly-tokens; E-55/AR-3)");
+                }
+                return;
+            }
+            // Redis 不可用/异常=降级进程内（现状逻辑为 fallback 层），继续走进程内口径
+        }
         long d = dayUsed.get();
         long h = hourUsed.get();
         if (d >= dailyTokens) {
@@ -72,13 +113,16 @@ public final class LLMBudgetGuard {
         }
     }
 
-    /** 调用后按 usage 累计（usage 缺失/异常时按保守估值 4,000 计） */
+    /** 调用后按 usage 累计（usage 缺失/异常时按保守估值 4,000 计；Redis 开=INCRBY 共享记账，异常降级进程内） */
     public void recordAfterCall(Long usageTokens) {
         if (!enabled) {
             return;
         }
         rollIfNeeded();
         long add = usageTokens != null && usageTokens > 0 ? usageTokens : 4_000L;
+        if (redisEnabled && redisRecord(add)) {
+            return;
+        }
         dayUsed.addAndGet(add);
         hourUsed.addAndGet(add);
         if (log.isDebugEnabled() && (dayUsed.get() % 100_000) < add) {
@@ -107,6 +151,51 @@ public final class LLMBudgetGuard {
                 }
             }
         }
+    }
+
+    /** AR-3：Redis 读数（[日 used, 时 used]）；null=Redis 不可用/异常（调用方降级进程内）。 */
+    private long[] redisGetUsed() {
+        StringRedisTemplate redis = redisTemplate();
+        if (redis == null) {
+            return null;
+        }
+        try {
+            String dv = redis.opsForValue().get(DAY_KEY_PREFIX + LocalDate.now().format(DAY_FMT));
+            String hv = redis.opsForValue().get(HOUR_KEY_PREFIX + LocalDateTime.now().format(HOUR_FMT));
+            return new long[]{dv == null ? 0 : Long.parseLong(dv), hv == null ? 0 : Long.parseLong(hv)};
+        } catch (Exception e) {
+            log.warn("[LLMBudget] Redis 读数异常降级进程内: {}", e.getMessage());
+            return null;
+        }
+    }
+
+    /** AR-3：INCRBY 两键（首次设 TTL：日 26h/时 2h=滚动窗自清理）；false=Redis 不可用/异常（已降级进程内）。 */
+    private boolean redisRecord(long add) {
+        StringRedisTemplate redis = redisTemplate();
+        if (redis == null) {
+            return false;
+        }
+        try {
+            String dk = DAY_KEY_PREFIX + LocalDate.now().format(DAY_FMT);
+            Long dNew = redis.opsForValue().increment(dk, add);
+            if (dNew != null && dNew == add) {
+                redis.expire(dk, DAY_KEY_TTL);
+            }
+            String hk = HOUR_KEY_PREFIX + LocalDateTime.now().format(HOUR_FMT);
+            Long hNew = redis.opsForValue().increment(hk, add);
+            if (hNew != null && hNew == add) {
+                redis.expire(hk, HOUR_KEY_TTL);
+            }
+            return true;
+        } catch (Exception e) {
+            log.warn("[LLMBudget] Redis 记账异常降级进程内: {}", e.getMessage());
+            return false;
+        }
+    }
+
+    /** GrayReleaseManager 同款：无 Redis bean 时 getIfAvailable()=null。 */
+    private StringRedisTemplate redisTemplate() {
+        return redisProvider == null ? null : redisProvider.getIfAvailable();
     }
 
     /** 只读快照（可观测/测试用） */

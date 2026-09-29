@@ -92,6 +92,12 @@ public class GraphKernel {
             }
         }
         this.edgeTypeIndex = typeIdx;
+        // AI-1a：节点内容索引与快照同批整体替换（nodes 列表直转）
+        Map<Long, GraphNode> idx = new HashMap<>();
+        for (GraphNode n : nodes) {
+            idx.put(n.getId(), n);
+        }
+        this.nodeIndex = idx;
         this.snapshot = g;
         this.nodeCount = nodes.size();
     }
@@ -99,17 +105,37 @@ public class GraphKernel {
     /** 边类型旁路索引（"src:dst" -> edgeType；终审修复：原骨架 edgeTypes 参数被忽略=结构性谎言） */
     private volatile Map<String, String> edgeTypeIndex = Map.of();
 
-    /** 热路径：1 跳邻域（纯内存，图空返回空集）；边类型经 edgeType(src,dst) 查询 */
-    public Map<Long, Double> neighbors(Long id) {
+    /** AI-1a：节点内容索引（id -> GraphNode 实体；与 snapshot/edgeTypeIndex 同批 volatile 整体替换） */
+    private volatile Map<Long, GraphNode> nodeIndex = Map.of();
+
+    /** AI-1a：邻域详情三源合一（边权+边类型+节点内容；GraphExpander 内容化与边路由的数据面） */
+    public Map<Long, NeighborInfo> neighborsDetailed(Long id) {
         SimpleWeightedGraph<Long, DefaultWeightedEdge> g = snapshot;
         if (!g.containsVertex(id)) {
             return Map.of();
         }
-        Map<Long, Double> out = new LinkedHashMap<>();
+        Map<Long, NeighborInfo> out = new LinkedHashMap<>();
         for (DefaultWeightedEdge e : g.edgesOf(id)) {
             Long other = g.getEdgeSource(e).equals(id) ? g.getEdgeTarget(e) : g.getEdgeSource(e);
-            out.put(other, g.getEdgeWeight(e));
+            GraphNode n = nodeIndex.get(other);
+            out.put(other, new NeighborInfo(
+                    g.getEdgeWeight(e),
+                    edgeType(id, other),
+                    n != null ? n.getName() : null,
+                    n != null ? n.getCity() : null,
+                    n != null ? n.getNodeType() : null));
         }
+        return out;
+    }
+
+    /** 热路径：1 跳邻域（纯内存，图空返回空集）；AI-1a 起委托 neighborsDetailed 取 weight——签名与语义逐字不变 */
+    public Map<Long, Double> neighbors(Long id) {
+        Map<Long, NeighborInfo> detailed = neighborsDetailed(id);
+        if (detailed.isEmpty()) {
+            return Map.of();
+        }
+        Map<Long, Double> out = new LinkedHashMap<>();
+        detailed.forEach((k, v) -> out.put(k, v.weight()));
         return out;
     }
 
@@ -119,4 +145,8 @@ public class GraphKernel {
     }
 
     public int nodeCount() { return nodeCount; }
+
+    /** AI-1a：邻域详情值对象（record 隐式 static；weight=边权，edgeType=NEAR/SAME_TYPE/UNKNOWN，name/city/nodeType=节点内容） */
+    public record NeighborInfo(double weight, String edgeType, String name, String city, String nodeType) {
+    }
 }
