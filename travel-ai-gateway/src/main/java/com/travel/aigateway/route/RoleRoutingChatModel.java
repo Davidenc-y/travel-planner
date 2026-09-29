@@ -30,33 +30,63 @@ public final class RoleRoutingChatModel implements ChatModel {
     private final ModelRegistry registry;
     private final ChatModelFactory factory;
     private final ModelCircuitGuard circuitGuard;
+    /** E-55：LLM token 预算硬闸（null=关闭态直通——旧构造兼容） */
+    private final LLMBudgetGuard budgetGuard;
 
     public RoleRoutingChatModel(String role, ModelRegistry registry, ChatModelFactory factory) {
-        this(role, registry, factory, new ModelCircuitGuard(false, 5, 60_000));
+        this(role, registry, factory, new ModelCircuitGuard(false, 5, 60_000), null);
     }
 
     public RoleRoutingChatModel(String role, ModelRegistry registry, ChatModelFactory factory,
                                 ModelCircuitGuard circuitGuard) {
+        this(role, registry, factory, circuitGuard, null);
+    }
+
+    public RoleRoutingChatModel(String role, ModelRegistry registry, ChatModelFactory factory,
+                                ModelCircuitGuard circuitGuard, LLMBudgetGuard budgetGuard) {
         this.role = role;
         this.registry = registry;
         this.factory = factory;
         this.circuitGuard = circuitGuard == null
                 ? new ModelCircuitGuard(false, 5, 60_000) : circuitGuard;
+        this.budgetGuard = budgetGuard;
     }
 
     @Override
     public ChatResponse call(Prompt prompt) {
         ModelDescriptor descriptor = resolveDescriptor(prompt);
-        return circuitGuard.call(descriptor.key(),
+        if (budgetGuard != null) {
+            budgetGuard.checkBeforeCall();
+        }
+        ChatResponse response = circuitGuard.call(descriptor.key(),
                 () -> factory.obtain(descriptor).call(prompt));
+        if (budgetGuard != null && response != null && response.getMetadata() != null
+                && response.getMetadata().getUsage() != null) {
+            budgetGuard.recordAfterCall(
+                    response.getMetadata().getUsage().getTotalTokens() == null ? null
+                            : Long.valueOf(response.getMetadata().getUsage().getTotalTokens()));
+        }
+        return response;
     }
 
     @Override
     public Flux<ChatResponse> stream(Prompt prompt) {
         ModelDescriptor descriptor = resolveDescriptor(prompt);
+        if (budgetGuard != null) {
+            budgetGuard.checkBeforeCall();
+        }
         @SuppressWarnings("unchecked")
         Flux<ChatResponse> protectedFlux = (Flux<ChatResponse>) circuitGuard.stream(
                 descriptor.key(), () -> factory.obtain(descriptor).stream(prompt));
+        if (budgetGuard != null) {
+            protectedFlux = protectedFlux.doOnNext(r -> {
+                if (r != null && r.getMetadata() != null && r.getMetadata().getUsage() != null
+                        && r.getMetadata().getUsage().getTotalTokens() != null) {
+                    budgetGuard.recordAfterCall(
+                            Long.valueOf(r.getMetadata().getUsage().getTotalTokens()));
+                }
+            });
+        }
         return protectedFlux;
     }
 

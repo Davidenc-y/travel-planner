@@ -6,6 +6,7 @@ import com.travel.aigateway.core.ModelProviderType;
 import com.travel.aigateway.core.ModelRegistry;
 import com.travel.aigateway.route.RoleRoutingChatModel;
 import com.travel.aigateway.route.ModelCircuitGuard;
+import com.travel.aigateway.route.LLMBudgetGuard;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.ConfigurationPropertiesBinding;
@@ -49,17 +50,29 @@ public class GatewayAutoConfig {
         return new ModelCircuitGuard(enabled, failureThreshold, openMs);
     }
 
+    /**
+     * E-55（2026-09-29）：LLM token 预算硬闸（默认 true=用户授权的保护性行为变更，事故后立规）。
+     * 小时 60 万+日 300 万双层；382 万/时的事故形态将被截断在 60 万。调整仅经 Nacos 显式配置。
+     */
+    @Bean
+    public LLMBudgetGuard llmBudgetGuard(
+            @Value("${travel.ai.budget.enabled:true}") boolean enabled,
+            @Value("${travel.ai.budget.daily-tokens:3000000}") long dailyTokens,
+            @Value("${travel.ai.budget.hourly-tokens:600000}") long hourlyTokens) {
+        return new LLMBudgetGuard(enabled, dailyTokens, hourlyTokens);
+    }
+
     @Bean
     @Primary
     public ChatModel chatModel(ModelRegistry registry, ChatModelFactory factory,
-                               ModelCircuitGuard modelCircuitGuard) {
-        return new RoleRoutingChatModel("main", registry, factory, modelCircuitGuard);
+                               ModelCircuitGuard modelCircuitGuard, LLMBudgetGuard budgetGuard) {
+        return new RoleRoutingChatModel("main", registry, factory, modelCircuitGuard, budgetGuard);
     }
 
     @Bean("lightModel")
     public ChatModel lightModel(ModelRegistry registry, ChatModelFactory factory,
-                                ModelCircuitGuard modelCircuitGuard) {
-        return new RoleRoutingChatModel("light", registry, factory, modelCircuitGuard);
+                                ModelCircuitGuard modelCircuitGuard, LLMBudgetGuard budgetGuard) {
+        return new RoleRoutingChatModel("light", registry, factory, modelCircuitGuard, budgetGuard);
     }
 
     /** yml provider 值（dashscope/dashscope-native/openai/openai-compatible）→ 枚举绑定。 */
