@@ -1,6 +1,5 @@
 package com.travel.knowledge.rag.websearch;
 
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -28,31 +27,48 @@ import java.time.YearMonth;
  */
 @Slf4j
 @Component
-@RequiredArgsConstructor
 public class TavilyQuotaManager {
 
     private static final String KEY_PREFIX = "travel:tavily:credits:";
 
     private final StringRedisTemplate redis;
+    private final int monthlyCreditLimit;
+    private final int monthlyWarnThreshold;
+    private final int monthlyDegradeThreshold;
 
-    @Value("${travel.rag.web-search.monthly-credit-limit:1000}")
-    private int monthlyCreditLimit;
-
-    @Value("${travel.rag.web-search.monthly-warn-threshold:800}")
-    private int monthlyWarnThreshold;
-
-    @Value("${travel.rag.web-search.monthly-degrade-threshold:500}")
-    private int monthlyDegradeThreshold;
+    /**
+     * v2.0.7.28（2026-09-29）：阈值由字段 @Value 改构造器注入——Spring 装配语义不变
+     * （三键默认值逐字保留），纯单测可直接构造（原字段注入在无 Spring 上下文时默认 0=
+     * 阈值失效不可测；ReflectionTestUtils 为项目反模式禁令）。
+     */
+    public TavilyQuotaManager(StringRedisTemplate redis,
+                              @Value("${travel.rag.web-search.monthly-credit-limit:1000}") int monthlyCreditLimit,
+                              @Value("${travel.rag.web-search.monthly-warn-threshold:800}") int monthlyWarnThreshold,
+                              @Value("${travel.rag.web-search.monthly-degrade-threshold:500}") int monthlyDegradeThreshold) {
+        this.redis = redis;
+        this.monthlyCreditLimit = monthlyCreditLimit;
+        this.monthlyWarnThreshold = monthlyWarnThreshold;
+        this.monthlyDegradeThreshold = monthlyDegradeThreshold;
+    }
 
     private String currentMonthKey() {
         return KEY_PREFIX + YearMonth.now();
     }
 
-    /** 剩余额度是否足够（搜索调用前检查） */
+    /**
+     * 剩余额度是否足够（搜索调用前检查）。
+     * v2.0.7.28：Redis 不可达时 fail-open 放行+WARN——配额器是计费护栏非业务闸，
+     * Redis 故障不应阻断 web-search 主链（超时/降级链已在适配器层兜底）。
+     */
     public boolean canSearch() {
-        String used = redis.opsForValue().get(currentMonthKey());
-        int usedCount = used == null ? 0 : Integer.parseInt(used);
-        return usedCount < monthlyCreditLimit;
+        try {
+            String used = redis.opsForValue().get(currentMonthKey());
+            int usedCount = used == null ? 0 : Integer.parseInt(used);
+            return usedCount < monthlyCreditLimit;
+        } catch (Exception e) {
+            log.warn("[TavilyQuota] canSearch Redis 不可达，fail-open 放行: {}", e.getMessage());
+            return true;
+        }
     }
 
     /**
@@ -61,28 +77,41 @@ public class TavilyQuotaManager {
      * 权威口径，补推后 canSearch()/currentMode() 立即 exhausted，后续零外发零浪费。
      */
     public void markExternallyExhausted() {
-        String key = currentMonthKey();
-        Long count = redis.opsForValue().increment(key, monthlyCreditLimit);
-        if (count != null && count == monthlyCreditLimit) {
-            redis.expire(key, Duration.between(
-                    LocalDateTime.now(),
-                    YearMonth.now().atEndOfMonth().atTime(23, 59, 59)));
+        // v2.0.7.28 修正（2026-09-29）：v2.0.7.27 首版用 increment(limit)=叠加超推
+        // （832+1000=1832 且重复 432 持续膨胀）——改为"不低于硬限"幂等语义：
+        // 仅当当前读数低于硬限时才 SET 至硬限，重复调用零副作用。
+        try {
+            String key = currentMonthKey();
+            String used = redis.opsForValue().get(key);
+            int current = used == null ? 0 : Integer.parseInt(used);
+            if (current < monthlyCreditLimit) {
+                redis.opsForValue().set(key, String.valueOf(monthlyCreditLimit), Duration.between(
+                        LocalDateTime.now(), YearMonth.now().atEndOfMonth().atTime(23, 59, 59)));
+            }
+            log.warn("[TavilyQuota] 外部证据(432)标记 exhausted: 计数 {} -> 硬限 {}（幂等 SET）",
+                    current, monthlyCreditLimit);
+        } catch (Exception e) {
+            // Redis 不可达：记账失败不阻断降级链（canSearch 的 fail-open 已保证后续口径）
+            log.warn("[TavilyQuota] markExternallyExhausted 记账失败（Redis 不可达，降级链继续）: {}", e.getMessage());
         }
-        log.warn("[TavilyQuota] 外部证据(432)标记 exhausted: 计数补推至硬限 {}/{}", monthlyCreditLimit, monthlyCreditLimit);
     }
 
-    /** 消耗 1 credit（搜索成功后调用） */
+    /** 消耗 1 credit（搜索成功后调用；v2.0.7.28：Redis 不可达吞异常 WARN——计费丢失不阻断业务） */
     public void consume() {
-        String key = currentMonthKey();
-        Long count = redis.opsForValue().increment(key);
-        if (count != null && count == 1) {
-            // 首次使用，设置 TTL 至月末
-            redis.expire(key, Duration.between(
-                    LocalDateTime.now(),
-                    YearMonth.now().atEndOfMonth().atTime(23, 59, 59)));
-        }
-        if (count != null) {
-            checkThresholds(count.intValue());
+        try {
+            String key = currentMonthKey();
+            Long count = redis.opsForValue().increment(key);
+            if (count != null && count == 1) {
+                // 首次使用，设置 TTL 至月末
+                redis.expire(key, Duration.between(
+                        LocalDateTime.now(),
+                        YearMonth.now().atEndOfMonth().atTime(23, 59, 59)));
+            }
+            if (count != null) {
+                checkThresholds(count.intValue());
+            }
+        } catch (Exception e) {
+            log.warn("[TavilyQuota] consume 计数失败（Redis 不可达，本次消耗未记账）: {}", e.getMessage());
         }
     }
 
@@ -116,7 +145,12 @@ public class TavilyQuotaManager {
     }
 
     private int getUsedCount() {
-        String used = redis.opsForValue().get(currentMonthKey());
-        return used == null ? 0 : Integer.parseInt(used);
+        try {
+            String used = redis.opsForValue().get(currentMonthKey());
+            return used == null ? 0 : Integer.parseInt(used);
+        } catch (Exception e) {
+            log.warn("[TavilyQuota] getUsedCount Redis 不可达按 0 读（观测面）: {}", e.getMessage());
+            return 0;
+        }
     }
 }
