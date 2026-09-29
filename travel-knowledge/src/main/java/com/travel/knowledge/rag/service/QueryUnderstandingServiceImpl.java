@@ -3,6 +3,7 @@ package com.travel.knowledge.rag.service;
 import com.travel.common.util.JsonUtils;
 import com.travel.knowledge.rag.model.QueryIntent;
 import com.travel.knowledge.rag.config.QueryUnderstandingProperties;
+import com.travel.knowledge.rag.support.RagRoutingMetrics;
 import com.travel.common.trace.SpanCollector;
 import org.springframework.beans.factory.annotation.Autowired;
 import lombok.extern.slf4j.Slf4j;
@@ -39,6 +40,14 @@ public class QueryUnderstandingServiceImpl implements QueryUnderstandingService 
         this.spanCollector = spanCollector;
     }
 
+    /** AJ-1b：QU 缓存命中观测挂点（optional 注入，缺省 null=未绑定时跳过，S-B5b 同款；常开无键） */
+    private RagRoutingMetrics ragMetrics;
+
+    @Autowired(required = false)
+    void setRagMetrics(RagRoutingMetrics ragMetrics) {
+        this.ragMetrics = ragMetrics;
+    }
+
     // M7 Batch 4：高频短输出 → light 角色（注册表默认 qwen-turbo；RAG 评测硬门禁守护质量）
     public QueryUnderstandingServiceImpl(@Qualifier("lightModel") ChatModel chatModel,
                                      QueryUnderstandingProperties properties) {
@@ -59,7 +68,13 @@ public class QueryUnderstandingServiceImpl implements QueryUnderstandingService 
         String q = query == null ? "" : query.trim();
         QueryIntent cached = cache.get(q);
         if (cached != null) {
+            if (ragMetrics != null) {
+                ragMetrics.recordQuCacheHit();
+            }
             return cached;
+        }
+        if (ragMetrics != null) {
+            ragMetrics.recordQuCacheMiss();
         }
         // S-B5b：查询理解段 span（同线程上下文，未绑定空安全跳过）
         SpanCollector.Span quSpan = spanCollector.start("qu", "understanding");

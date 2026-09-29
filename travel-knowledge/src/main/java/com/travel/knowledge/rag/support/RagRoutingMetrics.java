@@ -28,6 +28,9 @@ public class RagRoutingMetrics {
     /** AF-2a：Tavily 上游抖动观测（G2：SNI 选择性阻断→IOException 重试一次，E-52） */
     private final Counter tavilyRetryTotal;
     private final Counter tavilyRetryRecovered;
+    /** AJ-1b：QU 意图缓存命中观测（G3 扩容前埋点；常开无键） */
+    private final Counter quCacheHit;
+    private final Counter quCacheMiss;
 
     public RagRoutingMetrics(MeterRegistry registry) {
         this.registry = registry;
@@ -56,6 +59,12 @@ public class RagRoutingMetrics {
                 .register(registry);
         this.tavilyRetryRecovered = Counter.builder("rag.tavily.retry.recovered")
                 .description("Tavily 重试恢复次数（重发 send 成功口径）")
+                .register(registry);
+        this.quCacheHit = Counter.builder("rag.qu.cache.hit")
+                .description("QU 意图缓存命中次数")
+                .register(registry);
+        this.quCacheMiss = Counter.builder("rag.qu.cache.miss")
+                .description("QU 意图缓存未命中次数")
                 .register(registry);
     }
 
@@ -121,5 +130,25 @@ public class RagRoutingMetrics {
 
     public double tavilyRetryRecoveredCount() {
         return tavilyRetryRecovered.count();
+    }
+
+    /** AJ-1b：记录一次 QU 意图缓存命中（观测面，常开）。 */
+    public void recordQuCacheHit() {
+        quCacheHit.increment();
+    }
+
+    /** AJ-1b：记录一次 QU 意图缓存未命中（观测面，常开）。 */
+    public void recordQuCacheMiss() {
+        quCacheMiss.increment();
+    }
+
+    /** AJ-1b：命中计数读取（观测/单测断言面，tavilyRetryTotalCount 同款）。 */
+    public double quCacheHitCount() {
+        return quCacheHit.count();
+    }
+
+    /** AJ-1b：未命中计数读取（观测/单测断言面）。 */
+    public double quCacheMissCount() {
+        return quCacheMiss.count();
     }
 }

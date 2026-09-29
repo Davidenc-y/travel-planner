@@ -32,6 +32,10 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Collectors;
 
 /**
@@ -49,6 +53,9 @@ public class HybridRagStrategy extends AbstractRagStrategy {
 
     private static final String ES_INDEX = "attraction_index";
     private static final String MILVUS_COLLECTION = "attraction_vectors";
+
+    /** AJ-2a：并行检索虚拟线程执行器（静态单例，DashScopeReranker:50 先例同款） */
+    private static final ExecutorService VIRTUAL_EXECUTOR = Executors.newVirtualThreadPerTaskExecutor();
 
     private final EsDocumentStore esStore;
     private final EmbeddingModel embeddingModel;
@@ -71,6 +78,14 @@ public class HybridRagStrategy extends AbstractRagStrategy {
     /** S-B2：hedge-enabled 默认 false=关闭态逐字节等价（E-33） */
     @Value("${" + TravelConfigKeys.RAG_HEDGE_ENABLED + ":false}")
     private boolean hedgeEnabled;
+
+    /** AJ-2a：双路并行开关（默认 false=串行现状字节等价 E-33；包内可见=单测直设面） */
+    @Value("${travel.rag.parallel-retrieval.enabled:false}")
+    boolean parallelRetrieval;
+
+    /** AJ-2a：单路独立超时 ms（E-58 各路独立 orTimeout；默认 4s=不超现状串行上界；包内可见=单测直设面） */
+    @Value("${travel.rag.parallel-retrieval.parallel-timeout-ms:4000}")
+    long parallelTimeoutMs;
 
     /** MR-D2：optional 注入（bean 缺省=现状单路，构造签名零变更） */
     @Autowired(required = false)
@@ -174,24 +189,74 @@ public class HybridRagStrategy extends AbstractRagStrategy {
      */
     List<SearchResult> doRetrieveInternal(QueryIntent intent, int poolSize) throws Exception {
         // S-B5b：检索五段 span（同线程上下文，未绑定空安全跳过；join 复用路径不经过本方法=零重复记录）
-        SpanCollector.Span bm25Span = spanCollector.start("bm25", "retrieval");
-        List<RRFusion.ScoredItem> bm25Results = bm25Search(intent, poolSize);
-        if (bm25Span != null) {
-            spanCollector.end(bm25Span, bm25Results.isEmpty() ? "empty" : "ok", Map.of("count", bm25Results.size()));
+        List<RRFusion.FusionResult> fused;
+        if (!parallelRetrieval) {
+            // AJ-2a 串行分支：现状代码逐字保留禁重排（P0⑯）
+            SpanCollector.Span bm25Span = spanCollector.start("bm25", "retrieval");
+            List<RRFusion.ScoredItem> bm25Results = bm25Search(intent, poolSize);
+            if (bm25Span != null) {
+                spanCollector.end(bm25Span, bm25Results.isEmpty() ? "empty" : "ok", Map.of("count", bm25Results.size()));
+            }
+            // MR-D1：HyDE——假设答案文本仅参与向量路（KNN），原 query 保留参与 BM25（文章 §3.2
+            // 双路语义）；门控关/fail-open 一律原 query（E-33）
+            // MR-D2：llm-expand.enabled=true（bean 存在）时走多 Query 路：变体各自向量检索 +
+            // RRFusion 级联合并（复用 G11）；未注入=现状单路（E-33）
+            SpanCollector.Span knnSpan = spanCollector.start("knn", "retrieval");
+            List<RRFusion.ScoredItem> knnResults = llmQueryExpander != null
+                    ? knnMultiQuery(intent, poolSize)
+                    : knnSearch(intent, hydeQueryRewriter.vectorQueryText(intent), poolSize);
+            if (knnSpan != null) {
+                spanCollector.end(knnSpan, knnResults.isEmpty() ? "empty" : "ok",
+                        Map.of("count", knnResults.size(), "expanded", llmQueryExpander != null));
+            }
+            fused = RRFusion.fuse(bm25Results, knnResults, poolSize);
+        } else {
+            // AJ-2a 双路并行（E-58 失败面收敛）。span 主线程模式（P0⑮）：两路 span 的
+            // start/end 均在主线程、闭包仅捕获引用，工作线程零 trace 调用（knnMultiQuery
+            // 内部 expand 子 span 经工作线程 null 安全跳过=并行态已知观测缺口，记录无损坏）。
+            SpanCollector.Span bm25Span = spanCollector.start("bm25", "retrieval");
+            SpanCollector.Span knnSpan = spanCollector.start("knn", "retrieval");
+            AtomicReference<Throwable> bm25Failure = new AtomicReference<>();
+            AtomicReference<Throwable> knnFailure = new AtomicReference<>();
+            CompletableFuture<List<RRFusion.ScoredItem>> bm25F = CompletableFuture
+                    .supplyAsync(() -> bm25Search(intent, poolSize), VIRTUAL_EXECUTOR)
+                    .orTimeout(parallelTimeoutMs, TimeUnit.MILLISECONDS)
+                    .exceptionally(e -> {
+                        bm25Failure.set(e);
+                        log.warn("[ParallelRetrieval] bm25 路失败按空融合: {}", e.getMessage());
+                        return List.of();
+                    });
+            CompletableFuture<List<RRFusion.ScoredItem>> knnF = CompletableFuture
+                    .supplyAsync(() -> llmQueryExpander != null
+                            ? knnMultiQuery(intent, poolSize)
+                            : knnSearch(intent, hydeQueryRewriter.vectorQueryText(intent), poolSize),
+                            VIRTUAL_EXECUTOR)
+                    .orTimeout(parallelTimeoutMs, TimeUnit.MILLISECONDS)
+                    .exceptionally(e -> {
+                        knnFailure.set(e);
+                        log.warn("[ParallelRetrieval] knn 路失败按空融合: {}", e.getMessage());
+                        return List.of();
+                    });
+            CompletableFuture.allOf(bm25F, knnF).join();
+            List<RRFusion.ScoredItem> bm25Results = bm25F.join();
+            List<RRFusion.ScoredItem> knnResults = knnF.join();
+            if (bm25Span != null) {
+                spanCollector.end(bm25Span, bm25Results.isEmpty() ? "empty" : "ok", Map.of("count", bm25Results.size()));
+            }
+            if (knnSpan != null) {
+                spanCollector.end(knnSpan, knnResults.isEmpty() ? "empty" : "ok",
+                        Map.of("count", knnResults.size(), "expanded", llmQueryExpander != null));
+            }
+            if (bm25Failure.get() != null && knnFailure.get() != null) {
+                // E-58：两路全败→抛原首异常（bm25=首路；单路失败已按空融合不抛）
+                Throwable first = bm25Failure.get();
+                if (first instanceof Exception ex) {
+                    throw ex;
+                }
+                throw new IllegalStateException(first);
+            }
+            fused = RRFusion.fuse(bm25Results, knnResults, poolSize);
         }
-        // MR-D1：HyDE——假设答案文本仅参与向量路（KNN），原 query 保留参与 BM25（文章 §3.2
-        // 双路语义）；门控关/fail-open 一律原 query（E-33）
-        // MR-D2：llm-expand.enabled=true（bean 存在）时走多 Query 路：变体各自向量检索 +
-        // RRFusion 级联合并（复用 G11）；未注入=现状单路（E-33）
-        SpanCollector.Span knnSpan = spanCollector.start("knn", "retrieval");
-        List<RRFusion.ScoredItem> knnResults = llmQueryExpander != null
-                ? knnMultiQuery(intent, poolSize)
-                : knnSearch(intent, hydeQueryRewriter.vectorQueryText(intent), poolSize);
-        if (knnSpan != null) {
-            spanCollector.end(knnSpan, knnResults.isEmpty() ? "empty" : "ok",
-                    Map.of("count", knnResults.size(), "expanded", llmQueryExpander != null));
-        }
-        List<RRFusion.FusionResult> fused = RRFusion.fuse(bm25Results, knnResults, poolSize);
         List<SearchResult> merged = fused.stream()
                 .map(f -> SearchResult.builder()
                         .docId(f.docId())

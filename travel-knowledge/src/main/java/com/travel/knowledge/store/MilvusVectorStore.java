@@ -8,8 +8,8 @@ import io.milvus.param.dml.InsertParam;
 import io.milvus.param.dml.UpsertParam;
 import io.milvus.param.dml.SearchParam;
 import io.milvus.response.SearchResultsWrapper;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
@@ -24,10 +24,19 @@ import java.util.Map;
  */
 @Slf4j
 @Component
-@RequiredArgsConstructor
 public class MilvusVectorStore {
 
     private final MilvusServiceClient client;
+
+    /** N2/G2（AJ-1a）：查询期 ef 旋钮（R362 修订：SDK 2.3.4 无 withEf，经 withParams JSON 通道注入）。
+     * 0=不注入走 SDK 默认（E-33 与现状字节等价）；基准判读后经 Nacos 落值。 */
+    private final int efQuery;
+
+    public MilvusVectorStore(MilvusServiceClient client,
+                             @Value("${travel.knowledge.milvus.index.ef-query:0}") int efQuery) {
+        this.client = client;
+        this.efQuery = efQuery;
+    }
 
     /** F31/F35：float[] → List<Float>（Milvus SDK 客户端校验要求） */
     public static List<Float> box(float[] vector) {
@@ -71,6 +80,9 @@ public class MilvusVectorStore {
                 .withOutFields(outFields);
         if (expr != null && !expr.isBlank()) {
             builder.withExpr(expr);
+        }
+        if (efQuery > 0) {
+            builder.withParams("{\"ef\":" + efQuery + "}");
         }
         SearchParam searchParam = builder.build();
         R<SearchResults> response = client.search(searchParam);
