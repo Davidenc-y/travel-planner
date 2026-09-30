@@ -56,7 +56,12 @@ public class QueryUnderstandingServiceImpl implements QueryUnderstandingService 
         this.cache = Collections.synchronizedMap(new LinkedHashMap<>(16, 0.75f, true) {
             @Override
             protected boolean removeEldestEntry(Map.Entry<String, QueryIntent> eldest) {
-                return properties.getCacheSize() > 0 && size() > properties.getCacheSize();
+                // AK-3c：驱逐判定逐字保留，判真时 +1 观测（审计段 cacheSize 裁定直接证据）
+                boolean evict = properties.getCacheSize() > 0 && size() > properties.getCacheSize();
+                if (evict && ragMetrics != null) {
+                    ragMetrics.recordQuCacheEvict();
+                }
+                return evict;
             }
         });
     }

@@ -34,7 +34,10 @@ import java.util.Map;
 @FeignClient(name = "travel-knowledge", url = "${travel.knowledge.base-url:http://localhost:8082}",
         configuration = KnowledgeClientConfig.class,
         fallbackFactory = KnowledgeClientFallbackFactory.class)
-public interface KnowledgeClient extends KnowledgeSearchPort {
+// AK 二审 AR-1（2026-09-30）：脱离 extends KnowledgeSearchPort——Spring Cloud OpenFeign
+// 注册器对每个 @FeignClient BeanDefinition 默认 primary=true（SelectorWiringDiagTest 实证），
+// 双 Client 同继 port=双 primary→按 port 注入必炸；port 唯一实现改由 Selector 适配器承担。
+public interface KnowledgeClient {
 
     /**
      * RAG 检索（调用 knowledge 的 /api/v1/rag/search）
@@ -45,7 +48,6 @@ public interface KnowledgeClient extends KnowledgeSearchPort {
      * @return R<List<Map>> 检索结果（docId/title/snippet/score/...）
      */
     @GetMapping("/api/v1/rag/search")
-    @Override
     R<List<Map<String, Object>>> search(
             @RequestParam("ragType") String ragType,
             @RequestParam("query") String query,
@@ -55,14 +57,12 @@ public interface KnowledgeClient extends KnowledgeSearchPort {
      * Phase C/F78：写入一条会话知识切片（knowledge /api/v1/memory/session-context）
      */
     @PostMapping("/api/v1/memory/session-context")
-    @Override
     R<Object> writeSessionContext(@RequestBody Map<String, Object> chunk);
 
     /**
      * Phase C/F78：检索会话知识（sessionId 过滤 + Hybrid RRF）
      */
     @GetMapping("/api/v1/memory/session-context/search")
-    @Override
     R<List<Map<String, Object>>> searchSessionContext(
             @RequestParam("sessionId") String sessionId,
             @RequestParam("query") String query,
@@ -73,7 +73,6 @@ public interface KnowledgeClient extends KnowledgeSearchPort {
      * sessionId 隔离与 search 同口径（knowledge 侧 term 过滤）。
      */
     @GetMapping("/api/v1/memory/session-context/by-prefix")
-    @Override
     R<List<Map<String, Object>>> findSessionContextByPrefix(
             @RequestParam("sessionId") String sessionId,
             @RequestParam("seqPrefix") String seqPrefix,
@@ -83,7 +82,6 @@ public interface KnowledgeClient extends KnowledgeSearchPort {
      * M8-9：按 seq 前缀删除会话切片（REFINE/重生成覆盖旧版本）。
      */
     @DeleteMapping("/api/v1/memory/session-context/by-prefix")
-    @Override
     R<Integer> deleteSessionContextByPrefix(
             @RequestParam("sessionId") String sessionId,
             @RequestParam("seqPrefix") String seqPrefix);

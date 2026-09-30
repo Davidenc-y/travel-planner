@@ -1,5 +1,7 @@
 package com.travel.planning.cancellation;
 
+import com.travel.common.event.EventConsumerRegistry;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -12,6 +14,11 @@ import org.springframework.data.redis.listener.RedisMessageListenerContainer;
  *
  * <p>8081/8083 各自 JVM 注册一个容器订阅同一频道；收到广播后仅取消本地
  * registry（幂等）。开关关闭时不创建容器。</p>
+ *
+ * <p>AK-1d：lifecycle 装配时挂接 {@link EventConsumerRegistry} 统一观测面
+ * （registry 启停动作真实委托 {@code lifecycle::start/stop}——本消费者即
+ * SmartLifecycle 生命周期体）；触发逻辑零改动=P0⑲（lifecycle 的异步启动/重试/停止
+ * 路径逐字未动，Spring autoStartup 语义不变，registry 启停默认不调用）。</p>
  */
 @Configuration
 public class ChatCancellationPubSubConfig {
@@ -28,10 +35,19 @@ public class ChatCancellationPubSubConfig {
     public ChatCancellationListenerLifecycle chatCancellationListenerLifecycle(
             RedisConnectionFactory connectionFactory,
             TurnCancellationSubscriber subscriber,
-            ChatCancellationPubSubProperties props) throws Exception {
+            ChatCancellationPubSubProperties props,
+            ObjectProvider<EventConsumerRegistry> consumerRegistryProvider) throws Exception {
         RedisMessageListenerContainer container =
                 buildContainer(connectionFactory, subscriber, props.getChannel());
-        return new ChatCancellationListenerLifecycle(container);
+        ChatCancellationListenerLifecycle lifecycle = new ChatCancellationListenerLifecycle(container);
+        // AK-1d：观测面挂接（ObjectProvider 软化——窄测试上下文缺 bean=降级跳过，
+        // 生产面 EventConsumerRegistry 经组件扫描必在）
+        EventConsumerRegistry consumerRegistry = consumerRegistryProvider.getIfAvailable();
+        if (consumerRegistry != null) {
+            consumerRegistry.register("redis-pubsub", "chat-cancellation",
+                    "travel.chat.cancellation.enabled", lifecycle::start, lifecycle::stop);
+        }
+        return lifecycle;
     }
 
     /**

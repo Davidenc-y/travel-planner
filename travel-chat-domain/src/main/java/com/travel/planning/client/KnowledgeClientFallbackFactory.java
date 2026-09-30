@@ -18,6 +18,9 @@ import java.util.Map;
  * <p>E-33：默认态 {@code spring.cloud.openfeign.circuitbreaker.enabled=false}，本工厂仅
  * 挂接不接管（异常直抛=现状零行为）；开启归审计实弹配置。</p>
  *
+ * <p>AK-2a：失败体提为命名类 {@link KnowledgeUnavailableFallback}（implements 双 Client
+ * 接口），直连/发现两工厂共用同一失败实现（同码同文案，行为逐字等价）。</p>
+ *
  * @author david_ency
  * @since 1.0-SNAPSHOT
  */
@@ -31,31 +34,35 @@ public class KnowledgeClientFallbackFactory implements FallbackFactory<Knowledge
     @Override
     public KnowledgeClient create(Throwable cause) {
         log.warn("[KnowledgeFallback] knowledge 调用降级: {}", cause.toString());
-        return new KnowledgeClient() {
-            @Override
-            public R<List<Map<String, Object>>> search(String ragType, String query, int topK) {
-                return R.fail(KNOWLEDGE_UNAVAILABLE_CODE, KNOWLEDGE_UNAVAILABLE_MESSAGE);
-            }
+        return new KnowledgeUnavailableFallback();
+    }
 
-            @Override
-            public R<Object> writeSessionContext(Map<String, Object> chunk) {
-                return R.fail(KNOWLEDGE_UNAVAILABLE_CODE, KNOWLEDGE_UNAVAILABLE_MESSAGE);
-            }
+    /** AK-2a：双 Client（直连+发现）共用失败体——五方法全部显式失败（P0⑦）。 */
+    static final class KnowledgeUnavailableFallback implements KnowledgeClient, KnowledgeDiscoveryClient {
 
-            @Override
-            public R<List<Map<String, Object>>> searchSessionContext(String sessionId, String query, int topK) {
-                return R.fail(KNOWLEDGE_UNAVAILABLE_CODE, KNOWLEDGE_UNAVAILABLE_MESSAGE);
-            }
+        @Override
+        public R<List<Map<String, Object>>> search(String ragType, String query, int topK) {
+            return R.fail(KNOWLEDGE_UNAVAILABLE_CODE, KNOWLEDGE_UNAVAILABLE_MESSAGE);
+        }
 
-            @Override
-            public R<List<Map<String, Object>>> findSessionContextByPrefix(String sessionId, String seqPrefix, int limit) {
-                return R.fail(KNOWLEDGE_UNAVAILABLE_CODE, KNOWLEDGE_UNAVAILABLE_MESSAGE);
-            }
+        @Override
+        public R<Object> writeSessionContext(Map<String, Object> chunk) {
+            return R.fail(KNOWLEDGE_UNAVAILABLE_CODE, KNOWLEDGE_UNAVAILABLE_MESSAGE);
+        }
 
-            @Override
-            public R<Integer> deleteSessionContextByPrefix(String sessionId, String seqPrefix) {
-                return R.fail(KNOWLEDGE_UNAVAILABLE_CODE, KNOWLEDGE_UNAVAILABLE_MESSAGE);
-            }
-        };
+        @Override
+        public R<List<Map<String, Object>>> searchSessionContext(String sessionId, String query, int topK) {
+            return R.fail(KNOWLEDGE_UNAVAILABLE_CODE, KNOWLEDGE_UNAVAILABLE_MESSAGE);
+        }
+
+        @Override
+        public R<List<Map<String, Object>>> findSessionContextByPrefix(String sessionId, String seqPrefix, int limit) {
+            return R.fail(KNOWLEDGE_UNAVAILABLE_CODE, KNOWLEDGE_UNAVAILABLE_MESSAGE);
+        }
+
+        @Override
+        public R<Integer> deleteSessionContextByPrefix(String sessionId, String seqPrefix) {
+            return R.fail(KNOWLEDGE_UNAVAILABLE_CODE, KNOWLEDGE_UNAVAILABLE_MESSAGE);
+        }
     }
 }

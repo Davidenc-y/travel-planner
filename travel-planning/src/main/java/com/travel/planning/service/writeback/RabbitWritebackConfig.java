@@ -3,6 +3,7 @@ package com.travel.planning.service.writeback;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.travel.common.config.GrayReleaseManager;
+import com.travel.common.event.EventConsumerRegistry;
 import com.travel.common.event.EventEnvelope;
 import com.travel.planning.service.ItineraryDetailCache;
 import com.travel.planning.service.itinerary.ItinerarySliceWriter;
@@ -16,10 +17,14 @@ import org.springframework.amqp.core.TopicExchange;
 import org.springframework.amqp.core.QueueBuilder;
 import org.springframework.amqp.rabbit.annotation.RabbitListener;
 import org.springframework.amqp.AmqpRejectAndDontRequeueException;
+import org.springframework.amqp.rabbit.listener.AbstractMessageListenerContainer;
+import org.springframework.amqp.rabbit.listener.RabbitListenerEndpointRegistry;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
+import java.util.Arrays;
 import java.util.Map;
 
 /**
@@ -35,6 +40,12 @@ import java.util.Map;
  * {@code travel-event.dlx} 死信交换机落入 {@code travel-writeback-rabbit-dlq}——
  * 消息零丢失、人工按 DLQ 处置（比 redis 3 次重投更早进入人工处置面，终态语义一致）。
  * 灰度关闭=暂停消费：消息同样进 DLQ 积压（人工应急门，等价 redis 轮询头空转的积压语义）。</p>
+ *
+ * <p>AK-1c：挂接 {@link EventConsumerRegistry} 统一观测面（listener 装配时注册
+ * channel/consumerKey/gray 键/启停动作，启停=经 {@link RabbitListenerEndpointRegistry}
+ * 按队列名协调真实容器 lifecycle）；<b>触发逻辑逐字保留</b>（@RabbitListener 声明与
+ * onMessage 业务路径零改动=P0⑲）——实际暂停门仍为既有 gray 键，registry 启停为
+ * 观测面协调动作（默认不调用，行为等价）。</p>
  *
  * @author david_ency
  * @since 1.0-SNAPSHOT
@@ -76,10 +87,49 @@ public class RabbitWritebackConfig {
                 BindingBuilder.bind(deadLetterQueue).to(deadLetterExchange).with(DLQ));
     }
 
+    /**
+     * AK-1c：listener 装配时挂接 EventConsumerRegistry（观测面+真实容器启停协调）。
+     * 两依赖均 ObjectProvider 软化：窄测试上下文（仅装配本类）缺 bean=降级跳过注册，
+     * 生产面 EventConsumerRegistry 经 CommonMarker 组件扫描必在。
+     */
     @Bean
     public RabbitWritebackListener rabbitWritebackListener(ItinerarySliceWriter sliceWriter,
-            ItineraryDetailCache itineraryDetailCache, GrayReleaseManager gray) {
-        return new RabbitWritebackListener(sliceWriter, itineraryDetailCache, gray);
+            ItineraryDetailCache itineraryDetailCache, GrayReleaseManager gray,
+            ObjectProvider<EventConsumerRegistry> consumerRegistryProvider,
+            ObjectProvider<RabbitListenerEndpointRegistry> listenerRegistryProvider) {
+        RabbitWritebackListener listener = new RabbitWritebackListener(sliceWriter, itineraryDetailCache, gray);
+        EventConsumerRegistry consumerRegistry = consumerRegistryProvider.getIfAvailable();
+        if (consumerRegistry != null) {
+            consumerRegistry.register("rabbit", "writeback-rabbit", WritebackEventConsumer.GRAY_KEY,
+                    () -> toggleListenerContainers(listenerRegistryProvider.getIfAvailable(), true),
+                    () -> toggleListenerContainers(listenerRegistryProvider.getIfAvailable(), false));
+        } else {
+            log.info("[WritebackConsumer] AK-1c 观测面注册跳过（EventConsumerRegistry 缺省）");
+        }
+        return listener;
+    }
+
+    /**
+     * AK-1c：按队列名匹配监听容器启停（endpoint registry 缺省=无操作安全回退；
+     * getQueueNames 声明在 AbstractMessageListenerContainer，接口本体无常量池实证——
+     * withEf 同族 API 存在性预检，instanceof 转型后调用）。
+     */
+    private static void toggleListenerContainers(RabbitListenerEndpointRegistry registry, boolean start) {
+        if (registry == null) {
+            log.info("[WritebackConsumer] AK-1c registry 启停协调跳过（endpoint registry 缺省）: start={}", start);
+            return;
+        }
+        registry.getListenerContainers().forEach(container -> {
+            if (container instanceof AbstractMessageListenerContainer amlc
+                    && Arrays.asList(amlc.getQueueNames()).contains(QUEUE)) {
+                if (start) {
+                    amlc.start();
+                } else {
+                    amlc.stop();
+                }
+                log.info("[WritebackConsumer] AK-1c rabbit 容器{}: queue={}", start ? "启动" : "停止", QUEUE);
+            }
+        });
     }
 
     /**

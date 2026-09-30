@@ -62,13 +62,14 @@ public class KnowledgeRetrievalServiceImpl implements KnowledgeRetrievalService 
             var resp = knowledgeClient.search("auto", query, Math.max(1, Math.min(topK, 10)));
             if (resp == null || resp.getData() == null || resp.getData().isEmpty()) {
                 log.warn("[KnowledgeRetrieval] 检索为空: query={}", query);
-                markDegraded("knowledge_empty", query);
+                // AK-4b：降级字面量/话术收口至策略对象（reason/模板逐字等价，P0⑲ 挂接层）
+                markDegraded(KnowledgeDegradationPolicy.EMPTY.degradedReason(), query);
                 // AF 审计 AR-4（2026-09-28 实弹命中）：空结果原先裸返回 "[]"——auto 路由对离域查询
                 // 按设计返回 0 条后，监督者 LLM 收到空候选仍按 PLANNING 形态生成，实测编造出
                 // 知识库不存在的景点（"中科院物理研究所 评分4.7"）；与 all-low-confidence 路径
                 // （rag_abstain_note）对齐，空结果同样注入拒答指引防幻觉。回滚=本分支改回 "[]"。
                 ragQualityCounters.recordAbstain();
-                return com.travel.common.util.PromptFiles.get("rag_abstain_note");
+                return KnowledgeDegradationPolicy.EMPTY.abstainNote();
             }
             List<Map<String, Object>> compact = new ArrayList<>();
             int lowConfidenceDropped = 0;
@@ -118,10 +119,11 @@ public class KnowledgeRetrievalServiceImpl implements KnowledgeRetrievalService 
                 if (compact.isEmpty()) {
                     // 全部低置信 → 拒答语义：空资料 + 拒答指引，并按既有降级方式记录原因
                     if (TraceContext.active()) {
-                        TraceContext.current().degradedReason = "rag_all_low_confidence";
+                        TraceContext.current().degradedReason =
+                                KnowledgeDegradationPolicy.FALLBACK.degradedReason();
                     }
                     ragQualityCounters.recordAbstain();
-                    return com.travel.common.util.PromptFiles.get("rag_abstain_note");
+                    return KnowledgeDegradationPolicy.FALLBACK.abstainNote();
                 }
             }
             log.info("[KnowledgeRetrieval] 候选景点 {} 条: query={}", compact.size(), query);
@@ -146,15 +148,12 @@ public class KnowledgeRetrievalServiceImpl implements KnowledgeRetrievalService 
             return SOURCE_NOTE + "\n" + json;
         } catch (Exception e) {
             log.warn("[KnowledgeRetrieval] 检索失败，降级空候选: {}", e.getMessage());
-            markDegraded("knowledge_feign_fail", query);
+            markDegraded(KnowledgeDegradationPolicy.TRANSIENT.degradedReason(), query);
             ragQualityCounters.recordDegraded();
             // AG-2b：失败话术分离（G4）——feign 异常=瞬时故障，与空结果的"相关度过低"拒答话术
             // 语义不同；默认 false 维持裸 "[]" 现状（E-33），开启后注入 transient 指引防监督者
             // LLM 在无知识段时编造景点（AF 审计 AR-4 幻觉链的失败路径补面）。
-            if (failureNoteEnabled) {
-                return com.travel.common.util.PromptFiles.get("rag_transient_note");
-            }
-            return "[]";
+            return KnowledgeDegradationPolicy.TRANSIENT.transientNote(failureNoteEnabled);
         }
     }
 

@@ -30,6 +30,12 @@ import java.util.concurrent.atomic.AtomicLong;
  *
  * <p>覆盖面声明：chat 调用（主模型+lightModel 经 RoleRouting 喉道）全覆盖；DashScope
  * rerank/embedding 直连不在本闸（量级小一个数量级，QU/hyde 冷路径另有 llmoff 四键形态）。</p>
+ *
+ * <p>AK-3b（观测面）：进程内 check/reject 计数（AtomicLong 零依赖形态——
+ * travel-ai-gateway pom 无 actuator/micrometer 依赖，MeterRegistry 不可编译=withEf
+ * 同族 API 存在性陷阱，二审实证禁引用）；getter 供测试/观测，拒绝时 INFO 摘要行
+ * 供审计窗日志取证。跨实例共享口径的权威观测仍是 Redis 键 ai:budget:* 本身
+ * （AR-3），本地计数仅进程内辅助。</p>
  */
 @Slf4j
 public final class LLMBudgetGuard {
@@ -60,6 +66,9 @@ public final class LLMBudgetGuard {
     private volatile String hourKey = "";
     private final AtomicLong dayUsed = new AtomicLong();
     private final AtomicLong hourUsed = new AtomicLong();
+    /** AK-3b：进程内观测计数（检查次数/拒绝次数；仅 enabled 态统计） */
+    private final AtomicLong checkCount = new AtomicLong();
+    private final AtomicLong rejectCount = new AtomicLong();
 
     /** E-55 既有三参构造（既有单测/装配零破坏）：委托五参=Redis 层关闭。 */
     public LLMBudgetGuard(boolean enabled, long dailyTokens, long hourlyTokens) {
@@ -81,19 +90,18 @@ public final class LLMBudgetGuard {
         if (!enabled) {
             return;
         }
+        checkCount.incrementAndGet();
         rollIfNeeded();
         if (redisEnabled) {
             long[] used = redisGetUsed();
             if (used != null) {
                 if (used[0] >= dailyTokens) {
-                    throw new LLMBudgetExceededException(
-                            "LLM daily token budget exceeded (redis): used=" + used[0] + " limit=" + dailyTokens
-                                    + " (travel.ai.budget.daily-tokens; E-55/AR-3)");
+                    throw reject("LLM daily token budget exceeded (redis): used=" + used[0] + " limit=" + dailyTokens
+                            + " (travel.ai.budget.daily-tokens; E-55/AR-3)");
                 }
                 if (used[1] >= hourlyTokens) {
-                    throw new LLMBudgetExceededException(
-                            "LLM hourly token budget exceeded (redis): used=" + used[1] + " limit=" + hourlyTokens
-                                    + " (travel.ai.budget.hourly-tokens; E-55/AR-3)");
+                    throw reject("LLM hourly token budget exceeded (redis): used=" + used[1] + " limit=" + hourlyTokens
+                            + " (travel.ai.budget.hourly-tokens; E-55/AR-3)");
                 }
                 return;
             }
@@ -102,15 +110,20 @@ public final class LLMBudgetGuard {
         long d = dayUsed.get();
         long h = hourUsed.get();
         if (d >= dailyTokens) {
-            throw new LLMBudgetExceededException(
-                    "LLM daily token budget exceeded: used=" + d + " limit=" + dailyTokens
-                            + " (travel.ai.budget.daily-tokens; E-55)");
+            throw reject("LLM daily token budget exceeded: used=" + d + " limit=" + dailyTokens
+                    + " (travel.ai.budget.daily-tokens; E-55)");
         }
         if (h >= hourlyTokens) {
-            throw new LLMBudgetExceededException(
-                    "LLM hourly token budget exceeded: used=" + h + " limit=" + hourlyTokens
-                            + " (travel.ai.budget.hourly-tokens; E-55)");
+            throw reject("LLM hourly token budget exceeded: used=" + h + " limit=" + hourlyTokens
+                    + " (travel.ai.budget.hourly-tokens; E-55)");
         }
+    }
+
+    /** AK-3b：拒绝统一出口（计数+INFO 摘要行供审计窗日志取证；异常语义零变化）。 */
+    private LLMBudgetExceededException reject(String message) {
+        long rejects = rejectCount.incrementAndGet();
+        log.info("[LLMBudget] 拒绝摘要（进程内观测）: checks={} rejects={}", checkCount.get(), rejects);
+        return new LLMBudgetExceededException(message);
     }
 
     /** 调用后按 usage 累计（usage 缺失/异常时按保守估值 4,000 计；Redis 开=INCRBY 共享记账，异常降级进程内） */
@@ -211,5 +224,15 @@ public final class LLMBudgetGuard {
 
     public boolean enabled() {
         return enabled;
+    }
+
+    /** AK-3b：进程内检查次数（仅 enabled 态统计；多实例各自计数，共享口径看 Redis 键）。 */
+    public long checkCount() {
+        return checkCount.get();
+    }
+
+    /** AK-3b：进程内拒绝次数。 */
+    public long rejectCount() {
+        return rejectCount.get();
     }
 }

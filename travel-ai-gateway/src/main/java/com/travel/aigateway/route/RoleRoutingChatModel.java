@@ -79,13 +79,19 @@ public final class RoleRoutingChatModel implements ChatModel {
         Flux<ChatResponse> protectedFlux = (Flux<ChatResponse>) circuitGuard.stream(
                 descriptor.key(), () -> factory.obtain(descriptor).stream(prompt));
         if (budgetGuard != null) {
-            protectedFlux = protectedFlux.doOnNext(r -> {
-                if (r != null && r.getMetadata() != null && r.getMetadata().getUsage() != null
-                        && r.getMetadata().getUsage().getTotalTokens() != null) {
-                    budgetGuard.recordAfterCall(
-                            Long.valueOf(r.getMetadata().getUsage().getTotalTokens()));
-                }
-            });
+            // AR-2：usage 在流式 chunk 间会重复出现（末 chunk 或逐 chunk 回填），逐 chunk
+            // 记账会把一次调用虚增百倍（2026-09-30 实弹：真实 1,342 记成 687,216）；
+            // 改为仅捕获最后一个非空 usage，终止时单次记账（无 usage 回填 4,000 保守估值）。
+            java.util.concurrent.atomic.AtomicReference<Long> lastUsage =
+                    new java.util.concurrent.atomic.AtomicReference<>();
+            protectedFlux = protectedFlux
+                    .doOnNext(r -> {
+                        if (r != null && r.getMetadata() != null && r.getMetadata().getUsage() != null
+                                && r.getMetadata().getUsage().getTotalTokens() != null) {
+                            lastUsage.set(Long.valueOf(r.getMetadata().getUsage().getTotalTokens()));
+                        }
+                    })
+                    .doFinally(signal -> budgetGuard.recordAfterCall(lastUsage.get()));
         }
         return protectedFlux;
     }

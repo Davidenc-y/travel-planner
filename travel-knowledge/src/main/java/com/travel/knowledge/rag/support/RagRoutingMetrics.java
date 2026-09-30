@@ -31,6 +31,8 @@ public class RagRoutingMetrics {
     /** AJ-1b：QU 意图缓存命中观测（G3 扩容前埋点；常开无键） */
     private final Counter quCacheHit;
     private final Counter quCacheMiss;
+    /** AK-3c：QU 意图缓存驱逐观测（cacheSize 裁定直接证据：驱逐率>阈值才扩容；常开无键） */
+    private final Counter quCacheEvict;
 
     public RagRoutingMetrics(MeterRegistry registry) {
         this.registry = registry;
@@ -65,6 +67,9 @@ public class RagRoutingMetrics {
                 .register(registry);
         this.quCacheMiss = Counter.builder("rag.qu.cache.miss")
                 .description("QU 意图缓存未命中次数")
+                .register(registry);
+        this.quCacheEvict = Counter.builder("rag.qu.cache.evict")
+                .description("QU 意图缓存 LRU 驱逐次数")
                 .register(registry);
     }
 
@@ -142,6 +147,11 @@ public class RagRoutingMetrics {
         quCacheMiss.increment();
     }
 
+    /** AK-3c：记录一次 QU 意图缓存 LRU 驱逐（removeEldestEntry 判真时；观测面，常开）。 */
+    public void recordQuCacheEvict() {
+        quCacheEvict.increment();
+    }
+
     /** AJ-1b：命中计数读取（观测/单测断言面，tavilyRetryTotalCount 同款）。 */
     public double quCacheHitCount() {
         return quCacheHit.count();
@@ -150,5 +160,10 @@ public class RagRoutingMetrics {
     /** AJ-1b：未命中计数读取（观测/单测断言面）。 */
     public double quCacheMissCount() {
         return quCacheMiss.count();
+    }
+
+    /** AK-3c：驱逐计数读取（观测/单测断言面）。 */
+    public double quCacheEvictCount() {
+        return quCacheEvict.count();
     }
 }

@@ -1,8 +1,10 @@
 package com.travel.planning.service.writeback;
 
 import com.travel.common.config.GrayReleaseManager;
+import com.travel.common.event.EventConsumerRegistry;
 import com.travel.planning.service.ItineraryDetailCache;
 import com.travel.planning.service.itinerary.ItinerarySliceWriter;
+import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Range;
@@ -30,6 +32,11 @@ import java.util.Map;
  * {@code gray.writeback-consumer.enabled}（D-2b，yml 显式 true=现状消费行为；false=轮询头
  * 直接空转返回 0，Stream 积压人工应急门）。</p>
  *
+ * <p>AK-1b：挂接 {@link EventConsumerRegistry} 统一观测面（{@link PostConstruct} 注册
+ * channel/consumerKey/gray 键/启停动作）；<b>触发逻辑逐字保留</b>（@Scheduled 轮询头+
+ * gray 门零改动=P0⑲）——本消费者实际暂停机制仍为既有 gray 键，registry 启停动作
+ * 为观测面协调声明（INFO 日志+运行态翻转），行为等价。</p>
+ *
  * @author david_ency
  * @since 1.0-SNAPSHOT
  */
@@ -56,6 +63,19 @@ public class WritebackEventConsumer {
     private final ItineraryDetailCache itineraryDetailCache;
     /** D-2b 灰度暂停门（enabled() 键缺失回落 false，故 yml 须显式 true） */
     private final GrayReleaseManager gray;
+    /** AK-1b：消费者注册中心（统一观测面，行为等价挂接） */
+    private final EventConsumerRegistry consumerRegistry;
+
+    /** AK-1b：启动时注册至 EventConsumerRegistry（观测面挂接；触发逻辑零改动=P0⑲）。 */
+    @PostConstruct
+    public void registerToConsumerRegistry() {
+        consumerRegistry.register("redis-stream", CONSUMER_KEY, GRAY_KEY,
+                () -> log.info("[WritebackConsumer] registry start 协调（实际暂停门=gray 键 {}）", GRAY_KEY),
+                () -> log.info("[WritebackConsumer] registry stop 协调（实际暂停门=gray 键 {}）", GRAY_KEY));
+    }
+
+    /** AR-5：注册中心 consumerKey（与注册行同源；AK-3d 计数打点用）。 */
+    static final String CONSUMER_KEY = "writeback-redis";
 
     /**
      * 消费一轮（生产由 @Scheduled 轮询；单测直接调用）。
@@ -95,6 +115,7 @@ public class WritebackEventConsumer {
             // 载荷不可解析属不可恢复错误：转死信日志并 ACK，避免永久毒消息
             log.error("[WritebackDLQ] 载荷不可解析，ACK 丢弃: record={}, fields={}", record.getId(), fields);
             redisTemplate.opsForStream().acknowledge(STREAM_KEY, GROUP, record.getId());
+            consumerRegistry.recordRejected(CONSUMER_KEY);
             return true;
         }
         try {
@@ -104,6 +125,7 @@ public class WritebackEventConsumer {
             }
             redisTemplate.opsForStream().acknowledge(STREAM_KEY, GROUP, record.getId());
             log.info("[WritebackConsumer] 事件已消费: record={}, itineraryId={}", record.getId(), itineraryId);
+            consumerRegistry.recordConsumed(CONSUMER_KEY);
             return true;
         } catch (Exception e) {
             long attempts = deliveryCount(record.getId());
@@ -111,6 +133,7 @@ public class WritebackEventConsumer {
                 log.error("[WritebackDLQ] 消费失败已达 {} 次，转死信日志并 ACK（人工按日志处置）: record={}, "
                                 + "itineraryId={}, error={}", attempts, record.getId(), itineraryId, e.getMessage());
                 redisTemplate.opsForStream().acknowledge(STREAM_KEY, GROUP, record.getId());
+                consumerRegistry.recordRejected(CONSUMER_KEY);
                 // 已转死信并 ACK：计为已处理（终止重投循环，人工按 [WritebackDLQ] 日志处置）
                 return true;
             }
