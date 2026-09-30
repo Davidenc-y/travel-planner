@@ -7,6 +7,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
@@ -110,6 +111,40 @@ public class CityCorpusCache {
             }
         }
         return firstThin;
+    }
+
+    /**
+     * AM-3（GM-4，P0⑳）：尾段扫描命中的<b>全部</b>薄/零城收集——{@link #firstThinCity(String)}
+     * 的全量形态（多薄城话术数据源）。语义契约：宇宙序遍历、厚城一票放行、fail-open 放行
+     * 与 firstThinCity 逐项同构——<b>返回表首个恒等 firstThinCity 返回值</b>（语义零变化
+     * 对账锚；本方法只增、firstThinCity 方法体零触碰=P0⑳）。文本未提及宇宙城市/blank/
+     * 快照空/宇宙空→空表（放行）。
+     */
+    public List<String> thinCitiesIn(String text) {
+        if (text == null || text.isBlank()) {
+            return List.of();
+        }
+        String q = tailQuestion(text);
+        Map<String, Integer> snapshot = ensureLoaded();
+        List<String> universe = cityUniverse();
+        // AR-7b：判定要素观测行（与 firstThinCity 同款——生产 gate 自本方法走，观测面不缺位）
+        log.info("[CityPrecheck] 判定要素: snapshot.size={} universe.size={} threshold={} tailLen={}",
+                snapshot.size(), universe.size(), thinThreshold, q.length());
+        if (snapshot.isEmpty() || universe.isEmpty()) {
+            return List.of();
+        }
+        List<String> thin = new ArrayList<>();
+        for (String city : universe) {
+            if (!q.contains(city)) {
+                continue;
+            }
+            Integer count = snapshot.get(city);
+            if (count != null && count >= thinThreshold) {
+                return List.of(); // 当前问句提及任一厚城→放行（同 firstThinCity 语义）
+            }
+            thin.add(city); // 薄或零行（不在计数面）→按宇宙序收集
+        }
+        return List.copyOf(thin);
     }
 
     /** 【当前问题】marker 尾段提取（PlanningHeuristics.tailQuestion 同约定；无 marker 用全文）。 */

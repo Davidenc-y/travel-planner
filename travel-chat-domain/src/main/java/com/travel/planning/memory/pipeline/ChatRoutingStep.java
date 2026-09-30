@@ -201,11 +201,11 @@ public class ChatRoutingStep implements ChatPipelineStep {
                     // 模板话术直出+推荐有语料城市；fail-open=缓存不可达即放行原图流）
                     boolean cityPrecheckHit = false;
                     if (cityPrecheckEnabled) {
-                        String thinCity = cityCorpusCache.firstThinCity(composed);
-                        if (thinCity != null) {
-                            response = CityPrecheckMessages.thinCorpusReply(thinCity, cityCorpusCache.richCities());
+                        List<String> thinCities = cityCorpusCache.thinCitiesIn(composed);
+                        if (!thinCities.isEmpty()) {
+                            response = CityPrecheckMessages.thinCorpusReply(thinCities, cityCorpusCache.richCities());
                             cityPrecheckHit = true;
-                            log.info("[ChatRouting][city-precheck] 薄语料城市={} 命中，模板直出（零 LLM 零图流）", thinCity);
+                            log.info("[ChatRouting][city-precheck] 薄语料城市={} 命中，模板直出（零 LLM 零图流）", thinCities.get(0));
                         }
                     }
                     if (!cityPrecheckHit) {
@@ -317,12 +317,12 @@ public class ChatRoutingStep implements ChatPipelineStep {
                     // （graph-stream 开启时本分支早于阻塞降级返回）——闸门镜像至 routeStream，
                     // 语义与 route() 逐字对齐：薄语料城市命中=模板直出零 LLM 零图流。
                     if (cityPrecheckEnabled) {
-                        String thinCity = cityCorpusCache.firstThinCity(composed);
-                        if (thinCity != null) {
+                        List<String> thinCities = cityCorpusCache.thinCitiesIn(composed);
+                        if (!thinCities.isEmpty()) {
                             String reply = CityPrecheckMessages.thinCorpusReply(
-                                    thinCity, cityCorpusCache.richCities());
+                                    thinCities, cityCorpusCache.richCities());
                             log.info("[ChatRouting][city-precheck] 薄语料城市={} 命中，模板直出（零 LLM 零图流，stream 路径）",
-                                    thinCity);
+                                    thinCities.get(0));
                             logElapsed(intent, routeStart, false);
                             return new StreamRouteResult(reply, 0, false, false);
                         }
