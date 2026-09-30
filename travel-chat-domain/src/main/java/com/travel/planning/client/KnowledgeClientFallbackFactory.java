@@ -64,5 +64,13 @@ public class KnowledgeClientFallbackFactory implements FallbackFactory<Knowledge
         public R<Integer> deleteSessionContextByPrefix(String sessionId, String seqPrefix) {
             return R.fail(KNOWLEDGE_UNAVAILABLE_CODE, KNOWLEDGE_UNAVAILABLE_MESSAGE);
         }
+
+        @Override
+        public R<Map<String, Integer>> cityCounts() {
+            // AL-2b（方案 §2.2 面四）：P0⑦ 唯一注记例外——city-counts 是止损预检面而非业务
+            // 数据，knowledge 不可达时返回空 Map=fail-open 放行原图流（R.fail 会把 knowledge
+            // 故障放大为规划主链路阻断）；空 Map 上游语义=无计数可用→闸门不拦截。
+            return R.ok(Map.of());
+        }
     }
 }

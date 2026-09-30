@@ -41,4 +41,10 @@ public interface KnowledgeSearchPort {
      * M8-9：按 seq 前缀删除会话切片（REFINE/重生成覆盖旧版本）。
      */
     R<Integer> deleteSessionContextByPrefix(String sessionId, String seqPrefix);
+
+    /**
+     * AL-2b（GL-2）：城市语料计数（knowledge /api/v1/etl/city-counts；AL-2a 端点，
+     * planning 侧 CityCorpusCache 数据源）。降级语义=空 Map fail-open（面四唯一例外）。
+     */
+    R<Map<String, Integer>> cityCounts();
 }

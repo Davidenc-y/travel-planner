@@ -5,6 +5,7 @@ import com.travel.common.entity.Attraction;
 import org.apache.ibatis.annotations.Mapper;
 
 import java.util.List;
+import java.util.Map;
 
 /**
  * 景点 MyBatis Mapper
@@ -44,4 +45,10 @@ public interface AttractionMapper extends BaseMapper<Attraction> {
 
     /** M5-1：全部城市去重列表（景点“浏览全部”下拉数据源） */
     List<String> listCities();
+
+    /**
+     * AL-2a（GL-2）：城市语料计数（planning 侧 CityCorpusCache 数据源；纯 SELECT 零 DDL）。
+     * 行结构 {city, c}，由 EtlController 转置为 Map&lt;String,Integer&gt;。
+     */
+    List<Map<String, Object>> cityCounts();
 }

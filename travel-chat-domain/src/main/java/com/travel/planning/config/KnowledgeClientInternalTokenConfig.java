@@ -26,7 +26,11 @@ public class KnowledgeClientInternalTokenConfig {
             if (internalToken != null && !internalToken.isBlank()
                     && template.url() != null
                     && (template.url().contains("/api/v1/memory/")
-                        || template.url().contains("/api/v1/rag/"))) {
+                        || template.url().contains("/api/v1/rag/")
+                        // AR-8（2026-09-30 审计实弹修复）：AL-2a 新端点 /api/v1/etl/city-counts
+                        // 同属 knowledge 内部 token 保护面（WebConfig 四前缀）——漏配=401→
+                        // Fallback 空图→缓存静默放行 600s（实测根因）。
+                        || template.url().contains("/api/v1/etl/"))) {
                 template.header(GrayFlags.HEADER_INTERNAL_TOKEN, internalToken);
             }
         };

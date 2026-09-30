@@ -31,4 +31,9 @@
     <select id="listCities" resultType="java.lang.String">
         SELECT DISTINCT city FROM t_attraction ORDER BY city
     </select>
+
+    <!-- AL-2a（GL-2）：城市语料计数（planning 侧 CityCorpusCache 数据源；纯 SELECT 零 DDL） -->
+    <select id="cityCounts" resultType="java.util.HashMap">
+        SELECT city, COUNT(*) AS c FROM t_attraction GROUP BY city
+    </select>
 </mapper>

@@ -2,12 +2,14 @@ package com.travel.knowledge.controller;
 
 import com.travel.common.result.R;
 import com.travel.knowledge.etl.AttractionEtlService;
+import com.travel.knowledge.repository.AttractionMapper;
 import com.travel.knowledge.service.AttractionImportService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.*;
 import jakarta.servlet.http.HttpServletResponse;
 
+import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
@@ -26,6 +28,7 @@ public class EtlController {
 
     private final AttractionEtlService etlService;
     private final AttractionImportService importService;
+    private final AttractionMapper attractionMapper;
 
     /**
      * 全量 ETL：处理所有景点（含已索引的会重新写入）
@@ -57,6 +60,21 @@ public class EtlController {
     @GetMapping("/stats")
     public R<Map<String, Object>> getStats() {
         return R.ok(etlService.getStats());
+    }
+
+    /**
+     * AL-2a（GL-2）：城市语料计数——planning 侧 CityCorpusCache 数据源（只读观测面，
+     * internal-token 保护前缀 /api/v1/etl/** 内）。行结构 {city, c} 转置为 Map 返回。
+     */
+    @GetMapping("/city-counts")
+    public R<Map<String, Integer>> cityCounts() {
+        Map<String, Integer> counts = new LinkedHashMap<>();
+        for (Map<String, Object> row : attractionMapper.cityCounts()) {
+            if (row.get("city") != null && row.get("c") instanceof Number n) {
+                counts.put(row.get("city").toString(), n.intValue());
+            }
+        }
+        return R.ok(counts);
     }
 
     /**

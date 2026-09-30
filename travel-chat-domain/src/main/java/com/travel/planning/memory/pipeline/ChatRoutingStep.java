@@ -96,6 +96,9 @@ public class ChatRoutingStep implements ChatPipelineStep {
     private final SessionKnowledgeWriter sessionKnowledgeWriter;
     private final SessionContextChunker sessionContextChunker;
 
+    /** AL-2c：城市语料缓存（PLANNING/REFINE 前置止损数据源；fail-open 语义见类注释） */
+    private final CityCorpusCache cityCorpusCache;
+
     /** T-1a：锚定目的地读取依赖（optional 注入，null=读不到目的地→runWith(null) 行为等价现状） */
     private com.travel.memory.MemoryFacade memoryFacade;
 
@@ -127,6 +130,10 @@ public class ChatRoutingStep implements ChatPipelineStep {
     /** M13-2：行程落库/回写总开关（false=行为等价现状） */
     @Value("${travel.chat.supervisor.itinerary-writeback.enabled:true}")
     private boolean itineraryWritebackEnabled = true;
+
+    /** AL-2：零/薄语料城市前置止损开关（travel.rag.city-precheck.enabled 默认 false 在码=P0⑱/E-33；开启归审计窗） */
+    @Value("${travel.rag.city-precheck.enabled:false}")
+    private boolean cityPrecheckEnabled = false;
 
     @Autowired(required = false)
     void setItineraryConflictPort(ItineraryConflictPort itineraryConflictPort) {
@@ -168,7 +175,7 @@ public class ChatRoutingStep implements ChatPipelineStep {
         Long writtenItineraryId = null; // M23（P-D）：回写成功的行程 id（供 suggestion 判定）
         TurnCancellation cancel = cancellation == null ? TurnCancellation.NOOP : cancellation;
         long routeStart = System.currentTimeMillis();
-        String response;
+        String response = null; // AL-2 后 DA 显式化（javac 不追踪 hit⇒assigned 蕴含；行为零变化）
         long aiTokens = 0;
         boolean fallback = false;
         try {
@@ -190,30 +197,43 @@ public class ChatRoutingStep implements ChatPipelineStep {
                     aiTokens = result.totalTokens();
                 }
                 default -> { // PLANNING / REFINE：F64/B2 把 userId 传入 Supervisor（metadata 供画像工具）
-                    // S-C2b：意图写入 trace 上下文——supervisor 墙钟按预算档收紧（只紧不松）
-                    if (com.travel.planning.trace.TraceContext.active()) {
-                        com.travel.planning.trace.TraceContext.current().budgetIntent = intent.name();
+                    // AL-2：零/薄语料城市前置止损（默认关；开启=消息命中薄语料城市时跳过整图，
+                    // 模板话术直出+推荐有语料城市；fail-open=缓存不可达即放行原图流）
+                    boolean cityPrecheckHit = false;
+                    if (cityPrecheckEnabled) {
+                        String thinCity = cityCorpusCache.firstThinCity(composed);
+                        if (thinCity != null) {
+                            response = CityPrecheckMessages.thinCorpusReply(thinCity, cityCorpusCache.richCities());
+                            cityPrecheckHit = true;
+                            log.info("[ChatRouting][city-precheck] 薄语料城市={} 命中，模板直出（零 LLM 零图流）", thinCity);
+                        }
                     }
-                    TravelSupervisorAgent.PlanningResult result =
-                            supervisorAgent.executePlanningWithUsage(
-                                    withWeather(intent, composed), userId, cancel);
-                    response = result.answer();
-                    // F27：assistant 消息 tokens = 本次全部 LLM 调用的真实 totalTokens 之和
-                    aiTokens = result.totalTokens();
-                    // M8-2 引用校验 + S-D1 未命中标注 + S-D2 幻觉计数（AA-7：共用段收敛
-                    // StreamRouteSupport，方法体逐字搬运）
-                    response = StreamRouteSupport.annotateGroundingWithCount(
-                            groundingChecker, composed, response, ragQualityCounters);
-                    // M8-6：REFINE 保留性观测（原行程 vs 新输出静默丢失率写 trace）
-                    if (intent == ChatIntent.REFINE) {
-                        SupervisorResponseSupport.recordRetention(
-                                groundingChecker, sessionHits, response);
+                    if (!cityPrecheckHit) {
+                        // S-C2b：意图写入 trace 上下文——supervisor 墙钟按预算档收紧（只紧不松）
+                        if (com.travel.planning.trace.TraceContext.active()) {
+                            com.travel.planning.trace.TraceContext.current().budgetIntent = intent.name();
+                        }
+                        TravelSupervisorAgent.PlanningResult result =
+                                supervisorAgent.executePlanningWithUsage(
+                                        withWeather(intent, composed), userId, cancel);
+                        response = result.answer();
+                        // F27：assistant 消息 tokens = 本次全部 LLM 调用的真实 totalTokens 之和
+                        aiTokens = result.totalTokens();
+                        // M8-2 引用校验 + S-D1 未命中标注 + S-D2 幻觉计数（AA-7：共用段收敛
+                        // StreamRouteSupport，方法体逐字搬运）
+                        response = StreamRouteSupport.annotateGroundingWithCount(
+                                groundingChecker, composed, response, ragQualityCounters);
+                        // M8-6：REFINE 保留性观测（原行程 vs 新输出静默丢失率写 trace）
+                        if (intent == ChatIntent.REFINE) {
+                            SupervisorResponseSupport.recordRetention(
+                                    groundingChecker, sessionHits, response);
+                        }
+                        // M8-9：行程生成后写入 itinerary_day 切片（REFINE 覆盖旧版本）
+                        observeConflictIfEnabled(composed, result.routePlanJson());
+                        writeItineraryChunks(sessionId, result.routePlanJson());
+                        writtenItineraryId = writebackIfEnabled(intent, userId, sessionId, composed,
+                                result.routePlanJson(), result.budgetJson());
                     }
-                    // M8-9：行程生成后写入 itinerary_day 切片（REFINE 覆盖旧版本）
-                    observeConflictIfEnabled(composed, result.routePlanJson());
-                    writeItineraryChunks(sessionId, result.routePlanJson());
-                    writtenItineraryId = writebackIfEnabled(intent, userId, sessionId, composed,
-                            result.routePlanJson(), result.budgetJson());
                 }
             }
         } catch (TurnInterruptedException e) {
@@ -293,6 +313,20 @@ public class ChatRoutingStep implements ChatPipelineStep {
                     return new StreamRouteResult(result.answer(), result.totalTokens(), false, true);
                 }
                 default -> {
+                    // AR-6（2026-09-30 审计实弹修复）：流式生产路径不经 route() 的 AL-2 前置闸门
+                    // （graph-stream 开启时本分支早于阻塞降级返回）——闸门镜像至 routeStream，
+                    // 语义与 route() 逐字对齐：薄语料城市命中=模板直出零 LLM 零图流。
+                    if (cityPrecheckEnabled) {
+                        String thinCity = cityCorpusCache.firstThinCity(composed);
+                        if (thinCity != null) {
+                            String reply = CityPrecheckMessages.thinCorpusReply(
+                                    thinCity, cityCorpusCache.richCities());
+                            log.info("[ChatRouting][city-precheck] 薄语料城市={} 命中，模板直出（零 LLM 零图流，stream 路径）",
+                                    thinCity);
+                            logElapsed(intent, routeStart, false);
+                            return new StreamRouteResult(reply, 0, false, false);
+                        }
+                    }
                     // M6-18：图级流式开关（默认关；开启前需 golden 验证），失败自动降级阻塞
                     if (chatStreamProps.isPlanningGraphStreamEnabled()) {
                         // M6-38：用户停止（SSE abort）会让图流线程收到 InterruptedException——

@@ -85,4 +85,10 @@ public interface KnowledgeClient {
     R<Integer> deleteSessionContextByPrefix(
             @RequestParam("sessionId") String sessionId,
             @RequestParam("seqPrefix") String seqPrefix);
+
+    /**
+     * AL-2b（GL-2）：城市语料计数（knowledge /api/v1/etl/city-counts；AL-2a 端点）。
+     */
+    @GetMapping("/api/v1/etl/city-counts")
+    R<Map<String, Integer>> cityCounts();
 }

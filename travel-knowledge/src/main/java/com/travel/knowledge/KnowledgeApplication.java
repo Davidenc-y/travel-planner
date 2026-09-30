@@ -42,12 +42,17 @@ public class KnowledgeApplication {
         // M15-3：api.tavily.com 在本机 IPv6 路径 TLS 握手被远端重置，
         // 强制 IPv4 优先后再初始化 Spring（须在任何 java.net 网络初始化之前）。
         System.setProperty("java.net.preferIPv4Stack", "true");
-        SpringApplication.run(KnowledgeApplication.class, args);
-        System.out.println("""
+        org.springframework.context.ConfigurableApplicationContext context =
+                SpringApplication.run(KnowledgeApplication.class, args);
+        // AL-5a（GL-6）：banner 端口动态化——原硬编码 8082（8084 实例启动同样打 8082）。
+        // 静态 main 无法实例 @Value 注入，改读 run() 上下文 Environment 同键
+        // ${server.port:8082}（缺省 8082=首实例输出行为等价）。
+        String bannerPort = context.getEnvironment().getProperty("server.port", "8082");
+        System.out.println(("""
                 ===================================================
-                  Travel Knowledge Service Started (port 8082)
+                  Travel Knowledge Service Started (port %s)
                   知识库服务启动完成
                 ===================================================
-                """);
+                """).formatted(bannerPort));
     }
 }

@@ -143,6 +143,13 @@ public class ChatIntentClassifier {
                 return intent;
             }
         }
+        // AL-1（GL-1）：规划启发词正判——五类词表均未命中时，强规划词直接 PLANNING，
+        // 免落 LLM 兜底（qwen-turbo 把行程问句判 CHAT 的误判面）。词表单源复用
+        // wordLists.getHeuristics().getPlanning()（与 PlanningHeuristics 同源），
+        // 不新增任何词。位置在五类之后=纯收敛 LLM 兜底子集，既有五类命中零变化。
+        if (containsAny(q, wordLists.getHeuristics().getPlanning().toArray(new String[0]))) {
+            return ChatIntent.PLANNING;
+        }
         return null;
     }
 

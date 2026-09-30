@@ -1,6 +1,7 @@
 package com.travel.planning.controller;
 
 import com.travel.common.config.GrayReleaseManager;
+import com.travel.common.event.EventConsumerRegistry;
 import com.travel.common.exception.BusinessException;
 import com.travel.common.result.R;
 import com.travel.planning.memory.knowledge.RagQualityCounters;
@@ -44,6 +45,8 @@ public class AdminReliabilityController {
     private final TurnLatencyService turnLatencyService;
     /** RK-13/D-5：RAG 质量指标 Redis 读（键前缀=chat-domain RagQualityCounters.KEY_PREFIX 唯一权威源）。 */
     private final StringRedisTemplate stringRedisTemplate;
+    /** AL-3（GL-3）：事件消费者注册中心（AR-5 计数器的进程内读取面，travel-common @Component 既有装配）。 */
+    private final EventConsumerRegistry eventConsumerRegistry;
 
     @GetMapping("/stats")
     public R<Map<String, Object>> stats(@RequestParam(defaultValue = "7") Integer days) {
@@ -157,5 +160,19 @@ public class AdminReliabilityController {
             throw new BusinessException(40001, "未知灰度键: " + key);
         }
         return R.ok(grayReleaseManager.snapshot());
+    }
+
+    /**
+     * AL-3（GL-3）：事件消费者注册中心观测面外露（只读透传 status() 行列表——
+     * channel/key/grayKey/running/lastConsumeAt/consumeCount/rejectCount；
+     * AR-5 计数器此前仅进程内可读，此端点补齐观测闭环；零新依赖零新装配）。
+     */
+    @GetMapping("/event-consumers")
+    public R<List<EventConsumerRegistry.ConsumerStatus>> eventConsumers() {
+        Long userId = AuthUtils.resolveUserId();
+        if (!adminAccessService.isAdmin(userId)) {
+            throw new BusinessException(40302, "无权访问消费者注册中心");
+        }
+        return R.ok(eventConsumerRegistry.status());
     }
 }

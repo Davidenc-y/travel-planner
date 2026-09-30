@@ -59,7 +59,8 @@ public class KnowledgeClientSelector {
                     delegate::writeSessionContext,
                     delegate::searchSessionContext,
                     delegate::findSessionContextByPrefix,
-                    delegate::deleteSessionContextByPrefix);
+                    delegate::deleteSessionContextByPrefix,
+                    delegate::cityCounts);
         }
         KnowledgeClient delegate = directClient.getObject();
         log.info("[KnowledgeSelector] 直连模式（URL 现状）：travel.knowledge.discovery-mode=false");
@@ -68,7 +69,8 @@ public class KnowledgeClientSelector {
                 delegate::writeSessionContext,
                 delegate::searchSessionContext,
                 delegate::findSessionContextByPrefix,
-                delegate::deleteSessionContextByPrefix);
+                delegate::deleteSessionContextByPrefix,
+                delegate::cityCounts);
     }
 
     /** AK 二审 AR-1：五方法委托适配器（port 唯一实现；签名与 port 逐字对齐） */
@@ -100,21 +102,30 @@ public class KnowledgeClientSelector {
         R<Integer> deleteSessionContextByPrefix(String sessionId, String seqPrefix);
     }
 
+    /** AL-2b（GL-2）：城市语料计数委托面（port 第六方法）。 */
+    @FunctionalInterface
+    interface CityCountsFn {
+        R<Map<String, Integer>> cityCounts();
+    }
+
     static final class PortAdapter implements KnowledgeSearchPort {
         private final SearchFn searchFn;
         private final WriteFn writeFn;
         private final SearchSessionFn searchSessionFn;
         private final FindPrefixFn findPrefixFn;
         private final DeletePrefixFn deletePrefixFn;
+        private final CityCountsFn cityCountsFn;
 
         PortAdapter(SearchFn searchFn,
                 WriteFn writeFn,
-                SearchSessionFn searchSessionFn, FindPrefixFn findPrefixFn, DeletePrefixFn deletePrefixFn) {
+                SearchSessionFn searchSessionFn, FindPrefixFn findPrefixFn, DeletePrefixFn deletePrefixFn,
+                CityCountsFn cityCountsFn) {
             this.searchFn = searchFn;
             this.writeFn = writeFn;
             this.searchSessionFn = searchSessionFn;
             this.findPrefixFn = findPrefixFn;
             this.deletePrefixFn = deletePrefixFn;
+            this.cityCountsFn = cityCountsFn;
         }
 
         @Override
@@ -143,6 +154,11 @@ public class KnowledgeClientSelector {
         @Override
         public R<Integer> deleteSessionContextByPrefix(String sessionId, String seqPrefix) {
             return deletePrefixFn.deleteSessionContextByPrefix(sessionId, seqPrefix);
+        }
+
+        @Override
+        public R<Map<String, Integer>> cityCounts() {
+            return cityCountsFn.cityCounts();
         }
     }
 }
