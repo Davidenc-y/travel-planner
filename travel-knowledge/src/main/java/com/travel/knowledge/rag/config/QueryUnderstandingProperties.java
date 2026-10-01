@@ -25,6 +25,12 @@ public class QueryUnderstandingProperties {
     /** 意图缓存容量（LRU），0 表示不缓存 */
     private int cacheSize = 256;
 
+    /** AN-1 QU 并发帽：在途 LLM 抽取信号量上限；0=不限（E-33 现状字节等价，默认关） */
+    private int maxConcurrentLlm = 0;
+
+    /** AN-1 QU 调用超时：单次 LLM 抽取限时毫秒；0=不限（E-33 现状字节等价，默认关） */
+    private int llmTimeoutMs = 0;
+
     /** 城市清单（启发式兜底与过滤使用） */
     private List<String> cities = new ArrayList<>(List.of(
             "北京", "上海", "广州", "深圳", "杭州", "成都", "西安", "厦门", "南京",

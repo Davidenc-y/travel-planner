@@ -16,6 +16,13 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.FutureTask;
+import java.util.concurrent.Semaphore;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 /**
  * 查询理解服务（F40/P1）。
@@ -46,6 +53,28 @@ public class QueryUnderstandingServiceImpl implements QueryUnderstandingService 
     @Autowired(required = false)
     void setRagMetrics(RagRoutingMetrics ragMetrics) {
         this.ragMetrics = ragMetrics;
+    }
+
+    /** AN-1b：QU LLM 专用执行器（虚拟线程 per-task=方案修正 1②；无界无拒绝面，信号量为唯一并发闸） */
+    private static final ExecutorService QU_LLM_EXECUTOR = Executors.newVirtualThreadPerTaskExecutor();
+
+    /** AN-1a：QU LLM 并发帽信号量（懒建随 maxConcurrentLlm 配置值；0=不限不建不闸） */
+    private Semaphore quLlmSlots;
+    private int quLlmSlotsCap;
+
+    /** AN-1a：信号量懒建访问器（容量随配置值；0=返回 null=不闸，E-33 现状语义；包级=测试同包直取观测面） */
+    Semaphore quLlmSlots() {
+        int cap = properties.getMaxConcurrentLlm();
+        if (cap <= 0) {
+            return null;
+        }
+        synchronized (this) {
+            if (quLlmSlots == null || quLlmSlotsCap != cap) {
+                quLlmSlots = new Semaphore(cap);
+                quLlmSlotsCap = cap;
+            }
+            return quLlmSlots;
+        }
     }
 
     // M7 Batch 4：高频短输出 → light 角色（注册表默认 qwen-turbo；RAG 评测硬门禁守护质量）
@@ -84,13 +113,68 @@ public class QueryUnderstandingServiceImpl implements QueryUnderstandingService 
         // S-B5b：查询理解段 span（同线程上下文，未绑定空安全跳过）
         SpanCollector.Span quSpan = spanCollector.start("qu", "understanding");
         QueryIntent result;
-        if (properties.isEnabled()) {
-            QueryIntent llm = extractByLlm(q);
-            result = llm != null ? llm : heuristic(q);
-            log.info("[QueryUnderstanding] LLM 抽取: {}", result);
-        } else {
-            result = heuristic(q);
-            log.info("[QueryUnderstanding] LLM 已禁用，使用启发式: {}", result);
+        boolean acquired = false;
+        try {
+            if (properties.isEnabled()) {
+                // AN-1a 并发信号量：tryAcquire 失败=fail-open（原始查询走启发式继续检索+计数）——不排队不加延迟
+                Semaphore slots = quLlmSlots();
+                if (slots != null) {
+                    if (!slots.tryAcquire()) {
+                        if (ragMetrics != null) {
+                            ragMetrics.recordQuOverflow();
+                        }
+                        log.info("[QueryUnderstanding] QU 并发帽({})已满，fail-open 启发式兜底", properties.getMaxConcurrentLlm());
+                        return failOpen(q, quSpan, "overflow");
+                    }
+                    acquired = true;
+                }
+                // AN-1b 调用超时：限时 get——超时=cancel(true)+fail-open+计数（虚拟线程阻塞 get 零载体代价）；0=不限现状直调
+                if (properties.getLlmTimeoutMs() > 0) {
+                    // FutureTask 而非 CompletableFuture：cancel(true) 必须真实打断底层调用线程（skill 四硬规则语义本体）
+                    FutureTask<QueryIntent> future = new FutureTask<>(() -> extractByLlm(q));
+                    QU_LLM_EXECUTOR.execute(future);
+                    try {
+                        QueryIntent llm = future.get(properties.getLlmTimeoutMs(), TimeUnit.MILLISECONDS);
+                        result = llm != null ? llm : heuristic(q);
+                    } catch (TimeoutException te) {
+                        future.cancel(true); // 超时路径必须 cancel(true)（skill 四硬规则=P0⑲）
+                        if (ragMetrics != null) {
+                            ragMetrics.recordQuTimeout();
+                        }
+                        log.info("[QueryUnderstanding] LLM 抽取超时({}ms)，fail-open 启发式兜底", properties.getLlmTimeoutMs());
+                        return failOpen(q, quSpan, "timeout");
+                    } catch (InterruptedException ie) {
+                        Thread.currentThread().interrupt();
+                        future.cancel(true);
+                        if (ragMetrics != null) {
+                            ragMetrics.recordQuTimeout();
+                        }
+                        log.info("[QueryUnderstanding] LLM 抽取等待被中断，fail-open 启发式兜底");
+                        return failOpen(q, quSpan, "interrupted");
+                    } catch (ExecutionException ee) {
+                        // extractByLlm 自带 catch→null 永不抛；载体面兜底按原异常语义外抛（方案 §2.1）
+                        Throwable cause = ee.getCause() != null ? ee.getCause() : ee;
+                        if (cause instanceof RuntimeException re) {
+                            throw re;
+                        }
+                        throw new IllegalStateException(cause);
+                    }
+                } else {
+                    QueryIntent llm = extractByLlm(q);
+                    result = llm != null ? llm : heuristic(q);
+                }
+                log.info("[QueryUnderstanding] LLM 抽取: {}", result);
+            } else {
+                result = heuristic(q);
+                log.info("[QueryUnderstanding] LLM 已禁用，使用启发式: {}", result);
+            }
+        } finally {
+            if (acquired) {
+                Semaphore slots = quLlmSlots();
+                if (slots != null) {
+                    slots.release();
+                }
+            }
         }
         if (quSpan != null) {
             Map<String, Object> quAttrs = new LinkedHashMap<>();
@@ -104,6 +188,25 @@ public class QueryUnderstandingServiceImpl implements QueryUnderstandingService 
             cache.put(q, result);
         }
         return result;
+    }
+
+    /**
+     * AN-1 fail-open 统一出口：end span（观测面收口，防楔死期 span 泄漏）+返回启发式兜底。
+     * 调用方以早退跳过 cache.put——瞬态降级不得被 LRU 固化（方案修正 1④）；
+     * 配置态 heuristic 可缓存=既有语义，两态区分。
+     */
+    private QueryIntent failOpen(String q, SpanCollector.Span quSpan, String reason) {
+        QueryIntent fallback = heuristic(q);
+        if (quSpan != null) {
+            Map<String, Object> attrs = new LinkedHashMap<>();
+            attrs.put("llmEnabled", properties.isEnabled());
+            attrs.put("failOpen", reason);
+            attrs.put("city", fallback.city());
+            attrs.put("type", fallback.type());
+            attrs.put("keywords", fallback.keywords() == null ? 0 : fallback.keywords().size());
+            spanCollector.end(quSpan, "ok", attrs);
+        }
+        return fallback;
     }
 
     /**

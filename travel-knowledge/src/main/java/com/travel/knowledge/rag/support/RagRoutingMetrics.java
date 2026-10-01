@@ -33,6 +33,10 @@ public class RagRoutingMetrics {
     private final Counter quCacheMiss;
     /** AK-3c：QU 意图缓存驱逐观测（cacheSize 裁定直接证据：驱逐率>阈值才扩容；常开无键） */
     private final Counter quCacheEvict;
+    /** AN-1：QU LLM 并发帽拒绝观测（信号量 tryAcquire 失败 fail-open；常开无键） */
+    private final Counter quOverflow;
+    /** AN-1：QU LLM 抽取超时观测（限时 get 超时 fail-open；常开无键） */
+    private final Counter quTimeout;
 
     public RagRoutingMetrics(MeterRegistry registry) {
         this.registry = registry;
@@ -70,6 +74,12 @@ public class RagRoutingMetrics {
                 .register(registry);
         this.quCacheEvict = Counter.builder("rag.qu.cache.evict")
                 .description("QU 意图缓存 LRU 驱逐次数")
+                .register(registry);
+        this.quOverflow = Counter.builder("rag.qu.overflow")
+                .description("QU LLM 并发帽拒绝次数（信号量满 fail-open）")
+                .register(registry);
+        this.quTimeout = Counter.builder("rag.qu.timeout")
+                .description("QU LLM 抽取超时次数（限时 get fail-open）")
                 .register(registry);
     }
 
@@ -165,5 +175,25 @@ public class RagRoutingMetrics {
     /** AK-3c：驱逐计数读取（观测/单测断言面）。 */
     public double quCacheEvictCount() {
         return quCacheEvict.count();
+    }
+
+    /** AN-1：记录一次 QU LLM 并发帽拒绝（rag.qu.overflow，观测面，常开）。 */
+    public void recordQuOverflow() {
+        quOverflow.increment();
+    }
+
+    /** AN-1：记录一次 QU LLM 抽取超时（rag.qu.timeout，观测面，常开）。 */
+    public void recordQuTimeout() {
+        quTimeout.increment();
+    }
+
+    /** AN-1：并发帽拒绝计数读取（观测/单测断言面）。 */
+    public double quOverflowCount() {
+        return quOverflow.count();
+    }
+
+    /** AN-1：超时计数读取（观测/单测断言面）。 */
+    public double quTimeoutCount() {
+        return quTimeout.count();
     }
 }

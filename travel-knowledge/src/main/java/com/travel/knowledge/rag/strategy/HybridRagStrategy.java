@@ -32,10 +32,14 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.FutureTask;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
 /**
@@ -86,6 +90,10 @@ public class HybridRagStrategy extends AbstractRagStrategy {
     /** AJ-2a：单路独立超时 ms（E-58 各路独立 orTimeout；默认 4s=不超现状串行上界；包内可见=单测直设面） */
     @Value("${travel.rag.parallel-retrieval.parallel-timeout-ms:4000}")
     long parallelTimeoutMs;
+
+    /** AN-2：串行检索同步超时 ms（默认 0=不限现状字节等价 E-33；包内可见=单测直设面） */
+    @Value("${travel.rag.retrieval-sync-timeout-ms:0}")
+    long retrievalSyncTimeoutMs;
 
     /** MR-D2：optional 注入（bean 缺省=现状单路，构造签名零变更） */
     @Autowired(required = false)
@@ -193,7 +201,8 @@ public class HybridRagStrategy extends AbstractRagStrategy {
         if (!parallelRetrieval) {
             // AJ-2a 串行分支：现状代码逐字保留禁重排（P0⑯）
             SpanCollector.Span bm25Span = spanCollector.start("bm25", "retrieval");
-            List<RRFusion.ScoredItem> bm25Results = bm25Search(intent, poolSize);
+            // AN-2：串行调用体限时包裹（只包调用体不改结构=P0⑳；span start/end 主线程词面零触碰）
+            List<RRFusion.ScoredItem> bm25Results = syncBoundedGet("bm25", () -> bm25Search(intent, poolSize));
             if (bm25Span != null) {
                 spanCollector.end(bm25Span, bm25Results.isEmpty() ? "empty" : "ok", Map.of("count", bm25Results.size()));
             }
@@ -202,9 +211,11 @@ public class HybridRagStrategy extends AbstractRagStrategy {
             // MR-D2：llm-expand.enabled=true（bean 存在）时走多 Query 路：变体各自向量检索 +
             // RRFusion 级联合并（复用 G11）；未注入=现状单路（E-33）
             SpanCollector.Span knnSpan = spanCollector.start("knn", "retrieval");
-            List<RRFusion.ScoredItem> knnResults = llmQueryExpander != null
+            // AN-2：knn 路调用体限时包裹（三元词面在 lambda 内逐字保留；expand 子 span 工作线程态
+            // null 安全跳过=AJ-2a N2 同族已知观测缺口，仅 timeout 开启时）
+            List<RRFusion.ScoredItem> knnResults = syncBoundedGet("knn", () -> llmQueryExpander != null
                     ? knnMultiQuery(intent, poolSize)
-                    : knnSearch(intent, hydeQueryRewriter.vectorQueryText(intent), poolSize);
+                    : knnSearch(intent, hydeQueryRewriter.vectorQueryText(intent), poolSize));
             if (knnSpan != null) {
                 spanCollector.end(knnSpan, knnResults.isEmpty() ? "empty" : "ok",
                         Map.of("count", knnResults.size(), "expanded", llmQueryExpander != null));
@@ -292,6 +303,44 @@ public class HybridRagStrategy extends AbstractRagStrategy {
             spanCollector.end(gateSpan, "ok", Map.of("kept", gated.size()));
         }
         return gated;
+    }
+
+    /**
+     * AN-2：串行检索调用体限时包裹（retrieval-sync-timeout-ms>0 时虚拟线程 FutureTask 限时 get，
+     * 超时=cancel(true)+降级空融合+计数；0=不限现状直调字节等价 E-33）。
+     *
+     * <p>E-58 合规：仅调用体进工作线程（AJ-2a 闭包捕获同构），调用方 span start/end 保持主线程
+     * 词面零触碰；P0⑲ 语义本体=真实打断底层调用，故载体=FutureTask（CompletableFuture.cancel
+     * 不中断运行中任务，R461 教训）。sync_retrieval_timeout 与 es_fail 同族（reason 第六值）。</p>
+     */
+    private List<RRFusion.ScoredItem> syncBoundedGet(String label, Supplier<List<RRFusion.ScoredItem>> call) {
+        long timeoutMs = retrievalSyncTimeoutMs;
+        if (timeoutMs <= 0) {
+            return call.get();
+        }
+        FutureTask<List<RRFusion.ScoredItem>> future = new FutureTask<>(call::get);
+        VIRTUAL_EXECUTOR.execute(future);
+        try {
+            return future.get(timeoutMs, TimeUnit.MILLISECONDS);
+        } catch (TimeoutException te) {
+            future.cancel(true); // 超时路径必须 cancel(true)（skill 四硬规则=P0⑲）
+            log.warn("[HybridRAG] {} 串行检索超时({}ms)，按空融合降级", label, timeoutMs);
+            routingMetrics.recordDegraded("sync_retrieval_timeout");
+            return Collections.emptyList();
+        } catch (InterruptedException ie) {
+            Thread.currentThread().interrupt();
+            future.cancel(true);
+            log.warn("[HybridRAG] {} 串行检索等待被中断，按空融合降级", label);
+            routingMetrics.recordDegraded("sync_retrieval_timeout");
+            return Collections.emptyList();
+        } catch (ExecutionException ee) {
+            // bm25/knnSearch 自带 catch→空+recordDegraded 永不抛；载体面兜底按原异常语义外抛（方案 §2.2）
+            Throwable cause = ee.getCause() != null ? ee.getCause() : ee;
+            if (cause instanceof RuntimeException re) {
+                throw re;
+            }
+            throw new IllegalStateException(cause);
+        }
     }
 
     /**
