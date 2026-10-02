@@ -37,6 +37,20 @@ public class RagRoutingMetrics {
     private final Counter quOverflow;
     /** AN-1：QU LLM 抽取超时观测（限时 get 超时 fail-open；常开无键） */
     private final Counter quTimeout;
+    /** AO-1a：查询向量缓存命中观测（rag.embedding.cache_hit；常开无键） */
+    private final Counter embeddingCacheHit;
+    /** AO-1a：查询向量缓存未命中观测（rag.embedding.cache_miss；常开无键） */
+    private final Counter embeddingCacheMiss;
+    /** AO-1b：embedding API 调用观测（rag.embedding.calls；BudgetGuard 只计 chat 的计量盲区修正） */
+    private final Counter embeddingCalls;
+    /** AO-1b：embedding 并发帽拒绝观测（rag.embedding.overflow；常开无键） */
+    private final Counter embeddingOverflow;
+    /** AO-1b：embedding 调用超时观测（rag.embedding.timeout；常开无键） */
+    private final Counter embeddingTimeout;
+    /** AO-1c：hyde 缓存命中观测（rag.hyde.cache_hit；三级缓存链中间级，常开无键） */
+    private final Counter hydeCacheHit;
+    /** AO-1c：hyde 缓存未命中观测（rag.hyde.cache_miss；常开无键） */
+    private final Counter hydeCacheMiss;
 
     public RagRoutingMetrics(MeterRegistry registry) {
         this.registry = registry;
@@ -80,6 +94,27 @@ public class RagRoutingMetrics {
                 .register(registry);
         this.quTimeout = Counter.builder("rag.qu.timeout")
                 .description("QU LLM 抽取超时次数（限时 get fail-open）")
+                .register(registry);
+        this.embeddingCacheHit = Counter.builder("rag.embedding.cache_hit")
+                .description("查询向量缓存命中次数（AO-1a，同文本零 API 复用）")
+                .register(registry);
+        this.embeddingCacheMiss = Counter.builder("rag.embedding.cache_miss")
+                .description("查询向量缓存未命中次数（AO-1a，含 TTL 过期重嵌）")
+                .register(registry);
+        this.embeddingCalls = Counter.builder("rag.embedding.calls")
+                .description("embedding API 调用次数（AO-1b，BudgetGuard 只计 chat 的计量盲区修正）")
+                .register(registry);
+        this.embeddingOverflow = Counter.builder("rag.embedding.overflow")
+                .description("embedding 并发帽拒绝次数（AO-1b，信号量满 bm25-only 降级）")
+                .register(registry);
+        this.embeddingTimeout = Counter.builder("rag.embedding.timeout")
+                .description("embedding 调用超时次数（AO-1b，限时 get bm25-only 降级）")
+                .register(registry);
+        this.hydeCacheHit = Counter.builder("rag.hyde.cache_hit")
+                .description("hyde 缓存命中次数（AO-1c，命中零 LLM）")
+                .register(registry);
+        this.hydeCacheMiss = Counter.builder("rag.hyde.cache_miss")
+                .description("hyde 缓存未命中次数（AO-1c）")
                 .register(registry);
     }
 
@@ -195,5 +230,75 @@ public class RagRoutingMetrics {
     /** AN-1：超时计数读取（观测/单测断言面）。 */
     public double quTimeoutCount() {
         return quTimeout.count();
+    }
+
+    /** AO-1a：记录一次查询向量缓存命中（rag.embedding.cache_hit，观测面，常开）。 */
+    public void recordEmbeddingCacheHit() {
+        embeddingCacheHit.increment();
+    }
+
+    /** AO-1a：记录一次查询向量缓存未命中（rag.embedding.cache_miss，观测面，常开）。 */
+    public void recordEmbeddingCacheMiss() {
+        embeddingCacheMiss.increment();
+    }
+
+    /** AO-1a：向量缓存命中计数读取（观测/单测断言面）。 */
+    public double embeddingCacheHitCount() {
+        return embeddingCacheHit.count();
+    }
+
+    /** AO-1a：向量缓存未命中计数读取（观测/单测断言面）。 */
+    public double embeddingCacheMissCount() {
+        return embeddingCacheMiss.count();
+    }
+
+    /** AO-1b：记录一次 embedding API 调用（rag.embedding.calls，观测面，常开）。 */
+    public void recordEmbeddingCall() {
+        embeddingCalls.increment();
+    }
+
+    /** AO-1b：记录一次 embedding 并发帽拒绝（rag.embedding.overflow，观测面，常开）。 */
+    public void recordEmbeddingOverflow() {
+        embeddingOverflow.increment();
+    }
+
+    /** AO-1b：记录一次 embedding 调用超时（rag.embedding.timeout，观测面，常开）。 */
+    public void recordEmbeddingTimeout() {
+        embeddingTimeout.increment();
+    }
+
+    /** AO-1b：embedding 调用计数读取（观测/单测断言面）。 */
+    public double embeddingCallsCount() {
+        return embeddingCalls.count();
+    }
+
+    /** AO-1b：并发帽拒绝计数读取（观测/单测断言面）。 */
+    public double embeddingOverflowCount() {
+        return embeddingOverflow.count();
+    }
+
+    /** AO-1b：超时计数读取（观测/单测断言面）。 */
+    public double embeddingTimeoutCount() {
+        return embeddingTimeout.count();
+    }
+
+    /** AO-1c：记录一次 hyde 缓存命中（rag.hyde.cache_hit，观测面，常开）。 */
+    public void recordHydeCacheHit() {
+        hydeCacheHit.increment();
+    }
+
+    /** AO-1c：记录一次 hyde 缓存未命中（rag.hyde.cache_miss，观测面，常开）。 */
+    public void recordHydeCacheMiss() {
+        hydeCacheMiss.increment();
+    }
+
+    /** AO-1c：hyde 缓存命中计数读取（观测/单测断言面）。 */
+    public double hydeCacheHitCount() {
+        return hydeCacheHit.count();
+    }
+
+    /** AO-1c：hyde 缓存未命中计数读取（观测/单测断言面）。 */
+    public double hydeCacheMissCount() {
+        return hydeCacheMiss.count();
     }
 }

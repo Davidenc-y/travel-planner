@@ -10,6 +10,7 @@ import com.travel.knowledge.rag.rerank.RerankProperties;
 import com.travel.common.trace.SpanCollector;
 import com.travel.knowledge.rag.support.HedgeInFlightRegistry;
 import com.travel.knowledge.rag.support.QueryTtlCache;
+import com.travel.knowledge.rag.support.QueryVectorCache;
 import com.travel.knowledge.rag.support.RRFusion;
 import com.travel.knowledge.rag.support.RagRoutingMetrics;
 import com.travel.knowledge.rag.model.QueryIntent;
@@ -36,6 +37,7 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.FutureTask;
+import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicReference;
@@ -75,6 +77,8 @@ public class HybridRagStrategy extends AbstractRagStrategy {
     private final HydeQueryRewriter hydeQueryRewriter;
     /** RK-9：权威裁决 tie-break（tie-break-enabled 默认 false=原样返回，rerank 后 RerankGate 前） */
     private final AuthorityTieBreaker authorityTieBreaker;
+    /** AO-1a：查询向量缓存（optional 注入=MR-D2 先例：构造签名零变更；bean 缺省=null=无缓存直通现状 E-33） */
+    private QueryVectorCache queryVectorCache;
     /** MR-D2：LLM 多 Query 扩展器（llm-expand.enabled=true 才有 bean；未注入=现状单路） */
     private LlmQueryExpander llmQueryExpander;
     /** S-B2/B-2a（L1c）：对冲单飞注册表（optional 注入，bean 缺省=关闭态零变更，构造签名零变更——MR-D2 先例） */
@@ -95,6 +99,57 @@ public class HybridRagStrategy extends AbstractRagStrategy {
     @Value("${travel.rag.retrieval-sync-timeout-ms:0}")
     long retrievalSyncTimeoutMs;
 
+    /** AO-1b：embedding 并发闸容量（默认 0=不限不建不闸 QU 同款 E-33；包内可见=单测直设面） */
+    @Value("${travel.rag.embedding.max-concurrent:0}")
+    int embeddingMaxConcurrent;
+
+    /** AO-1b：embed 调用限时 ms（默认 0=不限现状字节等价 E-33；包内可见=单测直设面） */
+    @Value("${travel.rag.embedding.timeout-ms:0}")
+    long embeddingTimeoutMs;
+
+    /** AO-2：检索 IO 平台池线程数（默认 0=虚拟线程现状 VIRTUAL_EXECUTOR 字节等价 E-33；>0=平台固定池；包内可见=单测直设面） */
+    @Value("${travel.rag.retrieval-io-threads:0}")
+    int retrievalIoThreads;
+
+    /** AO-1b：embedding 信号量（懒建随 embeddingMaxConcurrent 配置值；0=不建不闸） */
+    private Semaphore embeddingSlots;
+    private int embeddingSlotsCap;
+
+    /** AO-1b：信号量懒建访问器（容量随配置值；0=返回 null=不闸，E-33 现状语义；包级=测试同包直取观测面） */
+    Semaphore embeddingSlots() {
+        int cap = embeddingMaxConcurrent;
+        if (cap <= 0) {
+            return null;
+        }
+        synchronized (this) {
+            if (embeddingSlots == null || embeddingSlotsCap != cap) {
+                embeddingSlots = new Semaphore(cap);
+                embeddingSlotsCap = cap;
+            }
+            return embeddingSlots;
+        }
+    }
+
+    /** AO-2：检索 IO 执行器懒建访问器（0=虚拟线程现状 VIRTUAL_EXECUTOR；N=平台固定池 newFixedThreadPool(N)，载体=AN-2 包裹点；包级=测试同包直取观测面） */
+    private ExecutorService retrievalIoPool;
+    private int retrievalIoPoolThreads = -1;
+
+    ExecutorService retrievalIoExecutor() {
+        if (retrievalIoThreads <= 0) {
+            return VIRTUAL_EXECUTOR;
+        }
+        synchronized (this) {
+            if (retrievalIoPool == null || retrievalIoPoolThreads != retrievalIoThreads) {
+                if (retrievalIoPool != null) {
+                    retrievalIoPool.shutdown();
+                }
+                retrievalIoPool = Executors.newFixedThreadPool(retrievalIoThreads);
+                retrievalIoPoolThreads = retrievalIoThreads;
+            }
+            return retrievalIoPool;
+        }
+    }
+
     /** MR-D2：optional 注入（bean 缺省=现状单路，构造签名零变更） */
     @Autowired(required = false)
     void setLlmQueryExpander(LlmQueryExpander llmQueryExpander) {
@@ -105,6 +160,12 @@ public class HybridRagStrategy extends AbstractRagStrategy {
     @Autowired(required = false)
     void setHedgeRegistry(HedgeInFlightRegistry hedgeRegistry) {
         this.hedgeRegistry = hedgeRegistry;
+    }
+
+    /** AO-1a：optional 注入查询向量缓存（生产 bean 常在=缓存默认开；测试同包直设面） */
+    @Autowired(required = false)
+    void setQueryVectorCache(QueryVectorCache queryVectorCache) {
+        this.queryVectorCache = queryVectorCache;
     }
 
     /** AG-1c：GraphExpander 邻域扩展器（optional 注入=MR-D2 先例：构造签名零变更；bean 缺省=null=挂点直通 fail-open） */
@@ -319,7 +380,7 @@ public class HybridRagStrategy extends AbstractRagStrategy {
             return call.get();
         }
         FutureTask<List<RRFusion.ScoredItem>> future = new FutureTask<>(call::get);
-        VIRTUAL_EXECUTOR.execute(future);
+        retrievalIoExecutor().execute(future);
         try {
             return future.get(timeoutMs, TimeUnit.MILLISECONDS);
         } catch (TimeoutException te) {
@@ -415,8 +476,64 @@ public class HybridRagStrategy extends AbstractRagStrategy {
     private List<RRFusion.ScoredItem> knnSearch(QueryIntent intent, String vectorQueryText, int topK) {        try {
             String expr = ragFilterBuilder.milvusExpr(intent);
             // MR-D1：向量路文本 = HyDE 假设答案（门控开）或原 query（门控关/fail-open）
-            var embeddingResponse = embeddingModel.embedForResponse(List.of(vectorQueryText));
-            float[] queryVector = embeddingResponse.getResults().get(0).getOutput();
+            // AO-1a（GO-1）两级顺序 cache→闸→embed：命中直接复用缓存向量，不占信号量（P0⑱）
+            float[] queryVector = queryVectorCache == null ? null : queryVectorCache.get(vectorQueryText);
+            if (queryVector == null) {
+                // AO-1b：并发闸 tryAcquire 失败=knn 路弃用降级 bm25-only（空列表=milvus_fail 同构，禁抛出）
+                Semaphore slots = embeddingSlots();
+                if (slots != null && !slots.tryAcquire()) {
+                    routingMetrics.recordDegraded("embedding_overflow");
+                    routingMetrics.recordEmbeddingOverflow();
+                    log.warn("[HybridRAG] embedding 并发帽({})已满，降级 bm25-only", embeddingMaxConcurrent);
+                    return Collections.emptyList();
+                }
+                try {
+                    // AO-1b：embed 限时包裹（FutureTask cancel(true)=P0⑲，AN-1 同款）；0=不限现状直调
+                    if (embeddingTimeoutMs > 0) {
+                        FutureTask<float[]> future = new FutureTask<>(() -> embedCall(vectorQueryText));
+                        VIRTUAL_EXECUTOR.execute(future);
+                        try {
+                            queryVector = future.get(embeddingTimeoutMs, TimeUnit.MILLISECONDS);
+                        } catch (TimeoutException te) {
+                            future.cancel(true); // 超时路径必须 cancel(true)（skill 四硬规则=P0⑲）
+                            log.warn("[HybridRAG] embed 调用超时({}ms)，降级 bm25-only", embeddingTimeoutMs);
+                            routingMetrics.recordDegraded("embedding_timeout");
+                            routingMetrics.recordEmbeddingTimeout();
+                            return Collections.emptyList();
+                        } catch (InterruptedException ie) {
+                            Thread.currentThread().interrupt();
+                            future.cancel(true);
+                            log.warn("[HybridRAG] embed 调用等待被中断，降级 bm25-only");
+                            routingMetrics.recordDegraded("embedding_timeout");
+                            routingMetrics.recordEmbeddingTimeout();
+                            return Collections.emptyList();
+                        } catch (ExecutionException ee) {
+                            // embedCall 异常原样外抛语义（R487 拆分标签面）；载体面兜底与 syncBoundedGet 同构
+                            Throwable cause = ee.getCause() != null ? ee.getCause() : ee;
+                            if (cause instanceof RuntimeException re) {
+                                throw re;
+                            }
+                            throw new IllegalStateException(cause);
+                        }
+                    } else {
+                        queryVector = embedCall(vectorQueryText);
+                    }
+                } finally {
+                    if (slots != null) {
+                        slots.release();
+                    }
+                }
+                if (queryVector == null) {
+                    // AO-1b：embedding 段失败独立标签（修正并入 milvus_fail 的观测盲区）——空列表降级禁抛出
+                    routingMetrics.recordDegraded("embedding_fail");
+                    log.warn("[HybridRAG] embed 调用失败，降级 bm25-only");
+                    return Collections.emptyList();
+                }
+                if (queryVectorCache != null) {
+                    // 仅成功结果可缓存（P0㉑）：降级早退/异常路径到不了 put
+                    queryVectorCache.put(vectorQueryText, queryVector);
+                }
+            }
             // M3-3：统一经 MilvusVectorStore 检索（装箱/解析封装）
             List<MilvusVectorStore.SearchRow> rows = milvusStore.search(
                     MILVUS_COLLECTION, MilvusVectorStore.box(queryVector), expr, topK,
@@ -443,6 +560,22 @@ public class HybridRagStrategy extends AbstractRagStrategy {
             log.error("[HybridRAG] KNN 检索失败", e);
             routingMetrics.recordDegraded("milvus_fail");
             return Collections.emptyList();
+        }
+    }
+
+    /**
+     * AO-1b：embed 调用本体（既有 embed 两行原样迁入）。R487：调用计数+独立 try——
+     * 失败=embedding_fail 专属降级面（catch→null=extractByLlm 同款形态），不再并入
+     * milvus_fail 观测盲区；null 由调用方转空列表降级。
+     */
+    private float[] embedCall(String vectorQueryText) {
+        routingMetrics.recordEmbeddingCall();
+        try {
+            var embeddingResponse = embeddingModel.embedForResponse(List.of(vectorQueryText));
+            return embeddingResponse.getResults().get(0).getOutput();
+        } catch (Exception e) {
+            log.warn("[HybridRAG] embed 调用失败: {}", e.getMessage());
+            return null;
         }
     }
 
