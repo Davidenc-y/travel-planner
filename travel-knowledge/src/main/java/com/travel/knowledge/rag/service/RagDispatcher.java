@@ -147,10 +147,17 @@ public class RagDispatcher {
     public List<SearchResult> dispatch(String ragType, QueryIntent intent, int topK) {
         // B1.2：查询级 TTL 缓存——命中且未过期直接返回，miss 走原逻辑后写入；
         // 开关关闭时 get/put 双直通（行为回到无缓存现状）。
+        long start = System.currentTimeMillis();
         String cacheKey = QueryTtlCache.buildKey(ragType, intent, topK);
+        // AP-A1：路由观测 queryHash（buildKey 短哈希，避免全量 key 含查询原文进日志）
+        String queryHash = Integer.toHexString(cacheKey.hashCode());
         List<SearchResult> cached = queryTtlCache.get(cacheKey);
         if (cached != null) {
-            log.debug("[RagCache] hit key={}", cacheKey);
+            // AP-A1（P0㉕ 纯观测）：TTL 命中路径此前提前 return，旁路 record() 与 [RagRouting]
+            // 全部路由观测（AR-10 盲区）——补计数+结构化 INFO，路由行为零变化。
+            metrics.recordDispatchRoute("cache_hit");
+            log.info("[RagDispatch] queryHash={} routeType={} strategy=cache_hit elapsedMs={} resultCount={}",
+                    queryHash, ragType, System.currentTimeMillis() - start, cached.size());
             return cached;
         }
         List<SearchResult> result = doDispatch(ragType, intent, topK);
@@ -160,6 +167,7 @@ public class RagDispatcher {
 
     private List<SearchResult> doDispatch(String ragType, QueryIntent intent, int topK) {
         long start = System.currentTimeMillis();
+        String queryHash = Integer.toHexString(QueryTtlCache.buildKey(ragType, intent, topK).hashCode());
         String type = normalizeType(ragType);
         String router = "explicit";
         String strategyName = type;
@@ -248,9 +256,11 @@ public class RagDispatcher {
             spanCollector.end(routingSpan, "ok", attrs);
         }
         metrics.record(router, strategyName, System.currentTimeMillis() - start);
-        // F43/P2.5：单条结构化路由日志（意图快照 + 路由方式 + 策略 + 耗时 + 结果数）。
-        log.info("[RagRouting] intent={} router={} strategy={} elapsedMs={} resultCount={}",
-                JsonUtils.toJson(intent), router, strategyName,
+        // AP-A1（P0㉕ 纯观测）：dispatch 层路由计数，strategy 实名分桶（TTL 命中在 dispatch() 记 cache_hit）
+        metrics.recordDispatchRoute(strategyName);
+        // F43/P2.5：单条结构化路由日志（意图快照 + 路由方式 + 策略 + 耗时 + 结果数）；AP-A1 增 queryHash 字段。
+        log.info("[RagRouting] queryHash={} intent={} router={} strategy={} elapsedMs={} resultCount={}",
+                queryHash, JsonUtils.toJson(intent), router, strategyName,
                 System.currentTimeMillis() - start, result == null ? 0 : result.size());
         return result;
     }

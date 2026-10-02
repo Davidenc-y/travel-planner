@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.travel.memory.repository.ConsolidationLedgerMapper">
+
+    <!-- AP-B1 启动恢复：最近 limit 条台账（id 倒序=写入序；LEDGER_CAP=2000 由调用方给定） -->
+    <select id="findRecent" resultType="com.travel.memory.repository.ConsolidationLedger">
+        SELECT * FROM t_consolidation_ledger ORDER BY id DESC LIMIT #{limit}
+    </select>
+
+    <!-- AP-B1 批扫清理幂等：按会话清空台账行（重复删除返回 0 无害） -->
+    <delete id="deleteBySessionId">
+        DELETE FROM t_consolidation_ledger WHERE session_id = #{sessionId}
+    </delete>
+</mapper>

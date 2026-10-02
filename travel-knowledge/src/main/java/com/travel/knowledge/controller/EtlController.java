@@ -2,10 +2,12 @@ package com.travel.knowledge.controller;
 
 import com.travel.common.result.R;
 import com.travel.knowledge.etl.AttractionEtlService;
+import com.travel.knowledge.etl.CacheInvalidationContract;
 import com.travel.knowledge.repository.AttractionMapper;
 import com.travel.knowledge.service.AttractionImportService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.web.bind.annotation.*;
 import jakarta.servlet.http.HttpServletResponse;
 
@@ -29,6 +31,8 @@ public class EtlController {
     private final AttractionEtlService etlService;
     private final AttractionImportService importService;
     private final AttractionMapper attractionMapper;
+    /** AP-A5a：city-counts 缓存失效广播发布端（契约=CacheInvalidationContract，P0㉖ 逐字冻结） */
+    private final StringRedisTemplate redisTemplate;
 
     /**
      * 全量 ETL：处理所有景点（含已索引的会重新写入）
@@ -38,7 +42,10 @@ public class EtlController {
     @PostMapping("/all")
     public R<Integer> etlAll() {
         log.info("触发全量 ETL");
-        return R.ok(etlService.etlAll());
+        int count = etlService.etlAll();
+        // AP-A5a（GP-5）：全量导入成功→广播 city-counts 失效（planning CityCorpusCache 即时失效）
+        publishCityCountsInvalidation();
+        return R.ok(count);
     }
 
     /**
@@ -49,7 +56,10 @@ public class EtlController {
     @PostMapping("/unindexed")
     public R<Integer> etlUnindexed() {
         log.info("触发增量 ETL");
-        return R.ok(etlService.etlUnindexed());
+        int count = etlService.etlUnindexed();
+        // AP-A5a（GP-5）：增量导入成功→广播 city-counts 失效
+        publishCityCountsInvalidation();
+        return R.ok(count);
     }
 
     /**
@@ -98,6 +108,8 @@ public class EtlController {
             // F119：入库事务提交后，并行 ETL（await 完成，契约不变）
             int etlOk = etlService.etlBatch(result.affected());
             log.info("导入后并行 ETL: 处理 {} 条, 成功 {} 条", result.affected().size(), etlOk);
+            // AP-A5a（GP-5）：导入成功（含并行 ETL）→广播 city-counts 失效；失败路径 catch 内不发布
+            publishCityCountsInvalidation();
             // F104 2.9：透传新增/更新/跳过统计（TC-13 的 R<Integer> 契约不变）
             response.setHeader("X-Import-Stats",
                     "{\"inserted\":" + result.stats().inserted()
@@ -108,6 +120,21 @@ public class EtlController {
             // M21-3（SEC-05-06）：错误响应不再回显原始路径（防路径探测 oracle），详情仅入服务端日志
             log.error("数据导入失败: file={}", filePath, e);
             return R.fail(50003, "数据导入失败，详情见服务端日志");
+        }
+    }
+
+    /**
+     * AP-A5a（GP-5）：city-counts 缓存失效广播——planning 侧 CityCorpusCache 订阅即时失效
+     * （AP-B2），替代既有 600s TTL 滞后。契约单源=方案 §〇（P0㉖ 逐字冻结，禁自创字段）。
+     * fail-open：广播尽力而为——Redis 不可达仅 WARN，导入主链路零阻断（退化为既有 TTL 行为）。
+     */
+    private void publishCityCountsInvalidation() {
+        try {
+            redisTemplate.convertAndSend(CacheInvalidationContract.CHANNEL_CITY_COUNTS,
+                    CacheInvalidationContract.PAYLOAD_CITY_COUNTS);
+            log.info("已发布 city-counts 失效广播: channel={}", CacheInvalidationContract.CHANNEL_CITY_COUNTS);
+        } catch (Exception e) {
+            log.warn("city-counts 失效广播发布失败（fail-open，缓存按 TTL 过期）: {}", String.valueOf(e));
         }
     }
 

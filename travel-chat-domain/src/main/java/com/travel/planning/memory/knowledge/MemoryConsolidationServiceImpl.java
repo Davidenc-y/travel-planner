@@ -2,17 +2,21 @@ package com.travel.planning.memory.knowledge;
 
 import com.travel.memory.MemoryFacade;
 import com.travel.memory.prompt.PromptTemplates;
+import com.travel.memory.repository.ConsolidationLedger;
+import com.travel.memory.repository.ConsolidationLedgerMapper;
 import com.travel.planning.client.KnowledgeSearchPort;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
+import jakarta.annotation.PostConstruct;
 import io.micrometer.core.instrument.MeterRegistry;
 
 import java.nio.charset.StandardCharsets;
@@ -74,6 +78,14 @@ public class MemoryConsolidationServiceImpl implements MemoryConsolidationServic
 
     private final Deque<LedgerEntry> ledger = new ArrayDeque<>();
 
+    /** AP-B1：台账库双写 Mapper（optional setter 注入——既有 8 参手工构造零破坏；null=双写跳过，内存态语义零变化=P0㉘） */
+    private ConsolidationLedgerMapper ledgerMapper;
+
+    @Autowired(required = false)
+    void setLedgerMapper(ConsolidationLedgerMapper ledgerMapper) {
+        this.ledgerMapper = ledgerMapper;
+    }
+
     /** 台账条目（写入侧 chunk 快照） */
     record LedgerEntry(String sessionId, String type, String seq, String content, String createdAt) {
     }
@@ -110,6 +122,82 @@ public class MemoryConsolidationServiceImpl implements MemoryConsolidationServic
                 ledger.pollFirst();
             }
         }
+        writeLedgerRow(sessionId, type, seq, content, createdAt);
+    }
+
+    /**
+     * AP-B1：台账库双写（fail-open=P0㉘——Mapper 未注入/库失败仅 WARN，内存态语义零变化）。
+     * seq 超 64 截断（DDL VARCHAR(64) 防严格模式拒写）；contentHash 与 chunkId 同口径
+     * （sha256 前 12 位）；createdAt 解析失败=now 兜底，双写永不上抛。
+     */
+    private void writeLedgerRow(String sessionId, String type, String seq, String content, String createdAt) {
+        ConsolidationLedgerMapper mapper = ledgerMapper;
+        if (mapper == null) {
+            return;
+        }
+        try {
+            ConsolidationLedger row = new ConsolidationLedger();
+            row.setSessionId(sessionId);
+            row.setChunkType(type);
+            row.setSeqHash(seq.length() > 64 ? seq.substring(0, 64) : seq);
+            row.setContentHash(sha256(content).substring(0, 12));
+            row.setCreatedAt(parseCreatedAt(createdAt));
+            mapper.insert(row);
+        } catch (Exception e) {
+            log.warn("[MemoryConsolidation] 台账库双写失败（fail-open 内存态不阻断）: sessionId={}, error={}",
+                    sessionId, e.getMessage());
+        }
+    }
+
+    /** AP-B1：createdAt 参数解析（ISO yyyy-MM-dd'T'HH:mm:ss；null/解析失败=now 兜底） */
+    private static LocalDateTime parseCreatedAt(String createdAt) {
+        try {
+            return LocalDateTime.parse(createdAt, ISO);
+        } catch (Exception e) {
+            return LocalDateTime.now();
+        }
+    }
+
+    /**
+     * AP-B1：启动恢复（GP-6——重启丢工作转持久化）。Mapper 在位时回填最近 LEDGER_CAP 条
+     * 台账行（findRecent id 倒序取回、倒序回放=时间序入队）。恢复面=<b>会话工作清单+指纹</b>：
+     * content 置空（DDL 无 content 列，实体内容以 knowledge 库为准）——空内容条目被 distill
+     * 既有 blank 过滤自然排除、被 dedupGroup 恢复守卫排除（防指纹误删），会话仍进批扫
+     * 工作清单（distill 可凭 facade 摘要产出真实语义）。库失败/未注入/门控关=空恢复
+     * （fail-open，行为等价）。
+     */
+    @PostConstruct
+    public void recoverLedgerFromDb() {
+        ConsolidationLedgerMapper mapper = ledgerMapper;
+        if (!enabled || mapper == null) {
+            return;
+        }
+        try {
+            List<ConsolidationLedger> rows = mapper.findRecent(LEDGER_CAP);
+            if (rows == null || rows.isEmpty()) {
+                return;
+            }
+            int restored = 0;
+            synchronized (ledger) {
+                for (int i = rows.size() - 1; i >= 0; i--) {
+                    ConsolidationLedger row = rows.get(i);
+                    if (row.getSessionId() == null || row.getSessionId().isBlank()) {
+                        continue;
+                    }
+                    ledger.addLast(new LedgerEntry(row.getSessionId(), row.getChunkType(),
+                            row.getSeqHash(), "", row.getCreatedAt() == null
+                                    ? LocalDateTime.now().format(ISO)
+                                    : row.getCreatedAt().format(ISO)));
+                    restored++;
+                }
+                while (ledger.size() > LEDGER_CAP) {
+                    ledger.pollFirst();
+                }
+            }
+            log.info("[MemoryConsolidation] 台账启动恢复: {} 行（工作清单+指纹面，content 空=knowledge 库为准）", restored);
+        } catch (Exception e) {
+            log.warn("[MemoryConsolidation] 台账启动恢复失败（fail-open 空恢复）: {}", e.getMessage());
+        }
     }
 
     /**
@@ -144,6 +232,15 @@ public class MemoryConsolidationServiceImpl implements MemoryConsolidationServic
                     log.warn("[MemoryConsolidation] 会话蒸馏失败（跳过）: sessionId={}, error={}",
                             sessionId, e.getMessage());
                 }
+            }
+            // AP-B1：批扫消费后台账行清理（幂等；fail-open——库失败仅 WARN，内存台账既有语义零触碰）
+            try {
+                if (ledgerMapper != null) {
+                    ledgerMapper.deleteBySessionId(sessionId);
+                }
+            } catch (Exception e) {
+                log.warn("[MemoryConsolidation] 台账行清理失败（fail-open）: sessionId={}, error={}",
+                        sessionId, e.getMessage());
             }
         }
         // RK-12/D-3：批扫收尾日志契约
@@ -188,6 +285,13 @@ public class MemoryConsolidationServiceImpl implements MemoryConsolidationServic
 
     /** 单 type 组判重与旧删；light 失败/解析失败/无重复一律零删除（fail-open）。 */
     private int dedupGroup(String sessionId, List<LedgerEntry> entries, List<Integer> group) {
+        // AP-B1：恢复条目（content 空=指纹级恢复，DDL 无 content 列）不参与判重——正常流
+        // content 恒非空（writeAsync 空 chunk 不入台账），本守卫仅恢复条目可触发，防指纹误删
+        boolean hasRecoveredBlank = group.stream().map(entries::get)
+                .anyMatch(e -> e.content() == null || e.content().isBlank());
+        if (hasRecoveredBlank) {
+            return 0;
+        }
         StringBuilder sb = new StringBuilder();
         for (int i = 0; i < group.size(); i++) {
             sb.append("[").append(i).append("] ")

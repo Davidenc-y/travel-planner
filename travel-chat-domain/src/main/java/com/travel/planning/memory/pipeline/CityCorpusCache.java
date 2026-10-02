@@ -177,6 +177,21 @@ public class CityCorpusCache {
                 .toList();
     }
 
+    /**
+     * AP-B2（GP-5）：订阅失效入口——收到 city-counts 失效广播即置空快照
+     * （counts=Map.of()/loadedAt=0），下一轮 {@link #ensureLoaded()} 同步重载；
+     * 置空到重载之间按空快照放行（fail-open 语义与 AL-2b 空 Map 同构）。
+     * 本方法只增——既有读取/装载路径零触碰（契约频道/type 见
+     * CityCorpusInvalidationPubSubConfig 常量，P0㉗）。
+     */
+    public void invalidate() {
+        synchronized (this) {
+            counts = Map.of();
+            loadedAt = 0L;
+        }
+        log.info("[CityCorpusCache] 失效广播已消费，快照置空（下轮 get 重载）");
+    }
+
     /** 双检装载：过期或空→经 port 同步拉一次；失败保留旧值（fail-open，不抛出）。 */
     private Map<String, Integer> ensureLoaded() {
         Map<String, Integer> snapshot = counts;

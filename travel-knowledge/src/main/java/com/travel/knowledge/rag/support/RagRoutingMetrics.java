@@ -135,6 +135,17 @@ public class RagRoutingMetrics {
     }
 
     /**
+     * AP-A1：dispatch 层路由计数（rag.dispatch.route，tag=strategy 实名；TTL 命中路径记
+     * "cache_hit"——该路径此前提前 return 旁路 record() 全部观测，AR-10 盲区修正；常开无键）。
+     */
+    public void recordDispatchRoute(String strategy) {
+        Counter.builder("rag.dispatch.route")
+                .tag("strategy", strategy)
+                .register(registry)
+                .increment();
+    }
+
+    /**
      * M4-6：记录一次 Rerank 调用（总数 + 耗时直方图）。
      */
     public void recordRerank(long elapsedMs) {
