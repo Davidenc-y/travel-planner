@@ -9,6 +9,7 @@ import org.springframework.stereotype.Component;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * RAG 查询级进程内 TTL 缓存（B1.2：传输收敛与弹性化批次）
@@ -27,14 +28,17 @@ import java.util.concurrent.ConcurrentHashMap;
 @Component
 public class QueryTtlCache {
 
-    /** 缓存条目：检索结果 + 写入时间戳 */
-    private record TimestampedValue(List<SearchResult> value, long timestamp) {
+    /** 缓存条目：检索结果 + 写入时间戳 + 插入序号（AR-11：时间戳并列时驱逐决胜） */
+    private record TimestampedValue(List<SearchResult> value, long timestamp, long seq) {
     }
 
     /** 缓存上限（写入时 size 截断） */
     static final int MAX_ENTRIES = 256;
 
     private final ConcurrentHashMap<String, TimestampedValue> cache = new ConcurrentHashMap<>();
+
+    /** 插入序号源（AR-11：同毫秒并列时间戳的确定性驱逐决胜） */
+    private final AtomicLong seqCounter = new AtomicLong();
 
     private final boolean enabled;
 
@@ -98,16 +102,21 @@ public class QueryTtlCache {
         while (cache.size() >= MAX_ENTRIES) {
             evictOldest();
         }
-        cache.put(key, new TimestampedValue(value, now));
+        cache.put(key, new TimestampedValue(value, now, seqCounter.incrementAndGet()));
     }
 
     /**
-     * 简单 size 截断：淘汰时间戳最旧的一条（n ≤ 256，写入路径 O(n) 可接受）
+     * 简单 size 截断：淘汰时间戳最旧的一条；时间戳并列时淘汰插入序号最小者
+     * （AR-11：确定性决胜——非并列态行为不变，n ≤ 256，写入路径 O(n) 可接受）
      */
     private void evictOldest() {
         Map.Entry<String, TimestampedValue> oldest = null;
         for (Map.Entry<String, TimestampedValue> entry : cache.entrySet()) {
-            if (oldest == null || entry.getValue().timestamp() < oldest.getValue().timestamp()) {
+            TimestampedValue v = entry.getValue();
+            if (oldest == null
+                    || v.timestamp() < oldest.getValue().timestamp()
+                    || (v.timestamp() == oldest.getValue().timestamp()
+                        && v.seq() < oldest.getValue().seq())) {
                 oldest = entry;
             }
         }
