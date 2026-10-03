@@ -9,6 +9,7 @@ import com.travel.knowledge.rag.router.AutoRagRouterAgent;
 import com.travel.knowledge.rag.router.RagSupervisorAgent;
 import com.travel.knowledge.rag.strategy.RagStrategy;
 import com.travel.knowledge.rag.support.HedgeInFlightRegistry;
+import com.travel.knowledge.rag.support.QueryCoalescer;
 import com.travel.knowledge.rag.support.QueryTtlCache;
 import com.travel.knowledge.rag.support.RagRoutingMetrics;
 import com.travel.common.trace.SpanCollector;
@@ -87,6 +88,15 @@ public class RagDispatcher {
         this.spanCollector = spanCollector;
     }
 
+    /** AV-2：并发查询协衡协作件（optional 注入，bean 缺省=协衡关闭，构造签名零变更——MR-D2 先例） */
+    private QueryCoalescer queryCoalescer;
+
+    /** AV-2：optional 注入并发查询协衡协作件 */
+    @Autowired(required = false)
+    void setQueryCoalescer(QueryCoalescer queryCoalescer) {
+        this.queryCoalescer = queryCoalescer;
+    }
+
     /**
      * S-B2b（L1c）：进入路由层预启 heuristic→hybrid 对冲 future——发射后不管：
      * 收割=策略侧单飞 join（B-2a，HybridRagStrategy.doRetrieve register-or-join 同键去重），
@@ -160,7 +170,11 @@ public class RagDispatcher {
                     queryHash, ragType, System.currentTimeMillis() - start, cached.size());
             return cached;
         }
-        List<SearchResult> result = doDispatch(ragType, intent, topK);
+        // AV-2：并发查询协衡——同 cacheKey 在飞请求共享一次计算（P0⑲：键与 QueryTtlCache
+        // 同源原样复用）；组件缺省或开关关闭（默认 false，E-33）时直通=无协衡现状。
+        List<SearchResult> result = queryCoalescer == null
+                ? doDispatch(ragType, intent, topK)
+                : queryCoalescer.coalesce(cacheKey, () -> doDispatch(ragType, intent, topK));
         queryTtlCache.put(cacheKey, result);
         return result;
     }
