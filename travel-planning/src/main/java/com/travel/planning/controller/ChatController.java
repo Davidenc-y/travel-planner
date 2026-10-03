@@ -55,12 +55,15 @@ public class ChatController {
     private final TurnCancellationRegistry cancellationRegistry;
 
     /**
-     * 创建会话
+     * 创建会话（AU-2：标题入参前置校验 >100 直拒 400——列溢出原本落 DB 异常 500）
      */
     @PostMapping("/sessions")
-    public R<String> createSession(@RequestBody Map<String, Object> body) {
+    public ResponseEntity<R<String>> createSession(@RequestBody Map<String, Object> body) {
         String title = body.get("title") != null ? body.get("title").toString() : null;
-        return R.ok(chatService.createSession(AuthUtils.resolveUserId(), title));
+        if (title != null && title.length() > 100) {
+            return ResponseEntity.badRequest().body(R.fail(40001, "会话标题不能超过100个字符"));
+        }
+        return ResponseEntity.ok().body(R.ok(chatService.createSession(AuthUtils.resolveUserId(), title)));
     }
 
     /**
