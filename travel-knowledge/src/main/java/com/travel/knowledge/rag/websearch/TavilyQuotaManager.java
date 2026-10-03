@@ -35,20 +35,28 @@ public class TavilyQuotaManager {
     private final int monthlyCreditLimit;
     private final int monthlyWarnThreshold;
     private final int monthlyDegradeThreshold;
+    private final String quotaMode;
 
     /**
      * v2.0.7.28（2026-09-29）：阈值由字段 @Value 改构造器注入——Spring 装配语义不变
      * （三键默认值逐字保留），纯单测可直接构造（原字段注入在无 Spring 上下文时默认 0=
      * 阈值失效不可测；ReflectionTestUtils 为项目反模式禁令）。
+     *
+     * <p>AS-1（v2.0.7.36 候选）：增第 4 键 quota-mode——{@code strict}=现状硬停（默认，
+     * E-33 字节等价）；{@code advisory}=仅告警不硬停（canSearch 恒 true，Redis 计数与
+     * 阈值 WARN 保留，硬停依赖 Tavily API 自身 429/432）。与 LLMBudgetGuard（LLM token
+     * 预算面）完全独立，fail-open 语义各自独立无交互。</p>
      */
     public TavilyQuotaManager(StringRedisTemplate redis,
                               @Value("${travel.rag.web-search.monthly-credit-limit:1000}") int monthlyCreditLimit,
                               @Value("${travel.rag.web-search.monthly-warn-threshold:800}") int monthlyWarnThreshold,
-                              @Value("${travel.rag.web-search.monthly-degrade-threshold:500}") int monthlyDegradeThreshold) {
+                              @Value("${travel.rag.web-search.monthly-degrade-threshold:500}") int monthlyDegradeThreshold,
+                              @Value("${travel.rag.web-search.quota-mode:strict}") String quotaMode) {
         this.redis = redis;
         this.monthlyCreditLimit = monthlyCreditLimit;
         this.monthlyWarnThreshold = monthlyWarnThreshold;
         this.monthlyDegradeThreshold = monthlyDegradeThreshold;
+        this.quotaMode = quotaMode;
     }
 
     private String currentMonthKey() {
@@ -59,8 +67,13 @@ public class TavilyQuotaManager {
      * 剩余额度是否足够（搜索调用前检查）。
      * v2.0.7.28：Redis 不可达时 fail-open 放行+WARN——配额器是计费护栏非业务闸，
      * Redis 故障不应阻断 web-search 主链（超时/降级链已在适配器层兜底）。
+     * AS-1：advisory 模式直通恒 true（仅告警不硬停，硬停依赖 Tavily API 自身 429/432）；
+     * 非 advisory 一切值（含 null/笔误）落 strict=安全默认；strict 分支行为逐字未动。
      */
     public boolean canSearch() {
+        if ("advisory".equals(quotaMode)) {
+            return true;
+        }
         try {
             String used = redis.opsForValue().get(currentMonthKey());
             int usedCount = used == null ? 0 : Integer.parseInt(used);
