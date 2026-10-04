@@ -23,6 +23,8 @@ export interface DataQualityPayload {
   etlOutbox?: EtlOutboxInfo;
   writebackStream?: WritebackStreamInfo;
   consistencyCheck?: string;
+  /** AZ-3：rabbit writeback 队列深度（type!=rabbit 或异常时 null/缺失=fail-open） */
+  rabbitWriteback?: { mainDepth?: number; dlqDepth?: number; consumers?: number } | null;
 }
 
 export interface TurnLatencyModelStat {
@@ -78,6 +80,11 @@ export function DataQualityCard({ payload, error, onRetry }: {
       <p className="mt-2 text-xs text-ink-faint">
         死信口径：{stream?.deadLetterPolicy ?? '—'}；三端对账：{payload?.consistencyCheck ?? '—'}
       </p>
+      {payload?.rabbitWriteback ? (
+        <p className="mt-2 text-xs text-ink-faint">
+          Rabbit 主队列 {String(payload.rabbitWriteback.mainDepth ?? '—')} 条 · 死信 {String(payload.rabbitWriteback.dlqDepth ?? '—')} 条 · 消费者 {String(payload.rabbitWriteback.consumers ?? '—')}
+        </p>
+      ) : null}
     </section>
   );
 }

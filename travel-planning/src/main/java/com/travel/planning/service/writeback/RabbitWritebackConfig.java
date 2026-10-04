@@ -16,13 +16,25 @@ import org.springframework.amqp.core.Queue;
 import org.springframework.amqp.core.TopicExchange;
 import org.springframework.amqp.core.QueueBuilder;
 import org.springframework.amqp.rabbit.annotation.RabbitListener;
+import org.springframework.amqp.AmqpException;
 import org.springframework.amqp.AmqpRejectAndDontRequeueException;
+import org.springframework.amqp.core.Message;
+import org.springframework.amqp.rabbit.config.RetryInterceptorBuilder;
+import org.springframework.amqp.rabbit.config.SimpleRabbitListenerContainerFactory;
+import org.springframework.amqp.rabbit.connection.ConnectionFactory;
+import org.springframework.amqp.rabbit.core.RabbitTemplate;
+import org.springframework.amqp.rabbit.retry.MessageRecoverer;
+import org.springframework.amqp.rabbit.retry.RepublishMessageRecoverer;
 import org.springframework.amqp.rabbit.listener.AbstractMessageListenerContainer;
 import org.springframework.amqp.rabbit.listener.RabbitListenerEndpointRegistry;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.retry.backoff.ExponentialBackOffPolicy;
+import org.springframework.retry.policy.SimpleRetryPolicy;
+import org.springframework.retry.support.RetryTemplate;
 
 import java.util.Arrays;
 import java.util.Map;
@@ -35,11 +47,11 @@ import java.util.Map;
  * 业务调用逐字一致（切片写回+缓存失效，均可安全重复执行）；灰度门复用同一键
  * {@code gray.writeback-consumer.enabled}。redis Stream 监听（@Scheduled 轮询）零改动并存。</p>
  *
- * <p><b>DLQ 映射</b>（redis 语义→rabbit 语义）：redis=失败不 ACK 重投、达 3 次转死信日志并 ACK；
- * rabbit=失败抛 {@link AmqpRejectAndDontRequeueException}（reject 不重入队）→经
- * {@code travel-event.dlx} 死信交换机落入 {@code travel-writeback-rabbit-dlq}——
- * 消息零丢失、人工按 DLQ 处置（比 redis 3 次重投更早进入人工处置面，终态语义一致）。
- * 灰度关闭=暂停消费：消息同样进 DLQ 积压（人工应急门，等价 redis 轮询头空转的积压语义）。</p>
+ * <p><b>DLQ 映射</b>（redis 语义→rabbit 语义，AZ-1/AZ-2 增强）：redis=失败不 ACK 重投、达 3 次转死信日志并 ACK；
+ * rabbit=失败先经 spring-retry 重投 3 次（1s×2 倍退避），耗尽后 WritebackMessageRecoverer 按终因分流——
+ * 真失败/不可解析 republish 至 {@code travel-event.dlx}→{@code travel-writeback-rabbit-dlq}
+ * （消息零丢失、人工按 DLQ 处置）；灰度关闭=暂停消费：{@link WritebackPausedException} 分类为不可重试
+ * →requeue 回主队列（主语义仍=AK-1c 容器停；DLQ 只收处理失败，不收人为暂停）。</p>
  *
  * <p>AK-1c：挂接 {@link EventConsumerRegistry} 统一观测面（listener 装配时注册
  * channel/consumerKey/gray 键/启停动作，启停=经 {@link RabbitListenerEndpointRegistry}
@@ -87,6 +99,41 @@ public class RabbitWritebackConfig {
                 BindingBuilder.bind(deadLetterQueue).to(deadLetterExchange).with(DLQ));
     }
 
+    /** AZ-1：writeback 专属容器工厂——spring-retry 无状态重试（默认 3 次、1s 起倍退避、
+     * 上限 10s），耗尽经 WritebackMessageRecoverer 分流（暂停→requeue；真失败→DLQ）。
+     * prefetch 与 spring.rabbitmq.listener.simple.prefetch 同键（AZ-4 暴露面一致）。 */
+    @Bean
+    public SimpleRabbitListenerContainerFactory rabbitWritebackContainerFactory(
+            ConnectionFactory connectionFactory,
+            RabbitTemplate rabbitTemplate,
+            @Value("${travel.rabbit.writeback.retry.max-attempts:3}") int maxAttempts,
+            @Value("${travel.rabbit.writeback.retry.backoff-initial-ms:1000}") long backoffInitialMs,
+            @Value("${travel.rabbit.writeback.retry.backoff-multiplier:2.0}") double backoffMultiplier,
+            @Value("${spring.rabbitmq.listener.simple.prefetch:250}") int prefetch) {
+        SimpleRabbitListenerContainerFactory factory = new SimpleRabbitListenerContainerFactory();
+        factory.setConnectionFactory(connectionFactory);
+        factory.setConcurrentConsumers(1);
+        factory.setPrefetchCount(prefetch);
+        RetryTemplate retryTemplate = new RetryTemplate();
+        // 4 参构造（正确用法）：全部异常可重试（defaultValue=true），仅暂停异常除外
+        retryTemplate.setRetryPolicy(new SimpleRetryPolicy(
+                maxAttempts, Map.of(WritebackPausedException.class, false), true, true));
+        ExponentialBackOffPolicy backOff = new ExponentialBackOffPolicy();
+        backOff.setInitialInterval(backoffInitialMs);
+        backOff.setMultiplier(backoffMultiplier);
+        backOff.setMaxInterval(10000L);
+        retryTemplate.setBackOffPolicy(backOff);
+        // AZ-1 核验修正（判例 R376 包径实锚）：方案骨架 StatelessRetryOperationsInterceptor 在
+        // spring-rabbit 3.2.6 不存在（jar 常量池实证），以 RetryInterceptorBuilder.stateless()
+        // 等价改写——Boot 3.5.5 AbstractRabbitListenerContainerFactoryConfigurer 官方同款路径
+        // （retryOperations+recoverer+build），重试策略/退避/恢复器分流语义逐字不变。
+        factory.setAdviceChain(RetryInterceptorBuilder.stateless()
+                .retryOperations(retryTemplate)
+                .recoverer(new WritebackMessageRecoverer(rabbitTemplate))
+                .build());
+        return factory;
+    }
+
     /**
      * AK-1c：listener 装配时挂接 EventConsumerRegistry（观测面+真实容器启停协调）。
      * 两依赖均 ObjectProvider 软化：窄测试上下文（仅装配本类）缺 bean=降级跳过注册，
@@ -132,6 +179,44 @@ public class RabbitWritebackConfig {
         });
     }
 
+    /** AZ-2：灰度暂停标记异常——SimpleRetryPolicy 分类为不可重试（defaultValue=true 下
+     * 唯一 false 项），由 WritebackMessageRecoverer 分流为 requeue（禁入 DLQ）。 */
+    static class WritebackPausedException extends RuntimeException {
+        WritebackPausedException(String message) {
+            super(message);
+        }
+    }
+
+    /** AZ-1/AZ-2：恢复器分流——重试耗尽后按终因分派：WritebackPausedException →
+     * 节流 1s 后抛 AmqpException（容器默认 requeue=true，消息回主队列，禁入 DLQ）；
+     * 其余（真失败/不可解析）→ 委派 RepublishMessageRecoverer 重发布到 DLX/DLQ
+     * （携带 x-exception-* 头留痕，原消息 ACK）。 */
+    @Slf4j
+    static class WritebackMessageRecoverer implements MessageRecoverer {
+        private final RepublishMessageRecoverer delegate;
+
+        WritebackMessageRecoverer(RabbitTemplate rabbitTemplate) {
+            this.delegate = new RepublishMessageRecoverer(rabbitTemplate, DLX, DLQ);
+        }
+
+        @Override
+        public void recover(Message message, Throwable cause) {
+            Throwable root = cause;
+            while (root.getCause() != null && root.getCause() != root) {
+                root = root.getCause();
+            }
+            if (root instanceof WritebackPausedException) {
+                try {
+                    Thread.sleep(1000L); // requeue 热循环节流（暂停态 1 次/秒，WARN 可见）
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                }
+                throw new AmqpException("writeback consumer paused (requeue)");
+            }
+            delegate.recover(message, cause);
+        }
+    }
+
     /**
      * rabbit 消费监听器：信封 JSON → 复用既有业务（gray 门+切片写回+缓存失效）。
      */
@@ -149,7 +234,7 @@ public class RabbitWritebackConfig {
             this.gray = gray;
         }
 
-        @RabbitListener(queues = QUEUE)
+        @RabbitListener(queues = QUEUE, containerFactory = "rabbitWritebackContainerFactory")
         public void onMessage(String message) {
             EventEnvelope envelope;
             Map<String, String> payload;
@@ -165,10 +250,14 @@ public class RabbitWritebackConfig {
                 log.warn("[WritebackConsumer] 非本消费域事件类型，忽略: type={}", envelope.type());
                 return;
             }
-            // 灰度门（与 WritebackEventConsumer.GRAY_KEY 同键）：关闭=暂停消费→DLQ 积压（人工应急）
+            // 灰度门（与 WritebackEventConsumer.GRAY_KEY 同键）：关闭=暂停消费。主语义=
+            // AK-1c 容器 stop（消息留主队列，恢复自动续消）；本兜底仅在容器未停窗口到达——
+            // AZ-2：抛 WritebackPausedException（分类为不可重试）→ WritebackMessageRecoverer
+            // 节流 1s 后 requeue 回主队列（原语义 reject 入 DLQ=暂停期间事件滞死信且恢复后
+            // 不回放=应急开关变数据丢失开关，禁再犯）；requeue 循环 1 次/秒 WARN 可见。
             if (!gray.enabled(WritebackEventConsumer.GRAY_KEY)) {
-                log.warn("[WritebackConsumer] 灰度暂停（{}=false），消息 reject 入死信积压", WritebackEventConsumer.GRAY_KEY);
-                throw new AmqpRejectAndDontRequeueException("gray switch off: writeback consumer paused");
+                log.warn("[WritebackConsumer] 灰度暂停（{}=false），requeue 回主队列", WritebackEventConsumer.GRAY_KEY);
+                throw new WritebackPausedException("writeback consumer paused by gray switch");
             }
             String sessionId = payload.getOrDefault("sessionId", "");
             String content = payload.getOrDefault("content", "");
@@ -185,9 +274,12 @@ public class RabbitWritebackConfig {
                 if (itineraryDetailCache != null) {
                     itineraryDetailCache.evict(itineraryId);
                 }
-                log.info("[WritebackConsumer] rabbit 通道事件已消费: itineraryId={}", itineraryId);
+                log.info("[WritebackConsumer] rabbit 通道事件已消费: itineraryId={}, eventId={}", itineraryId, envelope.eventId());
             } catch (Exception e) {
-                log.error("[WritebackDLQ] rabbit 通道消费失败，reject 入死信（人工处置）: itineraryId={}, error={}",
+                // AZ-1：业务异常经容器工厂 spring-retry 重试（缺省 3 次、1s×2 倍退避、上限 10s），
+                // 耗尽后由 WritebackMessageRecoverer 委派 RepublishMessageRecoverer republish 入
+                // DLX/DLQ（原消息 ACK）。取舍披露=P0-AZ⑴：拦截器统一分类，AmqpReject 同样参与重试。
+                log.error("[WritebackDLQ] rabbit 通道消费失败（重试耗尽后 republish 入死信）: itineraryId={}, error={}",
                         itineraryId, e.getMessage());
                 throw new AmqpRejectAndDontRequeueException("writeback processing failed", e);
             }

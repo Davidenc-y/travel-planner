@@ -118,6 +118,13 @@ spring:
     port: ${RABBITMQ_PORT:5672}
     username: ${RABBITMQ_USER:}
     password: ${RABBITMQ_PASSWORD:}
+    # AZ-4：集群/可靠性配置面（缺省=单节点现状零变更；quorum 队列迁移路径见部署手册，代码不做）
+    addresses: ${RABBITMQ_ADDRESSES:}
+    publisher-confirm-type: ${RABBITMQ_CONFIRM_TYPE:none}
+    publisher-returns: ${RABBITMQ_PUBLISHER_RETURNS:false}
+    listener:
+      simple:
+        prefetch: ${RABBITMQ_PREFETCH:250}
 
 # ============ Sentinel Feign 整合（Z-2b，r1 设计） ============
 # 键名经 SCA 2025.0.0.0 starter 字节码核验（javap SentinelFeignAutoConfiguration）：

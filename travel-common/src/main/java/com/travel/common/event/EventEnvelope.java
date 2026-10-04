@@ -6,10 +6,11 @@ package com.travel.common.event;
  * <p>{@code type}=事件类型（如 REFINE）；{@code key}=业务键（如 sessionId，供 rabbit 通道
  * 路由/分区用，redis 通道不落盘）；{@code payloadJson}=载荷 JSON 对象（扁平 string 字段，
  * redis 通道按 type+载荷字段扁平化为 XADD 字段面）；{@code ts}=发布时间戳（epoch ms，
- * redis 通道不落盘）。</p>
+ * redis 通道不落盘）；{@code eventId}=信封唯一标识（AZ-4：发布端 UUID，供发布/消费日志
+ * 全链路追踪；消费侧 Jackson 对缺 eventId 的历史消息反序列化=null 天然兼容）。</p>
  *
  * @author david_ency
  * @since 1.0-SNAPSHOT
  */
-public record EventEnvelope(String type, String key, String payloadJson, long ts) {
+public record EventEnvelope(String type, String key, String payloadJson, long ts, String eventId) {
 }

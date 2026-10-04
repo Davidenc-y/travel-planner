@@ -9,6 +9,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
 import java.util.Map;
+import java.util.UUID;
 
 /**
  * HC-5：writeback 异步削峰事件发布器（Y-3a 起经 {@link EventBusPort} 发布）。
@@ -54,10 +55,12 @@ public class WritebackEventPublisher {
         try {
             EventEnvelope envelope = new EventEnvelope(
                     "REFINE", sessionId == null ? "" : sessionId,
-                    MAPPER.writeValueAsString(payload), System.currentTimeMillis());
+                    MAPPER.writeValueAsString(payload), System.currentTimeMillis(),
+                    UUID.randomUUID().toString());
             boolean published = eventBus.publish(envelope);
             if (published) {
-                log.info("[WritebackPublisher] 事件已发布: itineraryId={}, sessionId={}", itineraryId, sessionId);
+                log.info("[WritebackPublisher] 事件已发布: itineraryId={}, sessionId={}, eventId={}",
+                        itineraryId, sessionId, envelope.eventId());
             } else {
                 log.warn("[WritebackPublisher] XADD 失败（调用方回退同步执行）: itineraryId={}, error=bus returned false",
                         itineraryId);
