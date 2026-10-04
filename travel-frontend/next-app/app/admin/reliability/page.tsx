@@ -2,16 +2,24 @@
 
 import { useEffect, useState } from 'react';
 import dynamic from 'next/dynamic';
+import { toast } from 'sonner';
 import { adminApi, getErrorMessage } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 import { useApiQuery } from '@/lib/use-api-query';
 import { formatTokenCount } from '@/lib/usage-format';
 import {
+  BudgetCard,
   DataQualityCard,
+  EventConsumersCard,
+  GrayReleaseCard,
   LatencySpansCard,
+  RagQualityCard,
   TurnLatencyCard,
+  type BudgetPayload,
   type DataQualityPayload,
+  type EventConsumersPayload,
   type LatencySpansPayload,
+  type RagQualityPayload,
   type TurnLatencyPayload,
 } from './cards';
 
@@ -115,6 +123,63 @@ export default function ReliabilityPage() {
     [adminQueryEnabled, days],
     { enabled: adminQueryEnabled, cacheKey: `admin:latency-spans:${days}` },
   );
+
+  // AY-1：消费后端既有四端点中其余三个（P0-AY⑷：fetcher 统一带业务码守卫，
+  // 使 AW-6 error 态对 HTTP 200 业务码失败真实生效）
+  const ragQuality = useApiQuery<RagQualityPayload>(
+    () =>
+      adminApi.ragQuality().then((res) => {
+        if (res.data.code !== 200) throw new Error(res.data.message || '加载失败');
+        return res.data.data as RagQualityPayload;
+      }),
+    [adminQueryEnabled],
+    { enabled: adminQueryEnabled, cacheKey: 'admin:rag-quality', staleMs: 30_000 },
+  );
+  const graySnapshot = useApiQuery<Record<string, boolean>>(
+    () =>
+      adminApi.graySnapshot().then((res) => {
+        if (res.data.code !== 200) throw new Error(res.data.message || '加载失败');
+        return res.data.data as Record<string, boolean>;
+      }),
+    [adminQueryEnabled],
+    { enabled: adminQueryEnabled, cacheKey: 'admin:gray-snapshot', staleMs: 30_000 },
+  );
+  const eventConsumers = useApiQuery<EventConsumersPayload>(
+    () =>
+      adminApi.eventConsumers().then((res) => {
+        if (res.data.code !== 200) throw new Error(res.data.message || '加载失败');
+        return res.data.data as EventConsumersPayload;
+      }),
+    [adminQueryEnabled],
+    { enabled: adminQueryEnabled, cacheKey: 'admin:event-consumers', staleMs: 30_000 },
+  );
+  // AY-3：预算水位（消费 AY-2 /budget；同 P0-AY⑷ 业务码守卫口径）
+  const budget = useApiQuery<BudgetPayload>(
+    () =>
+      adminApi.budget().then((res) => {
+        if (res.data.code !== 200) throw new Error(res.data.message || '加载失败');
+        return res.data.data as BudgetPayload;
+      }),
+    [adminQueryEnabled],
+    { enabled: adminQueryEnabled, cacheKey: 'admin:budget', staleMs: 30_000 },
+  );
+
+  // AY-1/P0-AY⑴：灰度切换 handler——确认弹窗在 GrayReleaseCard 内；此处手动检查业务码，
+  // 40501（动态写未启用）/40001（未知键）文案由后端 message 原样透出（禁吞禁重试），
+  // 仅 code===200 才 refetch snapshot（先例=chat-page-content.tsx:409-410）
+  const handleGrayToggle = (key: string, next: boolean) => {
+    adminApi
+      .grayOverride(key, next)
+      .then((res) => {
+        if (res.data.code !== 200) {
+          toast.error(res.data.message || '切换失败');
+          return;
+        }
+        toast.success('灰度键已切换');
+        graySnapshot.refetch();
+      })
+      .catch((err: unknown) => toast.error(getErrorMessage(err)));
+  };
 
   // M27（S6）：非管理员直访防御（后端 40302 为权威；此处避免无谓请求与闪烁）
   if (mounted && (!isAuthenticated || !isAdmin)) {
@@ -299,6 +364,24 @@ export default function ReliabilityPage() {
             <DataQualityCard payload={dataQuality.data} error={dataQuality.error} onRetry={dataQuality.refetch} />
             <TurnLatencyCard payload={turnLatency.data} error={turnLatency.error} onRetry={turnLatency.refetch} />
             <LatencySpansCard payload={latencySpans.data} error={latencySpans.error} onRetry={latencySpans.refetch} />
+          </div>
+
+          {/* AY-1：RAG 质量/灰度发布/事件消费者三卡（消费既有未接线端点；零图表依赖=P0-AY⑶） */}
+          <div className="grid gap-4 lg:grid-cols-2">
+            <RagQualityCard payload={ragQuality.data} error={ragQuality.error} onRetry={ragQuality.refetch} />
+            <GrayReleaseCard
+              payload={graySnapshot.data}
+              error={graySnapshot.error}
+              onRetry={graySnapshot.refetch}
+              onToggle={handleGrayToggle}
+            />
+            <EventConsumersCard
+              payload={eventConsumers.data}
+              error={eventConsumers.error}
+              onRetry={eventConsumers.refetch}
+            />
+            {/* AY-3：预算水位卡入新网格区 */}
+            <BudgetCard payload={budget.data} error={budget.error} onRetry={budget.refetch} />
           </div>
         </>
       )}

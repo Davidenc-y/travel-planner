@@ -2,6 +2,9 @@
 // 数据获取走页面层 useApiQuery（复用 FE-P3.1 模式）；无图表依赖（recharts 保持
 // charts.tsx 动态加载口径），shared 88.1 kB 零增幅。
 
+import { useConfirm } from '@/components/ui/confirm-dialog';
+import { formatTokenCount } from '@/lib/usage-format';
+
 export interface EtlOutboxInfo {
   unconsumed?: number;
   total?: number;
@@ -236,6 +239,246 @@ export function LatencySpansCard({ payload, error, onRetry }: {
         </table>
       ) : (
         <p className="mt-3 py-4 text-center text-sm text-ink-faint">暂无分段数据</p>
+      )}
+    </section>
+  );
+}
+
+
+// ==================== AY-1：既有四端点观测面补全（RK-13 / MM-6 / AL-3） ====================
+
+export interface RagQualityPayload {
+  days?: string[];
+  metrics?: Record<string, number[]>;
+  totals?: Record<string, number>;
+}
+
+const RAG_QUALITY_METRICS: Array<{ key: string; label: string }> = [
+  { key: 'abstain', label: '弃答' },
+  { key: 'lowconf', label: '低信' },
+  { key: 'degraded', label: '降级' },
+  { key: 'hallucflag', label: '幻觉标记' },
+];
+
+export function RagQualityCard({ payload, error, onRetry }: {
+  payload: RagQualityPayload | null;
+  /** AW-6：加载失败态——非空时数值区顶部红色提示+重试（页面红色提示风格族） */
+  error?: string | null;
+  onRetry?: () => void;
+}) {
+  return (
+    <section className="rounded-xl border border-line bg-surface p-4" aria-label="RAG 质量">
+      <h2 className="mb-3 text-sm font-medium">RAG 质量（RK-13，近 7 日）</h2>
+      {error ? (
+        <div className="mt-1 text-xs text-red-600">
+          加载失败：{error}
+          {onRetry && (
+            <button type="button" onClick={onRetry} className="ml-2 underline">重试</button>
+          )}
+        </div>
+      ) : null}
+      <div className="grid gap-3 sm:grid-cols-4">
+        {RAG_QUALITY_METRICS.map((m) => (
+          <div key={m.key} className="rounded-lg bg-surface-2 p-3">
+            <p className="text-xs text-ink-faint">{m.label}</p>
+            <p className="text-lg font-semibold">{payload?.totals?.[m.key] ?? 0}</p>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+export function GrayReleaseCard({ payload, error, onRetry, onToggle }: {
+  payload: Record<string, boolean> | null;
+  /** AW-6：加载失败态——非空时数值区顶部红色提示+重试（页面红色提示风格族） */
+  error?: string | null;
+  onRetry?: () => void;
+  /** P0-AY⑴：确认弹窗通过后由卡片回调；切换请求与业务码 toast 归页面 handler */
+  onToggle?: (key: string, next: boolean) => void;
+}) {
+  const confirm = useConfirm();
+  // AY 审计直修：快照含 overrides 元数据键（值=覆盖表对象非布尔），过滤防渲染成假灰度行
+  const entries = Object.entries(payload ?? {}).filter(([k, v]) => k !== 'overrides' && typeof v === 'boolean');
+  return (
+    <section className="rounded-xl border border-line bg-surface p-4" aria-label="灰度发布">
+      <h2 className="mb-3 text-sm font-medium">灰度发布（MM-6）</h2>
+      {error ? (
+        <div className="mt-1 text-xs text-red-600">
+          加载失败：{error}
+          {onRetry && (
+            <button type="button" onClick={onRetry} className="ml-2 underline">重试</button>
+          )}
+        </div>
+      ) : null}
+      {entries.length > 0 ? (
+        <div className="space-y-2">
+          {entries.map(([key, on]) => {
+            const next = !on;
+            return (
+              <div key={key} className="flex items-center justify-between gap-2 text-sm">
+                <span className="truncate font-mono text-xs">{key}</span>
+                <div className="flex shrink-0 items-center gap-2">
+                  <span
+                    className={`rounded-full px-2 py-0.5 text-xs ${
+                      on ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-200 text-slate-600'
+                    }`}
+                  >
+                    {on ? '开' : '关'}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      const ok = await confirm({
+                        title: `切换灰度键 ${key} → ${next ? '开' : '关'}？内存覆盖，重启失效`,
+                        confirmText: '切换',
+                      });
+                      if (!ok) return;
+                      onToggle?.(key, next);
+                    }}
+                    className="rounded-lg border border-line px-2 py-1 text-xs hover:bg-surface-2"
+                  >
+                    切换
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      ) : (
+        <p className="py-6 text-center text-sm text-ink-faint">暂无灰度键</p>
+      )}
+      <p className="mt-2 text-xs text-ink-faint">
+        切换为内存覆盖（重启失效）；动态写默认关闭（40501=人工闸门，提示文案原样透出）。
+      </p>
+    </section>
+  );
+}
+
+export interface EventConsumerRow {
+  channel?: string;
+  key?: string;
+  grayKey?: string;
+  running?: boolean;
+  lastConsumeAt?: string | null;
+  consumeCount?: number;
+  rejectCount?: number;
+}
+
+export type EventConsumersPayload = EventConsumerRow[];
+
+export function EventConsumersCard({ payload, error, onRetry }: {
+  payload: EventConsumersPayload | null;
+  /** AW-6：加载失败态——非空时数值区顶部红色提示+重试（页面红色提示风格族） */
+  error?: string | null;
+  onRetry?: () => void;
+}) {
+  const rows = payload ?? [];
+  return (
+    <section className="rounded-xl border border-line bg-surface p-4" aria-label="事件消费者">
+      <h2 className="mb-3 text-sm font-medium">事件消费者（AL-3）</h2>
+      {error ? (
+        <div className="mt-1 text-xs text-red-600">
+          加载失败：{error}
+          {onRetry && (
+            <button type="button" onClick={onRetry} className="ml-2 underline">重试</button>
+          )}
+        </div>
+      ) : null}
+      {rows.length > 0 ? (
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="text-left text-ink-faint">
+              <th className="py-1">通道</th>
+              <th className="py-1">键</th>
+              <th className="py-1">运行态</th>
+              <th className="py-1">最近消费</th>
+              <th className="py-1 text-right">消费数</th>
+              <th className="py-1 text-right">拒绝数</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r, i) => (
+              <tr
+                key={`${r.channel ?? ''}:${r.key ?? ''}:${i}`}
+                className="border-t border-line"
+              >
+                <td className="py-1.5">{r.channel ?? '—'}</td>
+                <td className="py-1.5">{r.key ?? '—'}</td>
+                <td className="py-1.5">{r.running ? '运行中' : '已停止'}</td>
+                <td className="py-1.5">{r.lastConsumeAt || '—'}</td>
+                <td className="py-1.5 text-right">{r.consumeCount ?? 0}</td>
+                <td className="py-1.5 text-right">{r.rejectCount ?? 0}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      ) : (
+        <p className="py-6 text-center text-sm text-ink-faint">暂无消费者注册</p>
+      )}
+    </section>
+  );
+}
+
+// ==================== AY-3：LLM 预算水位卡（消费 AY-2 /budget；P0-AY⑶ 零图表库） ====================
+
+export interface BudgetPayload {
+  dailyUsed?: number;
+  hourlyUsed?: number;
+  dailyLimit?: number;
+  hourlyLimit?: number;
+  enabled?: boolean;
+  dayKey?: string;
+  hourKey?: string;
+  degraded?: boolean;
+}
+
+/** 复用配额卡 ratio 风格（page.tsx 同款口径）：宽度 min(100, used/limit*100)，>80% 红 */
+function budgetRatio(used: number, limit: number): number {
+  return limit > 0 ? Math.min(100, Math.round((used / limit) * 100)) : 0;
+}
+
+function BudgetBar({ label, used, limit }: { label: string; used: number; limit: number }) {
+  const p = budgetRatio(used, limit);
+  return (
+    <div className="flex items-center gap-2 text-xs text-ink-faint">
+      <span className="w-8">{label}</span>
+      <div className="h-2 flex-1 overflow-hidden rounded-full bg-slate-200">
+        <div className={`h-full ${p > 80 ? 'bg-red-500' : 'bg-sky-400'}`} style={{ width: `${p}%` }} />
+      </div>
+      <span className="whitespace-nowrap">
+        {formatTokenCount(used)} / {formatTokenCount(limit)} · {p}%
+      </span>
+    </div>
+  );
+}
+
+export function BudgetCard({ payload, error, onRetry }: {
+  payload: BudgetPayload | null;
+  /** AW-6：加载失败态——非空时数值区顶部红色提示+重试（页面红色提示风格族） */
+  error?: string | null;
+  onRetry?: () => void;
+}) {
+  return (
+    <section className="rounded-xl border border-line bg-surface p-4" aria-label="LLM 预算水位">
+      <h2 className="mb-3 text-sm font-medium">LLM 预算水位（AY-2）</h2>
+      {error ? (
+        <div className="mt-1 text-xs text-red-600">
+          加载失败：{error}
+          {onRetry && (
+            <button type="button" onClick={onRetry} className="ml-2 underline">重试</button>
+          )}
+        </div>
+      ) : null}
+      <div className="space-y-1">
+        <BudgetBar label="日" used={Number(payload?.dailyUsed ?? 0)} limit={Number(payload?.dailyLimit ?? 0)} />
+        <BudgetBar label="小时" used={Number(payload?.hourlyUsed ?? 0)} limit={Number(payload?.hourlyLimit ?? 0)} />
+      </div>
+      {payload?.degraded && (
+        <p className="mt-2 text-xs text-red-600">Redis 读取失败，水位不可用（fail-open）</p>
+      )}
+      {payload?.enabled === false && (
+        <p className="mt-2 text-xs text-ink-faint">预算护栏未启用</p>
       )}
     </section>
   );
