@@ -18,4 +18,61 @@
         WHERE start_time >= #{since} AND duration_ms IS NOT NULL
         ORDER BY duration_ms DESC LIMIT 10
     </select>
+
+    <!-- AX-2：stats 标量聚合五合一。MAINLINE 列复刻 Java else-if 语义（含 DETOUR 则不计
+         MAINLINE）；detourSkip 独立计数（call_path 为 NULL 时 LIKE 为 NULL→ELSE 0）；
+         status = 'DEGRADED' 在默认 utf8mb4 ci 排序规则下等价 Java equalsIgnoreCase。 -->
+    <select id="selectStatsAggregateSince" resultType="map">
+        SELECT COUNT(*) AS traceTotal,
+               AVG(grounding_rate) AS groundingAvg,
+               AVG(retention_rate) AS retentionAvg,
+               SUM(CASE WHEN status = 'DEGRADED' THEN 1 ELSE 0 END) AS degraded,
+               SUM(CASE WHEN token_total IS NOT NULL AND token_total &gt; 0 THEN token_total ELSE 0 END) AS tokensTotal,
+               SUM(CASE WHEN call_path LIKE '%focus=DETOUR%' THEN 1 ELSE 0 END) AS focusDetour,
+               SUM(CASE WHEN call_path LIKE '%focus=DETOUR%' THEN 0
+                        WHEN call_path LIKE '%focus=MAINLINE%' THEN 1 ELSE 0 END) AS focusMainline,
+               SUM(CASE WHEN call_path LIKE '%detourSkip=true%' THEN 1 ELSE 0 END) AS detourIsolated
+        FROM t_agent_trace
+        WHERE created_at &gt;= #{since}
+    </select>
+
+    <!-- AX-2：按日 token/trace（token 仅计数 &gt;0 行；trace 计全部行——与 Java 双数组口径一致）。 -->
+    <select id="selectDailyTokensSince" resultType="map">
+        SELECT DATE(created_at) AS day,
+               SUM(CASE WHEN token_total IS NOT NULL AND token_total &gt; 0 THEN token_total ELSE 0 END) AS tokens,
+               COUNT(*) AS traces
+        FROM t_agent_trace
+        WHERE created_at &gt;= #{since}
+        GROUP BY DATE(created_at)
+    </select>
+
+    <!-- AX-2：模型×状态分布（model_name/status 的 NULL 归一化在 Java 侧，与现状一致）。 -->
+    <select id="selectModelStatusSince" resultType="map">
+        SELECT model_name AS modelName, status, COUNT(*) AS cnt
+        FROM t_agent_trace
+        WHERE created_at &gt;= #{since}
+        GROUP BY model_name, status
+    </select>
+
+    <!-- AX-2：grounding 精确百分位（P0-AX⑴ stats round 式：0 基 idx=ROUND(p*(n-1))→1 基 rn）。 -->
+    <select id="selectGroundingPercentilesSince" resultType="map">
+        SELECT grounding_rate AS val, rn, cnt
+        FROM (
+            SELECT grounding_rate,
+                   ROW_NUMBER() OVER (ORDER BY grounding_rate) AS rn,
+                   COUNT(*) OVER () AS cnt
+            FROM t_agent_trace
+            WHERE created_at &gt;= #{since} AND grounding_rate IS NOT NULL
+        ) t
+        WHERE rn = ROUND(0.25 * (cnt - 1)) + 1
+           OR rn = ROUND(0.75 * (cnt - 1)) + 1
+    </select>
+
+    <!-- AX 审计直修：窗口内 (model, duration) 对（created_at 口径+>=0 过滤=stats 收集条件；
+         duration 分区窗口函数实测 2.5s 净回归，百分位回 Java percentile 静态法）。 -->
+    <select id="selectModelDurationsByCreatedAtSince" resultType="map">
+        SELECT model_name AS modelName, duration_ms AS durationMs
+        FROM t_agent_trace
+        WHERE created_at &gt;= #{since} AND duration_ms IS NOT NULL AND duration_ms &gt;= 0
+    </select>
 </mapper>

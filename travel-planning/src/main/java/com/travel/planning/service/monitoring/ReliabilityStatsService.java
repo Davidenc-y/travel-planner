@@ -6,6 +6,7 @@ import com.travel.common.util.JsonUtils;
 import com.travel.planning.map.guard.MapQuotaGuardService;
 import com.travel.common.repository.AgentTraceMapper;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
@@ -22,6 +23,11 @@ import java.util.TreeMap;
  *
  * <p>近 N 天窗口内统计 groundingRate/retentionRate、degraded 计数、
  * 模型×状态分布与节点执行 Top（callPath 内节点计数，M9-3c 观测同源）。</p>
+ *
+ * <p>AX-2：聚合下推——标量五合一/按日趋势/模型分布/精确百分位（窗口函数，stats round 式
+ * 秩公式=P0-AX⑴ 逐字复刻）改由 SQL 聚合返回，消除窗口内全量行搬运（AW 审计实测 2.7s
+ * 且随表线性恶化）；topNodes 保留 call_path 有界采样（键 travel.trace.topnodes-sample
+ * 默认 20000，0=不限=AW 前精确行为，P0-AX⑶）。</p>
  */
 @Slf4j
 @Service
@@ -29,90 +35,104 @@ public class ReliabilityStatsService {
 
     private final AgentTraceMapper agentTraceMapper;
     private final MapQuotaGuardService mapQuotaGuardService;
+    private final int topNodesSample;
 
     public ReliabilityStatsService(AgentTraceMapper agentTraceMapper,
-                                   MapQuotaGuardService mapQuotaGuardService) {
+                                   MapQuotaGuardService mapQuotaGuardService,
+                                   @Value("${travel.trace.topnodes-sample:20000}") int topNodesSample) {
         this.agentTraceMapper = agentTraceMapper;
         this.mapQuotaGuardService = mapQuotaGuardService;
+        this.topNodesSample = topNodesSample;
     }
 
     /** @return 看板聚合结果（Map 便于前端 recharts 直接消费） */
     public Map<String, Object> stats(int days) {
         int range = days <= 0 ? 7 : Math.min(days, 90);
         LocalDateTime since = LocalDateTime.now().minusDays(range);
-        // AW-5：列裁剪——SELECT * 会拉每行 ≤16KB 的 spans JSON（窗口内全量传输是看板
-        // 首载慢主因之一）；此处只选聚合块实际读取的列（清单=树面实读 getter 对照，
-        // 见审计日志第 5 轮对照表：grounding_rate/retention_rate/status/call_path/
-        // model_name/token_total/created_at/duration_ms 八列）
-        List<AgentTrace> rows = agentTraceMapper.selectList(new QueryWrapper<AgentTrace>()
-                .select("grounding_rate", "retention_rate", "status", "call_path",
-                        "model_name", "token_total", "created_at", "duration_ms")
-                .ge("created_at", since));
+        Map<String, Object> agg = agentTraceMapper.selectStatsAggregateSince(since);
 
-        List<Double> grounding = new ArrayList<>();
-        List<Double> retention = new ArrayList<>();
-        Map<String, Map<String, Long>> modelStatus = new LinkedHashMap<>();
-        Map<String, Long> nodeCount = new LinkedHashMap<>();
         Map<LocalDate, long[]> dailyTokens = new TreeMap<>();
-        Map<String, List<Double>> durationsByModel = new LinkedHashMap<>();
-        Map<String, Long> focusCount = new LinkedHashMap<>();
-        long tokensTotal = 0;
-        long detourIsolated = 0;
-        int degraded = 0;
-        for (AgentTrace t : rows) {
-            if (t.getGroundingRate() != null) {
-                grounding.add(t.getGroundingRate());
-            }
-            if (t.getRetentionRate() != null) {
-                retention.add(t.getRetentionRate());
-            }
-            if ("DEGRADED".equalsIgnoreCase(t.getStatus())) {
-                degraded++;
-            }
-            // M27（S5/E3 观测支撑）：焦点分布与隔离生效计数（callPath 编码标记）
-            String callPathText = t.getCallPath();
-            if (callPathText != null) {
-                if (callPathText.contains("focus=DETOUR")) {
-                    focusCount.merge("DETOUR", 1L, Long::sum);
-                } else if (callPathText.contains("focus=MAINLINE")) {
-                    focusCount.merge("MAINLINE", 1L, Long::sum);
-                }
-                if (callPathText.contains("detourSkip=true")) {
-                    detourIsolated++;
-                }
-            }
-            String model = t.getModelName() == null || t.getModelName().isBlank()
-                    ? "unknown" : t.getModelName();
-            if (t.getTokenTotal() != null && t.getTokenTotal() > 0) {
-                tokensTotal += t.getTokenTotal();
-                if (t.getCreatedAt() != null) {
-                    dailyTokens.computeIfAbsent(t.getCreatedAt().toLocalDate(),
-                                    k -> new long[2])[0] += t.getTokenTotal();
-                }
-            }
-            if (t.getCreatedAt() != null) {
-                dailyTokens.computeIfAbsent(t.getCreatedAt().toLocalDate(),
-                        k -> new long[2])[1]++;
-            }
-            if (t.getDurationMs() != null && t.getDurationMs() >= 0) {
-                durationsByModel.computeIfAbsent(model, k -> new ArrayList<>())
-                        .add((double) t.getDurationMs());
-            }
-            String status = t.getStatus() == null ? "unknown" : t.getStatus();
+        for (Map<String, Object> row : agentTraceMapper.selectDailyTokensSince(since)) {
+            Object d = row.get("day");
+            // mysql-connector-j 对 DATE 列的 map 返回随版本在 java.sql.Date/LocalDate 间漂移
+            LocalDate day = d instanceof java.sql.Date ? ((java.sql.Date) d).toLocalDate()
+                    : d instanceof LocalDate ? (LocalDate) d : LocalDate.parse(String.valueOf(d));
+            long[] acc = dailyTokens.computeIfAbsent(day, k -> new long[2]);
+            acc[0] += ((Number) row.get("tokens")).longValue();
+            acc[1] += ((Number) row.get("traces")).longValue();
+        }
+
+        Map<String, Map<String, Long>> modelStatus = new LinkedHashMap<>();
+        for (Map<String, Object> row : agentTraceMapper.selectModelStatusSince(since)) {
+            String model = normalizeModel((String) row.get("modelName"));
+            String status = row.get("status") == null ? "unknown" : String.valueOf(row.get("status"));
             modelStatus.computeIfAbsent(model, k -> new LinkedHashMap<>())
-                    .merge(status, 1L, Long::sum);
+                    .merge(status, ((Number) row.get("cnt")).longValue(), Long::sum);
+        }
+
+        // 百分位行（至多 2 行）：双行小=P25 大=P75（秩公式 p75 位 >= p25 位）；单行两百分位同值；零行=0.0
+        List<Map<String, Object>> groundingPct = agentTraceMapper.selectGroundingPercentilesSince(since);
+        double groundingP25 = 0.0;
+        double groundingP75 = 0.0;
+        if (groundingPct.size() == 1) {
+            double v = ((Number) groundingPct.get(0).get("val")).doubleValue();
+            groundingP25 = v;
+            groundingP75 = v;
+        } else if (groundingPct.size() >= 2) {
+            double v1 = ((Number) groundingPct.get(0).get("val")).doubleValue();
+            double v2 = ((Number) groundingPct.get(1).get("val")).doubleValue();
+            groundingP25 = Math.min(v1, v2);
+            groundingP75 = Math.max(v1, v2);
+        }
+
+        // AX 审计直修：duration 分区窗口函数在 10 万行非空形态下需全量物化排序（实测
+        // 2.5s/查询=净回归）——duration 百分位改回单列 (model,duration) 拉取 + Java
+        // percentile 静态法（854ms 实测；秩公式两式对拍已锁定，AW-5 行为同源）
+        Map<String, List<Double>> durationsByModel = new LinkedHashMap<>();
+        for (Map<String, Object> row : agentTraceMapper.selectModelDurationsByCreatedAtSince(since)) {
+            durationsByModel.computeIfAbsent(normalizeModel((String) row.get("modelName")),
+                            k -> new ArrayList<>())
+                    .add(((Number) row.get("durationMs")).doubleValue());
+        }
+
+        Map<String, Long> nodeCount = new LinkedHashMap<>();
+        QueryWrapper<AgentTrace> topNodesWrapper = new QueryWrapper<AgentTrace>()
+                .select("call_path")
+                .ge("created_at", since)
+                .orderByDesc("created_at");
+        if (topNodesSample > 0) {
+            // P0-AX⑶：>0=最近 N 行有界采样；0=不加 LIMIT=AW 前精确行为（countNodes 全量消费）
+            topNodesWrapper.last("LIMIT " + topNodesSample);
+        }
+        List<AgentTrace> callPathRows = agentTraceMapper.selectList(topNodesWrapper);
+        for (AgentTrace t : callPathRows) {
+            if (t == null) {
+                // S-B8 教训：MyBatis 将全 NULL 部分列选择行映射为 null 列表元素
+                continue;
+            }
             countNodes(t.getCallPath(), nodeCount);
+        }
+
+        Map<String, Long> focusCount = new LinkedHashMap<>();
+        long focusDetour = longOf(agg.get("focusDetour"));
+        long focusMainline = longOf(agg.get("focusMainline"));
+        // 形状忠实复刻：旧 Java 仅在计数 >=1 时放键（无匹配=空 map，非 {DETOUR:0,MAINLINE:0}）
+        if (focusDetour > 0) {
+            focusCount.put("DETOUR", focusDetour);
+        }
+        if (focusMainline > 0) {
+            focusCount.put("MAINLINE", focusMainline);
         }
 
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("days", range);
-        out.put("traceTotal", rows.size());
-        out.put("groundingRate", avg(grounding));
-        out.put("groundingP25", percentile(grounding, 0.25));
-        out.put("groundingP75", percentile(grounding, 0.75));
-        out.put("retentionRate", avg(retention));
-        out.put("degraded", degraded);
-        out.put("tokensTotal", tokensTotal);
+        out.put("traceTotal", longOf(agg.get("traceTotal")));
+        out.put("groundingRate", doubleOf(agg.get("groundingAvg")));
+        out.put("groundingP25", groundingP25);
+        out.put("groundingP75", groundingP75);
+        out.put("retentionRate", doubleOf(agg.get("retentionAvg")));
+        out.put("degraded", longOf(agg.get("degraded")));
+        out.put("tokensTotal", longOf(agg.get("tokensTotal")));
         out.put("tokenDailyTrend", buildTokenTrend(dailyTokens, since.toLocalDate()));
         out.put("modelDuration", buildModelDuration(durationsByModel));
         out.put("modelDistribution", toModelRows(modelStatus));
@@ -120,7 +140,7 @@ public class ReliabilityStatsService {
         out.put("mapQuota", mapQuotaGuardService.usageSnapshot());
         // M27（S5/E3 观测支撑）：看板焦点观测卡数据（DETOUR 样本/主线分布/隔离生效数）
         out.put("focusDistribution", focusCount);
-        out.put("detourIsolated", detourIsolated);
+        out.put("detourIsolated", longOf(agg.get("detourIsolated")));
         return out;
     }
 
@@ -160,6 +180,18 @@ public class ReliabilityStatsService {
         });
         rows.sort(Comparator.comparingLong(r -> -((Number) r.get("count")).longValue()));
         return rows;
+    }
+
+    private static String normalizeModel(String model) {
+        return model == null || model.isBlank() ? "unknown" : model;
+    }
+
+    private static long longOf(Object v) {
+        return v == null ? 0L : ((Number) v).longValue();
+    }
+
+    private static double doubleOf(Object v) {
+        return v == null ? 0.0 : ((Number) v).doubleValue();
     }
 
     private static double round1(double v) {
