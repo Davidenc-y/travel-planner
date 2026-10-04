@@ -79,20 +79,30 @@ public class RabbitWritebackConfig {
     private static final TypeReference<Map<String, String>> PAYLOAD_TYPE = new TypeReference<>() {
     };
 
-    /** 拓扑声明：exchange/queue(带 DLX)/dlq/binding（幂等声明，RabbitAdmin 执行）。 */
+    /** 拓扑声明：exchange/queue(带 DLX)/dlq/binding（幂等声明，RabbitAdmin 执行）。
+     * BA-1：quorum 开关（缺省 false=classic 分支与基线逐字节相同，P0-BA⑴）——
+     * quorum 分支为集群/主从消息高可用前提（classic 队列消息仅存单节点）；
+     * deliveryLimit(1_000_000) 覆盖 3.13 默认 20（P0-BA⑵：灰度暂停 1s requeue 循环
+     * 的存活前提——默认 20 次即 dead-letter 会复活"暂停丢事件"语义）。 */
     @Bean
-    public Declarables rabbitWritebackTopology() {
+    public Declarables rabbitWritebackTopology(
+            @Value("${travel.rabbit.writeback.quorum.enabled:false}") boolean quorumEnabled) {
         // AR-4（Y 审计修复）：主交换机=Topic——StreamBridge 动态目的地默认按 topic 声明，
         // 原 direct 声明与其撞型（PRECONDITION_FAILED 406 received 'topic' current 'direct'）
         // → 发送通道关闭→publish 异常→回退同步（AMQP 不通但功能不坏的原因）。
         // 绑定 '#' 通配=不依赖 StreamBridge 的具体 routing key。
         TopicExchange exchange = new TopicExchange(EXCHANGE, true, false);
         DirectExchange deadLetterExchange = new DirectExchange(DLX, true, false);
-        Queue queue = QueueBuilder.durable(QUEUE)
+        QueueBuilder mainBuilder = QueueBuilder.durable(QUEUE)
                 .deadLetterExchange(DLX)
-                .deadLetterRoutingKey(DLQ)
-                .build();
-        Queue deadLetterQueue = QueueBuilder.durable(DLQ).build();
+                .deadLetterRoutingKey(DLQ);
+        QueueBuilder dlqBuilder = QueueBuilder.durable(DLQ);
+        if (quorumEnabled) {
+            mainBuilder.quorum().deliveryLimit(1_000_000);
+            dlqBuilder.quorum().deliveryLimit(1_000_000);
+        }
+        Queue queue = mainBuilder.build();
+        Queue deadLetterQueue = dlqBuilder.build();
         return new Declarables(
                 exchange, deadLetterExchange, queue, deadLetterQueue,
                 BindingBuilder.bind(queue).to(exchange).with("#"),
