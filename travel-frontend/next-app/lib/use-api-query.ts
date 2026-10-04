@@ -10,10 +10,11 @@ import { getErrorMessage } from '@/lib/api';
  * - FE-P3.1（20260912 前端专项）复取治理（stale-while-revalidate lite）：结果新增
  *   freshAt（最近成功取数时刻）；传入 cacheKey 后，重挂载/键切换与窗口重聚焦时若
  *   缓存 age < staleMs（默认 30s）直接用缓存（不闪 loading）并后台静默刷新——静默
- *   失败保持旧数据、不置 error（与预取 .catch(() => {}) 同口径）；age ≥ staleMs 走
- *   正常 loading 重查。未传 cacheKey 时行为与现状逐字节一致（无跨挂载缓存、无聚焦
- *   重查）。cacheKey 必须随业务参数变化（如 'itinerary:1:8'），否则键切换会误用旧键
- *   数据。
+ *   失败保持旧数据、不置 error（与预取 .catch(() => {}) 同口径）。AW-7 SWR 化：
+ *   SWR_STALE_HYDRATE=true 时过期缓存（age ≥ staleMs）也先回显再静默刷新（不闪
+ *   loading）；false=旧行为字节等价（过期即正常 loading 重查）。未传 cacheKey 时
+ *   行为与现状逐字节一致（无跨挂载缓存、无聚焦重查）。cacheKey 必须随业务参数变化
+ *   （如 'itinerary:1:8'），否则键切换会误用旧键数据。
  * 适用：用户面 GET 数据（统计/列表/清单）；写操作与 SSE 仍走页面编排（R4/R5）。
  */
 export interface UseApiQueryResult<T> {
@@ -40,6 +41,10 @@ interface SwrEntry {
 /** FE-P3.1：跨挂载 SWR-lite 缓存（模块级，仅 cacheKey 使用者受益；TTL 惰性，不主动清扫） */
 const swrCache = new Map<string, SwrEntry>();
 
+/** AW-7：stale-while-revalidate 总开关——true=过期缓存也先回显再后台静默刷新；
+ * false=旧行为字节等价（过期即阻塞 loading 重查）。 */
+const SWR_STALE_HYDRATE = true;
+
 export function useApiQuery<T>(
   fetcher: () => Promise<T>,
   deps: readonly unknown[],
@@ -49,13 +54,15 @@ export function useApiQuery<T>(
   const staleMs = options?.staleMs ?? 30_000;
   const cacheKey = options?.cacheKey;
 
-  // 首渲染即从缓存水合（重挂载"直接用缓存"，不闪 loading）
+  // 首渲染即从缓存水合（AW-7：SWR_STALE_HYDRATE 下过期缓存同样先回显，不闪 loading）
   const cachedAtMount = cacheKey ? swrCache.get(cacheKey) : undefined;
-  const freshAtMount = cachedAtMount && Date.now() - cachedAtMount.at < staleMs ? cachedAtMount : undefined;
+  const hydrate = SWR_STALE_HYDRATE
+    ? cachedAtMount
+    : (cachedAtMount && Date.now() - cachedAtMount.at < staleMs ? cachedAtMount : undefined);
 
-  const [data, setData] = useState<T | null>(() => (freshAtMount ? (freshAtMount.data as T) : null));
-  const [freshAt, setFreshAt] = useState<number | null>(() => freshAtMount?.at ?? null);
-  const [loading, setLoading] = useState(enabled && !freshAtMount);
+  const [data, setData] = useState<T | null>(() => (hydrate ? (hydrate.data as T) : null));
+  const [freshAt, setFreshAt] = useState<number | null>(() => hydrate?.at ?? null);
+  const [loading, setLoading] = useState(enabled && !hydrate);
   const [error, setError] = useState<string | null>(null);
   const [tick, setTick] = useState(0);
   const fetcherRef = useRef(fetcher);
@@ -66,7 +73,9 @@ export function useApiQuery<T>(
     let cancelled = false;
 
     const cached = cacheKey ? swrCache.get(cacheKey) : undefined;
-    const silent = Boolean(cached && Date.now() - cached.at < staleMs);
+    const silent = SWR_STALE_HYDRATE
+      ? Boolean(cached)
+      : Boolean(cached && Date.now() - cached.at < staleMs);
 
     if (!silent) {
       setLoading(true);
@@ -131,4 +140,21 @@ export function useApiQuery<T>(
   const refetch = useCallback(() => setTick((t) => t + 1), []);
 
   return { data, loading, error, refetch, freshAt };
+}
+
+/** AW-7：前缀失效——删除所有以 prefix 开头的缓存键（写操作后跨页失效用），返回删除条数 */
+export function invalidateSwr(prefix: string): number {
+  let removed = 0;
+  for (const key of swrCache.keys()) {
+    if (key.startsWith(prefix)) {
+      swrCache.delete(key);
+      removed += 1;
+    }
+  }
+  return removed;
+}
+
+/** AW-8：预取种入——把预取结果写入 swrCache（at=now 视作新鲜），cacheKey 同名页面秒开 */
+export function seedSwr(key: string, data: unknown): void {
+  swrCache.set(key, { data, at: Date.now() });
 }

@@ -63,11 +63,18 @@ public class AdminLatencySpansController {
         Map<String, Integer> routerCounts = new LinkedHashMap<>();
         int hedgeDecided = 0;
         int hedgeWins = 0;
+        int usable = 0;
         Map<String, List<Long>> stages = new LinkedHashMap<>();
         for (String stage : STAGES) {
             stages.put(stage, new ArrayList<>());
         }
         for (AgentTrace row : rows) {
+            // AW 审计实弹修复：局部列查询下全 NULL 行按 MyBatis 默认映射为 null 元素
+            //（returnInstanceForEmptyRow=false），窗口内非聊天轮 trace 即触发——判空跳过
+            if (row == null) {
+                continue;
+            }
+            usable++;
             if (row.getTtftMs() != null) {
                 ttfts.add(row.getTtftMs());
             }
@@ -84,7 +91,7 @@ public class AdminLatencySpansController {
 
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("days", d);
-        result.put("samples", rows.size());
+        result.put("samples", usable);
         result.put("ttft", latencyBlock(ttfts));
         result.put("routingMs", latencyBlock(routingMsValues));
         Map<String, Object> routing = new LinkedHashMap<>();

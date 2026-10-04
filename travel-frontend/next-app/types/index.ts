@@ -180,6 +180,15 @@ export interface ChatResponse {
   tokens?: number;
   /** M5-1：首条消息自动生成标题时返回；其余场景为 undefined */
   sessionTitle?: string;
+  /** AW-3：JSON 路径本轮有效约束回写（与 SSE done 帧 preferenceSync 同构；非规划轮为空） */
+  preferenceSync?: {
+    destination?: string;
+    days?: number;
+    budget?: string;
+    party?: string;
+    startDate?: string;
+    interests?: string[];
+  };
 }
 
 /** M6-42：轮次状态查询结果（前端刷新后恢复"执行已中断 + 重试"入口） */

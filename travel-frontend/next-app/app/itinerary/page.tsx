@@ -54,7 +54,7 @@ function ItineraryListContent() {
       enabled: isAuthenticated && userId != null,
       // 现状语义锁定：loadData 从不置 loading（首载除外）——SWR 口径取全量静默
       //（有数据不闪 loading），仅首次无缓存走骨架；分页/轮询/删除重取均静默换数据。
-      cacheKey: 'itinerary:list',
+      cacheKey: `itinerary:${pageRef.current}:${sizeRef.current}`,
       staleMs: 24 * 60 * 60_000,
     }
   );

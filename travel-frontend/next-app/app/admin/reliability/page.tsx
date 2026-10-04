@@ -286,14 +286,19 @@ export default function ReliabilityPage() {
               ) : (
                 <p className="py-6 text-center text-sm text-ink-faint">暂无配额数据</p>
               )}
+              {quotaRows.length > 0 && quotaRows.every((r) => Number(r.dayUsed ?? 0) === 0 && Number(r.monthUsed ?? 0) === 0) && (
+                <p className="mt-2 text-xs text-ink-faint">
+                  窗口内无地图配额消耗（本地未配置 AMAP_WEB_API_KEY 或未生成过地图路线时不计数）
+                </p>
+              )}
             </section>
           </div>
 
           {/* E-5c：数据质量/轮次耗时两卡（useApiQuery 复用 FE-P3.1 模式；卡片本体零图表依赖） */}
           <div className="grid gap-4 lg:grid-cols-2">
-            <DataQualityCard payload={dataQuality.data} />
-            <TurnLatencyCard payload={turnLatency.data} />
-            <LatencySpansCard payload={latencySpans.data} />
+            <DataQualityCard payload={dataQuality.data} error={dataQuality.error} onRetry={dataQuality.refetch} />
+            <TurnLatencyCard payload={turnLatency.data} error={turnLatency.error} onRetry={turnLatency.refetch} />
+            <LatencySpansCard payload={latencySpans.data} error={latencySpans.error} onRetry={latencySpans.refetch} />
           </div>
         </>
       )}

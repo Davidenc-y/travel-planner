@@ -8,6 +8,7 @@ import { encodeItineraryId } from '@/lib/url-guard';
 import { titleNeedsSave } from '@/lib/schemas';
 import { ExportIcsButton } from '@/components/feature/ExportIcsButton';
 import { itineraryApi, getErrorMessage } from '@/lib/api';
+import { invalidateSwr } from '@/lib/use-api-query';
 import type { ItineraryResponse } from '@/types';
 import { formatCurrency, formatDate } from '@/lib/utils';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -58,6 +59,7 @@ export function ItineraryCardModal({ itineraryId, onClose, originRect }: Props) 
     try {
       await itineraryApi.renameItinerary(data.id, next);
       setData({ ...data, title: next });
+      invalidateSwr('itinerary:'); // AW-9：改名后列表页/卡片缓存失效（标题同步）
       toast.success('标题已更新');
       // 打开中的面板数据刷新由调用方 focus 回读兜底
     } catch (err) {

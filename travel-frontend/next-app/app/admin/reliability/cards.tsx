@@ -37,12 +37,25 @@ export interface TurnLatencyPayload {
   topSlow?: Record<string, unknown>[];
 }
 
-export function DataQualityCard({ payload }: { payload: DataQualityPayload | null }) {
+export function DataQualityCard({ payload, error, onRetry }: {
+  payload: DataQualityPayload | null;
+  /** AW-6：加载失败态——非空时数值区顶部红色提示+重试（页面红色提示风格族） */
+  error?: string | null;
+  onRetry?: () => void;
+}) {
   const etl = payload?.etlOutbox;
   const stream = payload?.writebackStream;
   return (
     <section className="rounded-xl border border-line bg-surface p-4" aria-label="数据质量">
       <h2 className="mb-3 text-sm font-medium">数据质量（E-5a）</h2>
+      {error ? (
+        <div className="mt-1 text-xs text-red-600">
+          加载失败：{error}
+          {onRetry && (
+            <button type="button" onClick={onRetry} className="ml-2 underline">重试</button>
+          )}
+        </div>
+      ) : null}
       <div className="grid gap-3 sm:grid-cols-2">
         <div className="rounded-lg bg-surface-2 p-3">
           <p className="text-xs text-ink-faint">ETL outbox 未消费</p>
@@ -66,7 +79,12 @@ export function DataQualityCard({ payload }: { payload: DataQualityPayload | nul
   );
 }
 
-export function TurnLatencyCard({ payload }: { payload: TurnLatencyPayload | null }) {
+export function TurnLatencyCard({ payload, error, onRetry }: {
+  payload: TurnLatencyPayload | null;
+  /** AW-6：加载失败态——非空时数值区顶部红色提示+重试（页面红色提示风格族） */
+  error?: string | null;
+  onRetry?: () => void;
+}) {
   const models = payload?.byModel ?? [];
   const topSlow = payload?.topSlow ?? [];
   return (
@@ -77,6 +95,14 @@ export function TurnLatencyCard({ payload }: { payload: TurnLatencyPayload | nul
       <h2 className="mb-3 text-sm font-medium">
         轮次耗时（E-5b，近 {payload?.windowDays ?? 7} 天，共 {payload?.totalTurns ?? 0} 轮）
       </h2>
+      {error ? (
+        <div className="mt-1 text-xs text-red-600">
+          加载失败：{error}
+          {onRetry && (
+            <button type="button" onClick={onRetry} className="ml-2 underline">重试</button>
+          )}
+        </div>
+      ) : null}
       {models.length > 0 ? (
         <table className="w-full text-sm">
           <thead>
@@ -131,7 +157,12 @@ export interface LatencySpansPayload {
   stages?: Record<string, { count?: number; p50?: number; p95?: number }>;
 }
 
-export function LatencySpansCard({ payload }: { payload: LatencySpansPayload | null }) {
+export function LatencySpansCard({ payload, error, onRetry }: {
+  payload: LatencySpansPayload | null;
+  /** AW-6：加载失败态——非空时数值区顶部红色提示+重试（页面红色提示风格族） */
+  error?: string | null;
+  onRetry?: () => void;
+}) {
   const ttft = payload?.ttft;
   const routing = payload?.routing;
   const hedge = payload?.hedge;
@@ -146,6 +177,14 @@ export function LatencySpansCard({ payload }: { payload: LatencySpansPayload | n
       <h2 className="mb-3 text-sm font-medium">
         延迟分段（S-B8，近 {payload?.days ?? 7} 天，共 {payload?.samples ?? 0} 样本）
       </h2>
+      {error ? (
+        <div className="mt-1 text-xs text-red-600">
+          加载失败：{error}
+          {onRetry && (
+            <button type="button" onClick={onRetry} className="ml-2 underline">重试</button>
+          )}
+        </div>
+      ) : null}
       <div className="grid gap-3 sm:grid-cols-3">
         <div className="rounded-lg bg-surface-2 p-3">
           <p className="text-xs text-ink-faint">首 token P50 / P95</p>

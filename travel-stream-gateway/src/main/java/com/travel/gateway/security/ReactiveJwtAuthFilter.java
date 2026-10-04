@@ -3,6 +3,7 @@ package com.travel.gateway.security;
 import com.travel.common.auth.TokenAuthService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
@@ -42,6 +43,11 @@ public class ReactiveJwtAuthFilter implements WebFilter {
     public Mono<Void> filter(ServerWebExchange exchange, WebFilterChain chain) {
         String path = exchange.getRequest().getPath().value();
         if (path.equals("/actuator") || path.startsWith(ACTUATOR_PREFIX)) {
+            return chain.filter(exchange);
+        }
+        // AW-1：CORS 预检放行——OPTIONS 预检协议上不携带凭证，交由 GatewayCorsFilter 应答；
+        // 非预检请求鉴权语义零变化
+        if (exchange.getRequest().getMethod() == HttpMethod.OPTIONS) {
             return chain.filter(exchange);
         }
         String auth = exchange.getRequest().getHeaders().getFirst("Authorization");

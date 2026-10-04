@@ -40,7 +40,13 @@ public class ReliabilityStatsService {
     public Map<String, Object> stats(int days) {
         int range = days <= 0 ? 7 : Math.min(days, 90);
         LocalDateTime since = LocalDateTime.now().minusDays(range);
+        // AW-5：列裁剪——SELECT * 会拉每行 ≤16KB 的 spans JSON（窗口内全量传输是看板
+        // 首载慢主因之一）；此处只选聚合块实际读取的列（清单=树面实读 getter 对照，
+        // 见审计日志第 5 轮对照表：grounding_rate/retention_rate/status/call_path/
+        // model_name/token_total/created_at/duration_ms 八列）
         List<AgentTrace> rows = agentTraceMapper.selectList(new QueryWrapper<AgentTrace>()
+                .select("grounding_rate", "retention_rate", "status", "call_path",
+                        "model_name", "token_total", "created_at", "duration_ms")
                 .ge("created_at", since));
 
         List<Double> grounding = new ArrayList<>();

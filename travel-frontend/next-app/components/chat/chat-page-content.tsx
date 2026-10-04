@@ -25,6 +25,7 @@ import { MessageStreamWrapper, type InterruptedTurn } from '@/components/chat/pa
 import { useSessionAnchor } from '@/hooks/useSessionAnchor';
 import { useSessionPreference } from '@/hooks/useSessionPreference';
 import { mergePreferenceSync } from '@/lib/schemas';
+import { invalidateSwr } from '@/lib/use-api-query';
 import { mergePreferenceFromItinerary } from '@/lib/preference-merge';
 import { PreferencePanelWrapper } from '@/components/chat/panels/preference-panel-wrapper';
 import { ChatHeader } from '@/components/chat/ChatHeader';
@@ -552,6 +553,7 @@ function ChatContent() {
       }
       // M28-4：done 后回读锚定——会话首个行程已服务端自动锚定，标签行/面板勾选即时可见
       void anchor.load(sid!);
+      invalidateSwr('itinerary:'); // AW-9：本轮可能产出新行程/更新约束——跨页行程缓存失效
       if (streamed.handled) return; // M10-1b：40303 已在 hook 内完成提示与气泡
       const stages = chatStream.getThinkingLines(sid!);
       const aiMsg: ChatMessage = {
@@ -602,6 +604,13 @@ function ChatContent() {
             itineraryId: data.itineraryId,
             localKey: `a-${clientMessageId}`,
           };
+          // AW-2：JSON 回退路径补齐 SSE done 副作用——锚定回读（服务端自动锚定已落库，
+          // 回读即面板勾选）+ 本轮偏好标签合并（此前仅 SSE 路径消费，回退即断链）
+          if (data.preferenceSync) {
+            preference.mergeTags(sid!, (prev) => mergePreferenceSync(prev, data.preferenceSync!));
+          }
+          void anchor.load(sid!);
+          invalidateSwr('itinerary:'); // AW-9：JSON 回退轮同样失效跨页行程缓存
           appendAssistantOrNotify(sid!, aiMsg);
           if (data.sessionTitle) {
             sessionList.updateSessionTitle(sid!, data.sessionTitle);

@@ -7,6 +7,7 @@ import { toast } from 'sonner';
 import { ArrowLeft, MapPin, Calendar, DollarSign, Clock, Maximize2, Copy, History } from 'lucide-react';
 import { decodeItineraryId } from '@/lib/url-guard';
 import { itineraryApi, getErrorMessage, shareApi } from '@/lib/api';
+import { invalidateSwr } from '@/lib/use-api-query';
 import { titleNeedsSave } from '@/lib/schemas';
 import { ExportIcsButton } from '@/components/feature/ExportIcsButton';
 import { useAuth } from '@/lib/auth-context';
@@ -95,6 +96,7 @@ function ItineraryDetailContent() {
     try {
       await itineraryApi.renameItinerary(data.id, next);
       setData({ ...data, title: next });
+      invalidateSwr('itinerary:'); // AW-9：改名后列表页/卡片缓存失效（标题同步）
       toast.success('标题已更新');
     } catch (err) {
       toast.error('标题更新失败: ' + getErrorMessage(err));

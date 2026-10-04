@@ -166,7 +166,15 @@ export default function AttractionsPage() {
   const [ragType, setRagType] = useState('auto');
   const [results, setResults] = useState<SearchResult[]>([]);
   const [cities, setCities] = useState<string[]>([]);
-  const [cityOptions, setCityOptions] = useState<string[]>(FALLBACK_CITY_OPTIONS);
+  // M5-1：城市下拉动态化——AW-8 useApiQuery 化（cacheKey 'attractions:cities' 与预取键
+  // 同名合流秒开）；失败静默降级内置列表（与 SWR 静默口径一致，原 toast 提示移除已披露）
+  const { data: fetchedCities } = useApiQuery<string[]>(
+    useCallback(() => attractionApi.listCities().then((res) => res.data.data || []), []),
+    [],
+    { cacheKey: 'attractions:cities', staleMs: 600_000 }
+  );
+  const cityOptions =
+    fetchedCities && fetchedCities.length > 0 ? fetchedCities : FALLBACK_CITY_OPTIONS;
   const [allSelected, setAllSelected] = useState(false);
   const [typeFilter, setTypeFilter] = useState<string | undefined>(undefined);
   const [page, setPage] = useState(1);
@@ -178,18 +186,6 @@ export default function AttractionsPage() {
   // FE-P3.2.2：浏览列表取数迁移 useApiQuery（SWR-lite，与 itinerary 列表页同口径）——
   // 筛选/页码经 ref 供 fetcher 读取，loadPage 同步推进 ref 后 refetch；仅 browse 模式启用。
   const browseRef = useRef({ page: 1, cityQuery: undefined as string | undefined, type: undefined as string | undefined, hasFilter: false });
-
-  // M5-1：城市下拉动态化——从后端加载全部城市，失败降级内置列表
-  useEffect(() => {
-    attractionApi.listCities()
-      .then((res) => {
-        const data = res.data.data || [];
-        if (data.length > 0) setCityOptions(data);
-      })
-      .catch((err) => {
-        toast.error('城市列表加载失败，已使用内置城市: ' + getErrorMessage(err));
-      });
-  }, []);
 
   const handleSearch = async () => {
     const q = query.trim();
@@ -225,7 +221,7 @@ export default function AttractionsPage() {
       const p = browseRef.current;
       // F102：命中预取缓存则直接展示（仅无筛选条件时，避免错误命中）
       if (!p.hasFilter) {
-        const cached = takePrefetch<PageResult<Attraction>>(`attractions:${p.page}:${PAGE_SIZE}`);
+        const cached = takePrefetch<PageResult<Attraction>>(`attractions:browse:${p.page}:${PAGE_SIZE}`);
         if (cached) return Promise.resolve(cached);
       }
       // F101：多城市逗号分隔传给后端（空数组=全部）；B4/M7：type 筛选贯通（后端参数已有）
@@ -237,7 +233,7 @@ export default function AttractionsPage() {
       // 与 itinerary 列表页同口径（FE-P3.2.1）：SWR 全量静默——有数据不闪 loading，
       // 静默失败保持旧列表；仅首次无缓存走骨架。分页/筛选/模式切换静默换数据的
       // 语义统一与现状骨架差异已披露（审计日志第 8 轮，待二次审批）。
-      cacheKey: 'attractions:browse',
+      cacheKey: `attractions:browse:${browseRef.current.page}:${PAGE_SIZE}`,
       staleMs: 24 * 60 * 60_000,
     }
   );

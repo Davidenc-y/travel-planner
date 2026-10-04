@@ -233,7 +233,38 @@ public class ChatServiceImpl implements ChatService {
                 .sessionTitle(result.sessionTitle())
                 // T-2：JSON 路径 itineraryId 透传（规划/REFINE 回写成功轮非空；replay 分支不填=null 保持）
                 .itineraryId(result.itineraryId())
+                // AW-3：JSON 路径 preferenceSync 透传（与 SSE done 帧同构；replay 分支不填=null 保持）
+                .preferenceSync(toSyncMap(result.preferenceSync()))
                 .build();
+    }
+
+    /** AW-3：PreferenceSync record → 与 SSE done 帧（ChatStreamServiceImpl done 组装）逐字段
+     * 同构的 Map（非空才放；null 入参返回 null）。抽私有方法供 JSON 路径复用，SSE 侧不动。 */
+    private static java.util.Map<String, Object> toSyncMap(
+            ChatStreamExecutor.ChatStreamResult.PreferenceSync ps) {
+        if (ps == null) {
+            return null;
+        }
+        java.util.Map<String, Object> sync = new java.util.LinkedHashMap<>();
+        if (ps.destination() != null) {
+            sync.put("destination", ps.destination());
+        }
+        if (ps.days() != null) {
+            sync.put("days", ps.days());
+        }
+        if (ps.budget() != null) {
+            sync.put("budget", ps.budget());
+        }
+        if (ps.party() != null) {
+            sync.put("party", ps.party());
+        }
+        if (ps.startDate() != null) {
+            sync.put("startDate", ps.startDate());
+        }
+        if (ps.interests() != null && !ps.interests().isEmpty()) {
+            sync.put("interests", ps.interests());
+        }
+        return sync.isEmpty() ? null : sync;
     }
 
     /**

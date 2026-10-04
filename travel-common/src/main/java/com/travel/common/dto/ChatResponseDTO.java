@@ -23,4 +23,6 @@ public class ChatResponseDTO {
     private Integer tokens;
     /** M5-1：本次发送后会话标题（首条消息自动生成时返回；其余场景为 null） */
     private String sessionTitle;
+    /** AW-3：本轮有效约束回写（与 SSE done 帧 preferenceSync 同构；非规划/replay 轮为 null） */
+    private java.util.Map<String, Object> preferenceSync;
 }

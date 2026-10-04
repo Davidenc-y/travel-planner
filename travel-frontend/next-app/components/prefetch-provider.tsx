@@ -3,9 +3,10 @@
 import { useEffect } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
 import { useAuth } from '@/lib/auth-context';
-import { itineraryApi, chatApi, attractionApi } from '@/lib/api';
+import { itineraryApi, chatApi, attractionApi, modelApi } from '@/lib/api';
 import { setPrefetch } from '@/lib/prefetch';
 import { keysFor } from '@/lib/prefetch-map';
+import { seedSwr } from '@/lib/use-api-query';
 
 /**
  * 全局预取（F102；FE-P1b 空闲调度接线）：
@@ -22,8 +23,14 @@ import { keysFor } from '@/lib/prefetch-map';
 const prefetchFetchers: Record<string, () => Promise<unknown>> = {
   'itinerary:1:8': () => itineraryApi.list(1, 8).then((r) => r.data.data),
   'chat:sessions': () => chatApi.listSessions().then((r) => r.data.data),
-  'attractions:1:12': () => attractionApi.list(undefined, undefined, 1, 12).then((r) => r.data.data),
+  'attractions:browse:1:12': () => attractionApi.list(undefined, undefined, 1, 12).then((r) => r.data.data),
+  'chat:models': () => modelApi.list().then((r) => r.data.data),
+  'attractions:cities': () => attractionApi.listCities().then((r) => r.data.data),
 };
+
+/** AW-8：预取结果同时种入 swrCache 的键集（与页面 cacheKey 同名合流；chat:sessions
+ *  非 cacheKey 体系仍仅 setPrefetch 供 takePrefetch 一次性消费） */
+const SWR_SEED_KEYS = new Set(['itinerary:1:8', 'attractions:browse:1:12', 'chat:models', 'attractions:cities']);
 
 /** 同键在途去重：进行中的预取 Promise（settling 后自清，仅同键新请求可重入） */
 const inflight = new Map<string, Promise<unknown>>();
@@ -67,7 +74,10 @@ export function PrefetchProvider() {
         if (!fetcher || inflight.has(key)) continue;
         const p = fetcher()
           .then((data) => {
-            if (!cancelled) setPrefetch(key, data);
+            if (!cancelled) {
+              setPrefetch(key, data);
+              if (SWR_SEED_KEYS.has(key)) seedSwr(key, data);
+            }
           })
           .catch(() => {})
           .finally(() => {

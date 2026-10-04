@@ -51,15 +51,15 @@ export const chatApi = {
   getLatestInterruptedTurn: (sessionId: string) =>
     planningApi.get<R<import('@/types').LatestInterruptedTurn>>(
       `/api/v1/chat/sessions/${sessionId}/interrupted-turn`),
-  /** AA-2（T4）：幂等预写——发送前 sendBeacon 落占位行（fire-and-forget 必达），
-   *  刷新竞态窗口内至少幂等行必达，刷新后 getTurnStatus 凭同键恢复。
-   *  sendBeacon 不可用（旧浏览器/非浏览器环境）或无 token=静默降级现状（主 fetch 幂等链兜底）。 */
+  /** AA-2（T4）：幂等预写——sendBeacon 无法携带自定义头（无 Authorization），网关前置
+   *  JWT 过滤器必 401；planning 侧 WebConfig 匿名白名单 + body accessToken 自校验本就
+   *  为 sendBeacon 设计（AW-2 改道 PLANNING_BASE，语义与后端设计对齐）。 */
   prewriteTurn: (sessionId: string, clientMessageId: string, message: string) => {
     if (typeof navigator === 'undefined' || typeof navigator.sendBeacon !== 'function') return;
     const token = typeof window !== 'undefined' ? localStorage.getItem('accessToken') : null;
     if (!token) return;
     navigator.sendBeacon(
-      `${STREAM_BASE}/api/v1/chat/turns/prewrite`,
+      `${PLANNING_BASE}/api/v1/chat/turns/prewrite`,
       new Blob(
         [JSON.stringify({ clientMessageId, sessionId, body: message, accessToken: token })],
         { type: 'application/json' },
