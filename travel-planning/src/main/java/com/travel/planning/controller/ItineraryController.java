@@ -141,6 +141,10 @@ public class ItineraryController {
     @DeleteMapping("/{id}")
     public R<Void> delete(@PathVariable Long id) {
         itineraryService.delete(id, AuthUtils.resolveUserId());
+        // BB-3：删除写点补 evict（缺口 #11，与 HC-3 既有写点失效链同口径；TTL 10min 兜底）
+        if (itineraryDetailCache != null) {
+            itineraryDetailCache.evict(id);
+        }
         return R.ok();
     }
 

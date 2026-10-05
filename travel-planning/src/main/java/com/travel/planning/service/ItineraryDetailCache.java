@@ -2,6 +2,7 @@ package com.travel.planning.service;
 
 import com.travel.planning.service.itinerary.ItineraryVersionPortImpl;
 
+import com.travel.common.cache.TtlJitter;
 import com.travel.common.config.GrayReleaseManager;
 import com.travel.common.dto.ItineraryResponseDTO;
 import com.travel.common.util.JsonUtils;
@@ -35,8 +36,13 @@ public class ItineraryDetailCache {
     public static final String KEY_PREFIX = "travel:itn:detail:";
     /** D-2a 灰度键（与 GrayReleaseManager.KNOWN_KEYS 登记字面一致） */
     static final String GRAY_KEY = "gray.itinerary-detail-cache.enabled";
-    /** TTL：10 分钟 */
+    /** TTL：10 分钟基准（BB-4：put 时经 TtlJitter 加 [0, +20%] 抖动，防同批过期雪崩） */
     private static final Duration TTL = Duration.ofMinutes(10);
+    /** BB-4：空值标记（穿透防护；与 RedisResultCache.EMPTY_MARKER 字面一致——冻结骨架常量为
+     * private，最小耦合取本地字面常量，禁改冻结类） */
+    static final String EMPTY_MARKER = "{EMPTY}";
+    /** BB-4：空值缓存窗口（穿透防护短 TTL） */
+    private static final Duration EMPTY_TTL = Duration.ofSeconds(60);
 
     private final StringRedisTemplate redisTemplate;
 
@@ -52,7 +58,8 @@ public class ItineraryDetailCache {
         this.gray = gray;
     }
 
-    /** 缓存读取：未命中/停用/异常返回 null（调用方降级为原库读路径） */
+    /** 缓存读取：未命中/停用/异常返回 null（调用方降级为原库读路径）；
+     * BB-4：返回 dto==null 的 CachedDetail = 空值缓存命中（该 ID 确认不存在，60s 窗口），调用方应跳过 DB */
     public CachedDetail get(Long id) {
         if (!gray.enabled(GRAY_KEY)) {
             return null;
@@ -64,6 +71,10 @@ public class ItineraryDetailCache {
             String json = redisTemplate.opsForValue().get(KEY_PREFIX + id);
             if (json == null) {
                 return null;
+            }
+            if (EMPTY_MARKER.equals(json)) {
+                log.debug("[ItineraryDetailCache] 空值缓存命中: id={}", id);
+                return new CachedDetail(null, null);
             }
             Envelope envelope = JsonUtils.fromJson(json, Envelope.class);
             if (envelope == null || envelope.dto == null) {
@@ -77,7 +88,7 @@ public class ItineraryDetailCache {
         }
     }
 
-    /** 缓存回写（DTO JSON + ownerId 封装，TTL 10min；失败仅 WARN 不阻断主路径） */
+    /** 缓存回写（DTO JSON + ownerId 封装，TTL 10min 基准+抖动；失败仅 WARN 不阻断主路径） */
     public void put(Long id, ItineraryResponseDTO dto, Long ownerId) {
         if (!gray.enabled(GRAY_KEY)) {
             return;
@@ -87,9 +98,24 @@ public class ItineraryDetailCache {
         }
         try {
             redisTemplate.opsForValue().set(KEY_PREFIX + id,
-                    JsonUtils.toJson(new Envelope(ownerId, dto)), TTL);
+                    JsonUtils.toJson(new Envelope(ownerId, dto)), TtlJitter.jitter(TTL));
         } catch (Exception e) {
             log.warn("[ItineraryDetailCache] 回写失败（不阻断主路径）: id={}, error={}", id, e.getMessage());
+        }
+    }
+
+    /** BB-4：空值缓存登记（DB 查不到时由读路径调用）——60s 窗口内同 ID 重复请求跳过 DB（穿透防护）。 */
+    public void putEmpty(Long id) {
+        if (!gray.enabled(GRAY_KEY)) {
+            return;
+        }
+        if (!enabled) {
+            return;
+        }
+        try {
+            redisTemplate.opsForValue().set(KEY_PREFIX + id, EMPTY_MARKER, EMPTY_TTL);
+        } catch (Exception e) {
+            log.warn("[ItineraryDetailCache] 空值登记失败（不阻断主路径）: id={}, error={}", id, e.getMessage());
         }
     }
 
@@ -106,7 +132,7 @@ public class ItineraryDetailCache {
         }
     }
 
-    /** 缓存命中结果（ownerId 供命中侧归属快速核对；dto 为缓存体） */
+    /** 缓存命中结果（ownerId 供命中侧归属快速核对；dto 为缓存体；BB-4：dto==null=空值缓存命中） */
     public record CachedDetail(Long ownerId, ItineraryResponseDTO dto) {
     }
 

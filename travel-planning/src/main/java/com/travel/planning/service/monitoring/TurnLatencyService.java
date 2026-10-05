@@ -1,9 +1,11 @@
 package com.travel.planning.service.monitoring;
 
+import com.travel.common.cache.RedisResultCache;
 import com.travel.common.repository.AgentTraceMapper;
-import lombok.RequiredArgsConstructor;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -22,12 +24,23 @@ import java.util.TreeMap;
  * @since 1.0-SNAPSHOT
  */
 @Service
-@RequiredArgsConstructor
 public class TurnLatencyService {
 
     private final AgentTraceMapper agentTraceMapper;
+    private final RedisResultCache latencyCache;
 
+    public TurnLatencyService(AgentTraceMapper agentTraceMapper, StringRedisTemplate redisTemplate) {
+        this.agentTraceMapper = agentTraceMapper;
+        this.latencyCache = new RedisResultCache(redisTemplate, "travel:cache:");
+    }
+
+    /** BB-1：Redis 结果缓存 120s TTL+抖动，fail-open 降级直查。 */
     public Map<String, Object> turnLatency(int days) {
+        return latencyCache.computeIfAbsent("turnlatency:" + days, Map.class, Duration.ofSeconds(120),
+                () -> computeTurnLatency(days));
+    }
+
+    private Map<String, Object> computeTurnLatency(int days) {
         int windowDays = days <= 0 ? 7 : days;
         LocalDateTime since = LocalDateTime.now().minusDays(windowDays);
 

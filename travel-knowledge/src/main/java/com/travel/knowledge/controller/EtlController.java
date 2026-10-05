@@ -1,11 +1,11 @@
 package com.travel.knowledge.controller;
 
+import com.travel.common.cache.RedisResultCache;
 import com.travel.common.result.R;
 import com.travel.knowledge.etl.AttractionEtlService;
 import com.travel.knowledge.etl.CacheInvalidationContract;
 import com.travel.knowledge.repository.AttractionMapper;
 import com.travel.knowledge.service.AttractionImportService;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.web.bind.annotation.*;
@@ -25,7 +25,6 @@ import java.util.Map;
 @Slf4j
 @RestController
 @RequestMapping("/api/v1/etl")
-@RequiredArgsConstructor
 public class EtlController {
 
     private final AttractionEtlService etlService;
@@ -33,6 +32,19 @@ public class EtlController {
     private final AttractionMapper attractionMapper;
     /** AP-A5a：city-counts 缓存失效广播发布端（契约=CacheInvalidationContract，P0㉖ 逐字冻结） */
     private final StringRedisTemplate redisTemplate;
+    /** BB-2：attraction 结果缓存（keyPrefix travel:attr:，与 AttractionService 同前缀共享失效链） */
+    private final RedisResultCache attractionCache;
+
+    public EtlController(AttractionEtlService etlService,
+                         AttractionImportService importService,
+                         AttractionMapper attractionMapper,
+                         StringRedisTemplate redisTemplate) {
+        this.etlService = etlService;
+        this.importService = importService;
+        this.attractionMapper = attractionMapper;
+        this.redisTemplate = redisTemplate;
+        this.attractionCache = new RedisResultCache(redisTemplate, "travel:attr:");
+    }
 
     /**
      * 全量 ETL：处理所有景点（含已索引的会重新写入）
@@ -45,6 +57,20 @@ public class EtlController {
         int count = etlService.etlAll();
         // AP-A5a（GP-5）：全量导入成功→广播 city-counts 失效（planning CityCorpusCache 即时失效）
         publishCityCountsInvalidation();
+        // BB-2：ETL 写点→attraction 缓存失效（追加不替换，P0-⑷）
+        attractionCache.evict("cities");
+        // 城市坐标按需失效——四问复审修正：keys() 改 SCAN（与 BB-5 AdminCacheController 同口径，
+        // 防 KEYS 阻塞 Redis 主线程；量级 <100 键微秒级，但统一模式防未来量级增长时踩坑）
+        try (org.springframework.data.redis.core.Cursor<String> cursor = redisTemplate.scan(
+                org.springframework.data.redis.core.ScanOptions.scanOptions()
+                        .match("travel:attr:coords:*").count(100).build())) {
+            java.util.List<String> keys = new java.util.ArrayList<>();
+            while (cursor.hasNext()) keys.add(cursor.next());
+            if (!keys.isEmpty()) redisTemplate.delete(keys);
+        } catch (Exception e) {
+            // P0-⑴ fail-open：Redis 异常/scan 空 仅 WARN 跳过，ETL 主链路零阻断（与广播同口径）
+            log.warn("coords 缓存 SCAN 失效跳过（fail-open）: {}", String.valueOf(e));
+        }
         return R.ok(count);
     }
 
@@ -59,6 +85,20 @@ public class EtlController {
         int count = etlService.etlUnindexed();
         // AP-A5a（GP-5）：增量导入成功→广播 city-counts 失效
         publishCityCountsInvalidation();
+        // BB-2：ETL 写点→attraction 缓存失效（追加不替换，P0-⑷）
+        attractionCache.evict("cities");
+        // 城市坐标按需失效——四问复审修正：keys() 改 SCAN（与 BB-5 AdminCacheController 同口径，
+        // 防 KEYS 阻塞 Redis 主线程；量级 <100 键微秒级，但统一模式防未来量级增长时踩坑）
+        try (org.springframework.data.redis.core.Cursor<String> cursor = redisTemplate.scan(
+                org.springframework.data.redis.core.ScanOptions.scanOptions()
+                        .match("travel:attr:coords:*").count(100).build())) {
+            java.util.List<String> keys = new java.util.ArrayList<>();
+            while (cursor.hasNext()) keys.add(cursor.next());
+            if (!keys.isEmpty()) redisTemplate.delete(keys);
+        } catch (Exception e) {
+            // P0-⑴ fail-open：Redis 异常/scan 空 仅 WARN 跳过，ETL 主链路零阻断（与广播同口径）
+            log.warn("coords 缓存 SCAN 失效跳过（fail-open）: {}", String.valueOf(e));
+        }
         return R.ok(count);
     }
 
@@ -110,6 +150,20 @@ public class EtlController {
             log.info("导入后并行 ETL: 处理 {} 条, 成功 {} 条", result.affected().size(), etlOk);
             // AP-A5a（GP-5）：导入成功（含并行 ETL）→广播 city-counts 失效；失败路径 catch 内不发布
             publishCityCountsInvalidation();
+            // BB-2：ETL 写点→attraction 缓存失效（追加不替换，P0-⑷）
+            attractionCache.evict("cities");
+            // 城市坐标按需失效——四问复审修正：keys() 改 SCAN（与 BB-5 AdminCacheController 同口径，
+            // 防 KEYS 阻塞 Redis 主线程；量级 <100 键微秒级，但统一模式防未来量级增长时踩坑）
+            try (org.springframework.data.redis.core.Cursor<String> cursor = redisTemplate.scan(
+                    org.springframework.data.redis.core.ScanOptions.scanOptions()
+                            .match("travel:attr:coords:*").count(100).build())) {
+                java.util.List<String> keys = new java.util.ArrayList<>();
+                while (cursor.hasNext()) keys.add(cursor.next());
+                if (!keys.isEmpty()) redisTemplate.delete(keys);
+            } catch (Exception e) {
+                // P0-⑴ fail-open：Redis 异常/scan 空 仅 WARN 跳过，ETL 主链路零阻断（与广播同口径）
+                log.warn("coords 缓存 SCAN 失效跳过（fail-open）: {}", String.valueOf(e));
+            }
             // F104 2.9：透传新增/更新/跳过统计（TC-13 的 R<Integer> 契约不变）
             response.setHeader("X-Import-Stats",
                     "{\"inserted\":" + result.stats().inserted()

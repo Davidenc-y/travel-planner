@@ -109,11 +109,19 @@ public class ItineraryServiceImpl implements ItineraryService {
         // HC-3：详情读缓存——命中且归属匹配时零 DB 直返；未命中走原路径并回写（TTL 10min）。
         // 归属校验语义不变：命中但非本人 → 落回原库路径抛 40401/40302。
         ItineraryDetailCache.CachedDetail cached = detailCache == null ? null : detailCache.get(id);
+        if (cached != null && cached.dto() == null) {
+            // BB-4：空值缓存命中（60s 窗口内确认不存在）——跳过 DB 直接 40401（穿透防护）
+            throw new BusinessException(40401, "行程不存在: " + id);
+        }
         if (cached != null && userId.equals(cached.ownerId())) {
             return cached.dto();
         }
         Itinerary entity = itineraryMapper.selectById(id);
         if (entity == null) {
+            // BB-4：DB 确认不存在→登记空值缓存（60s 窗口内同 ID 重复请求跳过 DB）
+            if (detailCache != null) {
+                detailCache.putEmpty(id);
+            }
             // M22-3：缺失统一 40401（原 ItineraryGenerationException 被兜底为 50001，
             // 与 delete 语义不一致；前端 getErrorMessage 走后端 message，天然兼容）
             throw new BusinessException(40401, "行程不存在: " + id);

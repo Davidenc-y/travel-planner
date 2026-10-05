@@ -1,11 +1,12 @@
 package com.travel.planning.service.monitoring;
 
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
+import com.travel.common.cache.RedisResultCache;
 import com.travel.common.dto.UsageStatsDTO;
 import com.travel.common.entity.AgentTrace;
 import com.travel.common.repository.AgentTraceMapper;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 
 import java.sql.Date;
@@ -35,14 +36,25 @@ import java.util.TreeMap;
  */
 @Slf4j
 @Service
-@RequiredArgsConstructor
 public class UserUsageStatsService {
 
     private static final int HEATMAP_DAYS = 365;
 
     private final AgentTraceMapper agentTraceMapper;
+    private final RedisResultCache usageCache;
 
+    public UserUsageStatsService(AgentTraceMapper agentTraceMapper, StringRedisTemplate redisTemplate) {
+        this.agentTraceMapper = agentTraceMapper;
+        this.usageCache = new RedisResultCache(redisTemplate, "travel:cache:");
+    }
+
+    /** BB-1：个人用量统计 Redis 结果缓存 300s TTL（key travel:cache:usage:{userId}:{range}，fail-open）。 */
     public UsageStatsDTO getUsageStats(Long userId, int rangeDays) {
+        return usageCache.computeIfAbsent("usage:" + userId + ":" + rangeDays, UsageStatsDTO.class,
+                Duration.ofSeconds(300), () -> computeUsageStats(userId, rangeDays));
+    }
+
+    private UsageStatsDTO computeUsageStats(Long userId, int rangeDays) {
         LocalDate today = LocalDate.now();
         LocalDate rangeStart = today.minusDays(rangeDays - 1L);
         LocalDate heatmapStart = today.minusDays(HEATMAP_DAYS - 1L);

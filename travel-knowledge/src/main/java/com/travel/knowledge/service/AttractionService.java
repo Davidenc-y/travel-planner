@@ -2,6 +2,7 @@ package com.travel.knowledge.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import com.travel.common.cache.RedisResultCache;
 import com.travel.common.entity.Attraction;
 import com.travel.common.exception.AttractionNotFoundException;
 import com.travel.common.result.PageResult;
@@ -11,10 +12,11 @@ import com.travel.knowledge.rag.service.QueryUnderstandingService;
 import com.travel.knowledge.rag.model.SearchResult;
 import com.travel.knowledge.trace.KnowledgeTraceRecorder;
 import com.travel.knowledge.repository.AttractionMapper;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 
+import java.time.Duration;
 import java.util.List;
 import java.util.Arrays;
 
@@ -26,13 +28,25 @@ import java.util.Arrays;
  */
 @Slf4j
 @Service
-@RequiredArgsConstructor
 public class AttractionService {
 
     private final AttractionMapper attractionMapper;
     private final RagDispatcher ragDispatcher;
     private final QueryUnderstandingService queryUnderstandingService;
     private final KnowledgeTraceRecorder knowledgeTraceRecorder;
+    private final RedisResultCache cityCache;
+
+    public AttractionService(AttractionMapper attractionMapper,
+                             RagDispatcher ragDispatcher,
+                             QueryUnderstandingService queryUnderstandingService,
+                             KnowledgeTraceRecorder knowledgeTraceRecorder,
+                             StringRedisTemplate redisTemplate) {
+        this.attractionMapper = attractionMapper;
+        this.ragDispatcher = ragDispatcher;
+        this.queryUnderstandingService = queryUnderstandingService;
+        this.knowledgeTraceRecorder = knowledgeTraceRecorder;
+        this.cityCache = new RedisResultCache(redisTemplate, "travel:attr:");
+    }
 
     /**
      * 分页查询景点
@@ -60,10 +74,12 @@ public class AttractionService {
     }
 
     /**
-     * M5-1：全部城市去重列表（“浏览全部”城市下拉）。
+     * M5-1：全部城市去重列表（“浏览全部”城市下拉）——BB-2：Redis 结果缓存 6h TTL+抖动（key
+     * travel:attr:cities，fail-open 降级直查；ETL 三写点主动失效见 EtlController）。
      */
     public List<String> listCities() {
-        return attractionMapper.listCities();
+        return cityCache.computeIfAbsent("cities", List.class, Duration.ofHours(6),
+                () -> attractionMapper.listCities());
     }
 
     /**

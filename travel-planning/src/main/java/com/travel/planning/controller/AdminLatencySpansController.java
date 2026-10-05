@@ -1,5 +1,6 @@
 package com.travel.planning.controller;
 
+import com.travel.common.cache.RedisResultCache;
 import com.travel.common.entity.AgentTrace;
 import com.travel.common.exception.BusinessException;
 import com.travel.common.repository.AgentTraceMapper;
@@ -7,12 +8,13 @@ import com.travel.common.result.R;
 import com.travel.common.util.JsonUtils;
 import com.travel.planning.service.AdminAccessService;
 import com.travel.planning.util.AuthUtils;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -33,7 +35,6 @@ import java.util.Map;
  */
 @Slf4j
 @RestController
-@RequiredArgsConstructor
 public class AdminLatencySpansController {
 
     /** 单次聚合最大行数（防 days 大窗口扫表） */
@@ -43,6 +44,15 @@ public class AdminLatencySpansController {
 
     private final AgentTraceMapper agentTraceMapper;
     private final AdminAccessService adminAccessService;
+    private final RedisResultCache spansCache;
+
+    public AdminLatencySpansController(AgentTraceMapper agentTraceMapper,
+                                       AdminAccessService adminAccessService,
+                                       StringRedisTemplate redisTemplate) {
+        this.agentTraceMapper = agentTraceMapper;
+        this.adminAccessService = adminAccessService;
+        this.spansCache = new RedisResultCache(redisTemplate, "travel:cache:");
+    }
 
     @GetMapping("/api/v1/admin/latency-spans")
     public R<Map<String, Object>> latencySpans(@RequestParam(defaultValue = "7") Integer days) {
@@ -51,6 +61,12 @@ public class AdminLatencySpansController {
             throw new BusinessException(40302, "无权访问可靠性看板");
         }
         int d = days == null ? 7 : Math.min(Math.max(days, 1), 30);
+        // BB-1：结果缓存 120s TTL（key travel:cache:latencyspans:{days}），鉴权在缓存外不受缓存影响
+        return R.ok(spansCache.computeIfAbsent("latencyspans:" + d, Map.class, Duration.ofSeconds(120),
+                () -> computeLatencySpans(d)));
+    }
+
+    private Map<String, Object> computeLatencySpans(int d) {
         LocalDateTime since = LocalDateTime.now().minusDays(d);
         // 字符串列 QueryWrapper（非 Lambda）：纯单测环境无实体 lambda cache，行为等价
         List<AgentTrace> rows = agentTraceMapper.selectList(new com.baomidou.mybatisplus.core.conditions.query.QueryWrapper<AgentTrace>()
@@ -109,7 +125,7 @@ public class AdminLatencySpansController {
             stageBlocks.put(stage, latencyBlock(stages.get(stage)));
         }
         result.put("stages", stageBlocks);
-        return R.ok(result);
+        return result;
     }
 
     /** 从单行 spans JSON 收集：route 段 router 分布/耗时，五段 durationMs */

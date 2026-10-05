@@ -1,14 +1,17 @@
 package com.travel.planning.service.monitoring;
 
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
+import com.travel.common.cache.RedisResultCache;
 import com.travel.common.entity.AgentTrace;
 import com.travel.common.util.JsonUtils;
 import com.travel.planning.map.guard.MapQuotaGuardService;
 import com.travel.common.repository.AgentTraceMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.time.LocalDate;
 import java.util.ArrayList;
@@ -36,17 +39,25 @@ public class ReliabilityStatsService {
     private final AgentTraceMapper agentTraceMapper;
     private final MapQuotaGuardService mapQuotaGuardService;
     private final int topNodesSample;
+    private final RedisResultCache statsCache;
 
     public ReliabilityStatsService(AgentTraceMapper agentTraceMapper,
                                    MapQuotaGuardService mapQuotaGuardService,
-                                   @Value("${travel.trace.topnodes-sample:20000}") int topNodesSample) {
+                                   @Value("${travel.trace.topnodes-sample:20000}") int topNodesSample,
+                                   StringRedisTemplate redisTemplate) {
         this.agentTraceMapper = agentTraceMapper;
         this.mapQuotaGuardService = mapQuotaGuardService;
         this.topNodesSample = topNodesSample;
+        this.statsCache = new RedisResultCache(redisTemplate, "travel:cache:");
     }
 
-    /** @return 看板聚合结果（Map 便于前端 recharts 直接消费） */
+    /** @return 看板聚合结果（Map 便于前端 recharts 直接消费）——BB-1：Redis 结果缓存 120s TTL+抖动，fail-open 降级直查。 */
     public Map<String, Object> stats(int days) {
+        return statsCache.computeIfAbsent("stats:" + days, Map.class, Duration.ofSeconds(120),
+                () -> computeStats(days));
+    }
+
+    private Map<String, Object> computeStats(int days) {
         int range = days <= 0 ? 7 : Math.min(days, 90);
         LocalDateTime since = LocalDateTime.now().minusDays(range);
         Map<String, Object> agg = agentTraceMapper.selectStatsAggregateSince(since);
